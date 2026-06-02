@@ -24,7 +24,7 @@ from .core.audit import AuditStore
 from .core.context import ToolContext
 from .core.dispatch import MAX_RESULT_CHARS, ApprovalGate, dispatch
 from .core.registry import Registry
-from .core.router import ChatResult, ModelRouter, Provider
+from .core.router import ChatResult, ModelRouter
 
 SYSTEM_PROMPT = """You are DTM AI, the internal operations assistant for DTM Consulting, an IT MSP.
 You help DTM technicians inspect client IT environments. Hard rules:
@@ -69,7 +69,7 @@ class Agent:
         return specs
 
     def _call_provider(
-        self, provider: Provider, messages: list[dict], tools: list[dict], model: str
+        self, provider, messages: list[dict], tools: list[dict], model: str
     ) -> ChatResult:
         try:
             return provider.chat(messages, tools, model)
@@ -84,14 +84,15 @@ class Agent:
         ctx: ToolContext,
         message: str,
         *,
-        provider: Optional[Provider] = None,
-        model_hint: Optional[str] = None,
+        provider=None,
+        model_id: Optional[str] = None,
         approval_token: Optional[str] = None,
     ) -> AgentTurn:
         if provider is None:
-            provider, model = self.router.choose(allow_cloud=ctx.allow_cloud, model_hint=model_hint)
+            provider, model = self.router.resolve(model_id)
         else:
-            model = model_hint or getattr(provider, "name", "mock")
+            model = (model_id.split(":", 1)[-1] if model_id and ":" in model_id
+                     else (model_id or getattr(provider, "name", "mock")))
 
         tools = self._enabled_tool_specs()
         messages: list[dict[str, Any]] = [
@@ -109,27 +110,30 @@ class Agent:
                 turn.citations = citations
                 return turn
 
-            # record assistant tool-call message, then execute each call
-            messages.append({"role": "assistant", "content": result.content or "",
-                             "tool_calls": result.tool_calls})
-            for call in result.tool_calls:
-                name = call.get("name", "")
+            # assign a stable id to each tool call (cloud providers require id pairing)
+            calls = []
+            for i, call in enumerate(result.tool_calls):
                 raw_args = call.get("arguments", {})
                 if isinstance(raw_args, str):
                     try:
                         raw_args = json.loads(raw_args)
                     except json.JSONDecodeError:
                         raw_args = {}
+                calls.append({"id": call.get("id") or f"call_{rnd}_{i}",
+                              "name": call.get("name", ""), "arguments": raw_args})
+            messages.append({"role": "assistant", "content": result.content or "", "tool_calls": calls})
+            for call in calls:
+                name = call["name"]
                 envelope = dispatch(
                     registry=self.registry, audit=self.audit, ctx=ctx,
-                    name=name, args=raw_args, approval_token=approval_token, gate=self.gate,
+                    name=name, args=call["arguments"], approval_token=approval_token, gate=self.gate,
                 )
                 if envelope["ok"]:
                     citations.append(f"{name}@{ctx.tenant_id}")
                 turn.tool_events.append({"name": name, "ok": envelope["ok"],
                                          "category": envelope.get("source")})
                 payload = json.dumps(envelope, default=str)[:MAX_RESULT_CHARS]
-                messages.append({"role": "tool", "name": name, "content": payload})
+                messages.append({"role": "tool", "tool_call_id": call["id"], "name": name, "content": payload})
 
         turn.answer = "Reached the tool-call limit without a final answer."
         turn.citations = citations

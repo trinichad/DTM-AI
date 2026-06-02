@@ -153,6 +153,22 @@ Built + verified the security-critical core, stdlib-only (runs with NO Postgres/
 - **Tests: 103/103** (added test_users). Live-verified all endpoints incl. DELETE + 403 gating + the UI
   via preview (integrations, memory, settings screenshots).
 
+### LLM providers + model switching  ✅ (2026-06-01)
+- Rewrote `core/router.py`: providers speak a NEUTRAL message history, each translates to its wire
+  format. Implemented OllamaProvider (local /api/chat), **OpenAIProvider** (/v1/chat/completions, also
+  any OpenAI-compatible endpoint), **ClaudeProvider** (Anthropic Messages API w/ tool_use↔tool_result
+  folding) — previously a stub. All take injectable transport (unit-tested w/o network). MODEL_CATALOG +
+  `available_models()` (local always; cloud appears when key set + DTM_ALLOW_CLOUD≠0) + `resolve(model_id)`.
+- `agent.py`: ID-aware tool-call loop (cloud providers need tool_call_id pairing); `chat(model_id=...)`.
+- LLM providers are now credential specs (group="llm"): **Anthropic/OpenAI key entry reuses the secure
+  credential form**. `/api/models` endpoint; chat passes selected `model`. Selecting a non-ollama model =
+  cloud opt-in (sets allow_cloud).
+- UI: chat **model selector** dropdown (local + cloud, ☁ marks cloud); Integrations gains an **AI models**
+  section (Local Ollama always-on, Claude/OpenAI Manage-key tiles).
+- **Tests: 106/106** (added test_providers: OpenAI+Claude translation & tool-use, routing/availability;
+  removed obsolete test_router). Live-verified: no key→only local; add Claude key via form→3 Claude models
+  appear in selector + AI-models section shows fingerprint.
+
 ### Next
 - Approval workflow (one-shot args-bound tokens) → safely open WRITE primitives in the Console.
 - Deploy cutover (on owner's "deploy" go — D-14). Then `deploy/hermes/SETUP_HERMES.md` to stand up Hermes.

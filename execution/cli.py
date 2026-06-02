@@ -57,7 +57,7 @@ def cmd_integrations(args) -> int:
 def cmd_chat(args) -> int:
     agent = build_agent()
     ctx: ToolContext = make_context(args.tenant, actor=args.actor, allow_cloud=args.allow_cloud)
-    turn = agent.chat(ctx, args.message, model_hint=args.model)
+    turn = agent.chat(ctx, args.message, model_id=args.model)
     _print({
         "answer": turn.answer, "citations": turn.citations,
         "tool_events": turn.tool_events, "provider": turn.provider,

@@ -67,6 +67,8 @@ class Api:
             return self._memory(query.get("tenant") or "*")
         if method == "GET" and path == "/api/tools":
             return Resp(200, {"tools": self._tools()})
+        if method == "GET" and path == "/api/models":
+            return Resp(200, {"models": self.agent.router.available_models()})
         if method == "GET" and path == "/api/integrations":
             return Resp(200, {"integrations": self._integrations()})
         if method == "GET" and path == "/api/integrations/probe":
@@ -111,7 +113,8 @@ class Api:
         return out
 
     def _integrations(self) -> list[dict]:
-        out = [{"integration": s.integration, "label": s.label, "kind": "api",
+        out = [{"integration": s.integration, "label": s.label,
+                "kind": ("llm" if s.group == "llm" else "api"), "group": s.group,
                 "configured": s.configured, "missing": s.missing, "fingerprints": s.fingerprints}
                for s in credentials.status()]
         # local (non-credential) integrations — Obsidian vault + Hermes Agent
@@ -242,10 +245,11 @@ class Api:
         if not message:
             return Resp(400, {"error": "message is required"})
         tenant = body.get("tenant") or "*"
+        model_id = body.get("model")
         ctx = ToolContext(tenant_id=tenant, actor=user,
-                          allow_cloud=bool(body.get("allow_cloud")),
+                          allow_cloud=bool(model_id and not model_id.startswith("ollama:")),
                           client_factory=get_client_factory())
-        turn = self.agent.chat(ctx, message)
+        turn = self.agent.chat(ctx, message, model_id=model_id)
         return Resp(200, {
             "answer": turn.answer, "citations": turn.citations,
             "tool_events": turn.tool_events, "provider": turn.provider,

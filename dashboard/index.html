@@ -121,7 +121,7 @@ const SUB={overview:'Live health across your clients',chat:'Ask about a client �
   integrations:'Connections, knowledge & credentials',capabilities:'Primitives the AI may use',
   skills:'What Hermes has learned',memory:'Knowledge base & per-client notes',
   audit:'Every action, logged',settings:'Account & users'};
-let ME=null;
+let ME=null, MODEL='';
 
 function icons(){ if(window.lucide) lucide.createIcons(); }
 async function api(m,p,b){const r=await fetch(p,{method:m,credentials:'same-origin',
@@ -207,22 +207,33 @@ const VIEWS={
   },
 
   async chat(){
+    const mm=await api('GET','/api/models'); const models=mm.models||[];
+    if(!MODEL||!models.find(m=>m.id===MODEL)) MODEL=(models.find(m=>m.default)||models[0]||{}).id||'';
     $('#view').innerHTML=`<div class="max-w-3xl mx-auto flex flex-col h-full">
-      <div id="msgs" class="flex-1 space-y-4 mb-3"></div>
+      <div class="flex items-center gap-2 mb-3">
+        <i data-lucide="cpu" class="text-slate-500 text-sm"></i>
+        <select id="model" class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none">
+          ${models.map(m=>`<option value="${esc(m.id)}" ${m.id===MODEL?'selected':''}>${esc(m.label)}${m.local?'':' ☁'}</option>`).join('')}
+        </select>
+        ${models.length<2?`<a class="text-[11px] text-slate-500 hover:text-slate-300 cursor-pointer" id="addModel">+ add a cloud model</a>`:''}
+      </div>
+      <div id="msgs" class="flex-1 space-y-4 mb-3 overflow-auto"></div>
       <div id="suggest" class="flex flex-wrap gap-2 mb-3"></div>
       <form id="chatForm" class="card glass flex gap-2 p-2">
         <input id="msg" placeholder="Ask about ${esc(TENANT)} …"
           class="flex-1 bg-transparent px-3 py-2 text-sm focus:outline-none"/>
         <button class="grad text-white rounded-xl px-4 text-sm font-semibold flex items-center gap-1"><i data-lucide="send"></i></button>
       </form>
-      <div class="text-[11px] text-slate-500 mt-2 flex items-center gap-1.5"><i data-lucide="shield-check"></i> Analysing only — DTM AI never changes client systems in this mode.</div></div>`;
+      <div class="text-[11px] text-slate-500 mt-2 flex items-center gap-1.5"><i data-lucide="shield-check"></i> Analysing only — DTM AI never changes client systems in this mode. ☁ = cloud model.</div></div>`;
+    $('#model').onchange=e=>{MODEL=e.target.value;};
+    if($('#addModel'))$('#addModel').onclick=()=>route('integrations');
     const sg=['How many assets does this client have?','Any open Huntress incidents?','Summarise this client’s security posture'];
     $('#suggest').innerHTML=sg.map(s=>`<button class="pill bg-white/5 hover:bg-white/10 text-slate-300 border border-edge">${esc(s)}</button>`).join('');
     $('#suggest').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('#msg').value=b.textContent;$('#msg').focus();});
     $('#chatForm').onsubmit=async e=>{e.preventDefault();const m=$('#msg').value.trim();if(!m)return;$('#msg').value='';
       bubble('you',esc(m));const id=bubble('ai','<span class="inline-flex gap-1"><span class="dot">●</span><span class="dot">●</span><span class="dot">●</span></span>');
       document.querySelectorAll('#'+id+' .dot').forEach((d,i)=>{d.style.animation=`blink 1.2s ${i*.2}s infinite`;});
-      try{const r=await api('POST','/api/chat',{tenant:TENANT,message:m});let h=esc(r.answer);
+      try{const r=await api('POST','/api/chat',{tenant:TENANT,message:m,model:MODEL});let h=esc(r.answer);
         if(r.tool_events?.length)h+=`<div class="mt-2 flex flex-wrap gap-1">`+r.tool_events.map(t=>
           `<span class="pill ${t.ok?'bg-emerald-500/15 text-emerald-300':'bg-rose-500/15 text-rose-300'} inline-flex items-center gap-1"><i data-lucide="${t.ok?'check':'x'}" class="text-[11px]"></i>${esc(t.name)}</span>`).join('')+`</div>`;
         if(r.citations?.length)h+=`<div class="text-[11px] text-slate-500 mt-1.5 flex items-center gap-1"><i data-lucide="link"></i>${r.citations.map(esc).join(', ')}</div>`;
@@ -233,8 +244,9 @@ const VIEWS={
 
   async integrations(){
     const {integrations}=await api('GET','/api/integrations');
-    const ico={kaseya:'monitor-dot',cylance:'shield',huntress:'radar',obsidian:'notebook-pen',hermes:'bot'};
-    const apiCards=integrations.filter(i=>i.kind==='api'), local=integrations.filter(i=>i.kind==='local');
+    const ico={kaseya:'monitor-dot',cylance:'shield',huntress:'radar',obsidian:'notebook-pen',hermes:'bot',anthropic:'sparkles',openai:'bot'};
+    const apiCards=integrations.filter(i=>i.kind==='api'), local=integrations.filter(i=>i.kind==='local'),
+          llm=integrations.filter(i=>i.kind==='llm');
     const head=t=>`<div class="text-[11px] uppercase tracking-wide text-slate-500 mb-2 mt-1">${t}</div>`;
     const apiCard=i=>`<div class="card card-hover p-5" data-card="${esc(i.integration)}">
         <div class="flex items-center gap-3">
@@ -258,7 +270,25 @@ const VIEWS={
         </div>
         <div class="text-sm text-slate-300 mt-3">${esc(i.detail)}</div>
         <div class="text-[11px] text-slate-600 mt-2 font-mono break-all">${esc(i.path)}</div></div>`;
+    const llmCard=i=>`<div class="card card-hover p-5" data-card="${esc(i.integration)}">
+        <div class="flex items-center gap-3">
+          <div class="relative grid place-items-center">${ring(i.configured?1:0.06,i.configured?'#8b5cf6':'#475569')}
+            <i data-lucide="${ico[i.integration]||'sparkles'}" class="absolute text-lg ${i.configured?'text-violet-300':'text-slate-500'}"></i></div>
+          <div><div class="font-semibold">${esc(i.label)}</div>
+            <span class="pill ${i.configured?'bg-violet-500/15 text-violet-300':'bg-slate-600/30 text-slate-400'}">${i.configured?'key set':'no key'}</span></div>
+        </div>
+        <div class="fp text-[11px] text-slate-500 mt-3 font-mono leading-relaxed">${i.configured?Object.entries(i.fingerprints).map(([k,v])=>`${esc(k)}: ${esc(v)}`).join('<br>'):'add a key to enable these models in chat'}</div>
+        <button data-int="${esc(i.integration)}" class="manage mt-4 w-full text-xs bg-white/5 hover:bg-white/10 border border-edge rounded-lg py-2 flex items-center justify-center gap-1.5"><i data-lucide="key-round"></i> Manage key</button>
+        <div class="creds mt-3"></div></div>`;
     $('#view').innerHTML=`<div class="max-w-5xl">
+        ${head('AI models')}
+        <div class="grid gap-4 md:grid-cols-3">
+          <div class="card p-5"><div class="flex items-center gap-3">
+            <div class="relative grid place-items-center">${ring(1,'#34d399')}<i data-lucide="cpu" class="absolute text-lg text-emerald-300"></i></div>
+            <div><div class="font-semibold">Local (Ollama)</div><span class="pill bg-emerald-500/15 text-emerald-300">always on</span></div></div>
+            <div class="text-[11px] text-slate-500 mt-3">The default brain for client data — runs on your server, no key needed.</div></div>
+          ${llm.map(llmCard).join('')}
+        </div>
         ${head('API integrations')}<div class="grid gap-4 md:grid-cols-3">${apiCards.map(apiCard).join('')}</div>
         ${head('Knowledge & agent')}<div class="grid gap-4 md:grid-cols-3">${local.map(localCard).join('')}</div></div>`;
     document.querySelectorAll('.probe').forEach(b=>b.onclick=async()=>{const res=b.closest('[data-card]').querySelector('.probe-res');

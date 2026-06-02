@@ -29,6 +29,7 @@ class CredentialSpec:
     required: tuple[str, ...]        # env keys that MUST be present
     optional: tuple[str, ...] = ()   # env keys used if present (e.g. region, static token)
     label: str = ""                  # human label for the UI
+    group: str = "vendor"            # "vendor" (MSP API) | "llm" (AI model provider)
 
     @property
     def display(self) -> str:
@@ -55,6 +56,11 @@ SPECS: dict[str, CredentialSpec] = {
         required=("HUNTRESS_API_KEY", "HUNTRESS_API_SECRET"),
         label="Huntress",
     ),
+    # AI model providers — secure key entry reuses the same credential form.
+    "anthropic": CredentialSpec(
+        "anthropic", required=("ANTHROPIC_API_KEY",), label="Claude (Anthropic)", group="llm"),
+    "openai": CredentialSpec(
+        "openai", required=("OPENAI_API_KEY",), label="OpenAI", group="llm"),
 }
 
 
@@ -118,6 +124,7 @@ class CredStatus:
     integration: str
     label: str
     configured: bool
+    group: str = "vendor"
     fingerprints: dict[str, str] = field(default_factory=dict)
     missing: list[str] = field(default_factory=list)
 
@@ -134,6 +141,7 @@ def status(cfg: Optional[Config] = None) -> list[CredStatus]:
                 integration=name,
                 label=spec.display,
                 configured=not missing,
+                group=spec.group,
                 fingerprints=fps,
                 missing=missing,
             )
