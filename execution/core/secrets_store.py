@@ -72,6 +72,7 @@ class SecretStore:
                 raise SecretStoreError(f"refusing to write non-allowlisted key '{key}'")
             if not isinstance(val, str) or len(val) > _MAX_VALUE_LEN:
                 raise SecretStoreError(f"invalid value for '{key}'")
+            val = val.strip()                  # trim pasted whitespace/newlines (matches _parse on read)
             if val == "":
                 self._data.pop(key, None)      # empty = clear
             else:
