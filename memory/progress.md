@@ -75,11 +75,24 @@ Built + verified the security-critical core, stdlib-only (runs with NO Postgres/
   tag last old commit `v0-kaseya-link`. One-time server migration (entrypoint + .env key remap), then
   `git pull && restart`. `gh` authed as trinichad. This is a Phase-T cutover, done on request only.
 
+### Phase 2 — Hermes wiring kit  ✅ (2026-06-01)
+- Read Nous Hermes Agent docs (MCP config ref, install, Ollama provider). MCP config = `~/.hermes/
+  config.yaml` under `mcp_servers:` (command/args/env/enabled/timeout/tools.include); tools namespaced
+  `mcp_<server>_<tool>`; reload via `/reload-mcp`; no `cwd` key (→ use launcher/PYTHONPATH).
+- Verified `execution/mcp_server.py` launches cwd-independently (from /tmp via PYTHONPATH) + via wrapper.
+- Deploy kit `deploy/hermes/`: `dtm-ai-mcp.sh` (launcher, chmod +x), `config.snippet.yaml` (per-client
+  `dtm_<client>` mcp_servers entries, tools.include whitelist), `SETUP_HERMES.md` (step-by-step Ubuntu:
+  install → local Ollama → register MCP → fence native toolsets → verify), `hermes-toolset-posture.md`
+  (risk matrix; terminal/code/file/browser start OFF; ramp-to-autonomy order).
+- SOP `architecture/hermes-integration.md`. Topology: ONE MCP server process per client (tenant-bound)
+  = isolation at the Hermes layer; every Hermes call → dispatch() guardrails (actor=hermes).
+- Two control planes documented: DTM AI Console (MSP/client tools) vs Hermes `tools`/MCP include (native).
+- Tests still 71/71. (Standing Hermes UP is owner's step on the Ubuntu box — can't run Hermes from dev.)
+
 ### Next
-- Wire Hermes Agent to the MCP server (on Ubuntu, with models) + add its toolsets to the Console.
-- Real approval-token workflow (replace present-token placeholder in gates.py).
-- Deploy cutover (on request). Optional: upgrade dashboard to shadcn/React later.
-- On the server: fill `.env` (Kaseya/Cylance/Huntress) → `python3 -m execution.cli probe` goes green.
+- Real approval-token workflow (replace present-token placeholder in gates.py) → unlock trusted writes.
+- Deploy cutover (on owner's "deploy" go — see D-14). Optional: more read-only tools; shadcn/React UI.
+- On the server: fill `.env` → `python3 -m execution.cli probe` green; then follow `deploy/hermes/SETUP_HERMES.md`.
 
 ### Errors / tests
 - All green. ResourceWarning (unclosed sqlite) fixed by adding AuditStore.close().

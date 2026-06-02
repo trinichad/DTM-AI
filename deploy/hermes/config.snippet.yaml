@@ -1,0 +1,48 @@
+# ── DTM AI ⇄ Hermes wiring ────────────────────────────────────────────────────
+# Paste this under the top-level `mcp_servers:` key in ~/.hermes/config.yaml.
+# Each entry = ONE DTM AI client (tenant), launched as a tenant-bound MCP server.
+# Hermes namespaces the tools as  mcp_<server>_<tool>  e.g. mcp_dtm_acme_kaseya_list_assets.
+#
+# WHY per-client entries: the MCP server is bound to one tenant and ignores any
+# tenant in tool args (the fence). One entry per client = tenant isolation at the
+# Hermes layer too. Add a `dtm_<client>` block per managed client.
+#
+# After editing, run  /reload-mcp  inside Hermes (no restart needed).
+
+mcp_servers:
+
+  dtm_acme:                                   # <-- one client; copy per client
+    command: /opt/dtm-ai/deploy/hermes/dtm-ai-mcp.sh
+    args: ["--tenant", "acme"]                # the DTM AI tenant id for this client
+    enabled: true
+    timeout: 120
+    connect_timeout: 30
+    tools:
+      # Whitelist exactly the guarded DTM AI tools Hermes may call. `include` wins.
+      # (Everything still passes through DTM AI dispatch(): read-only by default,
+      #  capability/approval/tenant/audit all enforced regardless of Hermes.)
+      include:
+        - system_health
+        - kaseya_list_assets
+        - kaseya_get_asset
+        - cylance_list_devices
+        - cylance_list_threats
+        - huntress_list_agents
+        - huntress_list_incidents
+        - kb_search
+        - memory_read
+        - memory_note
+      resources: false
+      prompts: false
+
+  # dtm_globex:
+  #   command: /opt/dtm-ai/deploy/hermes/dtm-ai-mcp.sh
+  #   args: ["--tenant", "globex"]
+  #   enabled: true
+  #   tools: { include: [system_health, kaseya_list_assets, kb_search, memory_read, memory_note] }
+
+  # Cross-client read-only view (use sparingly; reads only, no tenant-specific writes):
+  # dtm_all:
+  #   command: /opt/dtm-ai/deploy/hermes/dtm-ai-mcp.sh
+  #   args: ["--tenant", "*"]
+  #   tools: { include: [system_health, kb_search] }

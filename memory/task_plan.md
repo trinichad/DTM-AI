@@ -35,8 +35,11 @@ stubs, wired in Phase 3 as creds become available (M365/Entra next).
 - [ ] Approval workflow: write → proposed-action record → human approve → one-shot args-bound token
       (replaces the present-token placeholder in gates.py)
 - [ ] **MCP server** exposing the registry, so Hermes / any MCP brain uses our guarded tools (D-12)
-- [ ] **Hermes Agent integration** (fenced): wire Hermes as brain via MCP; surface its native toolsets
-      in the Capability Console (start off). (D-12)
+- [x] **Hermes Agent integration kit** (fenced, D-12): MCP server verified cwd-independent; deploy kit
+      `deploy/hermes/` (launcher `dtm-ai-mcp.sh`, `config.snippet.yaml`, `SETUP_HERMES.md`,
+      `hermes-toolset-posture.md`); SOP `architecture/hermes-integration.md`. Owner runs it on the
+      Ubuntu box where Hermes + models live (can't run Hermes from dev). Native-toolset control stays in
+      Hermes config (documented matrix); DTM AI Console governs the MSP tools.
 - [x] **Memory + Obsidian** (D-13): VaultStore + `kb_search` (read), `memory_read` (read),
       `memory_note` (internal write, seeded-allowed/toggleable); path-safe; SOP `architecture/memory-vault.md`.
 - [ ] Capability Console UI (the dashboard surface for enable/allow_write/require_approval + autonomy ramp)
