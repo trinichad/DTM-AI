@@ -100,6 +100,15 @@ Built + verified the security-critical core, stdlib-only (runs with NO Postgres/
 - **Tests: 80/80** (added test_scopes: allowlist allow/deny, auth blocked, host-escape/traversal blocked,
   boundary match, blocked-path-never-calls-client via dispatch).
 
+### UI polish  ✅ (2026-06-01)
+- Rebuilt `dashboard/index.html` (still self-contained: Tailwind + Lucide CDN, no build step):
+  glass panels, gradient accents, Inter font, icon sidebar w/ active gradient bar + "system online"
+  pulse. New **Overview** page (gradient stat cards: capabilities/integrations/read-only/write-enabled,
+  recent-activity feed w/ pass-fail icons, integration-health panel). Integrations = cards w/ SVG status
+  rings + styled probe. Capabilities = cards w/ category chips + risk dots + real gradient toggle
+  switches (enabled/write/approval). Chat = avatars + bubbles + suggested-prompt chips + typing dots +
+  provider footer. Toasts on capability changes. Verified all views via preview screenshots @1340px.
+
 ### Next
 - Approval workflow (one-shot args-bound tokens) → safely open WRITE primitives in the Console.
 - Deploy cutover (on owner's "deploy" go — D-14). Then `deploy/hermes/SETUP_HERMES.md` to stand up Hermes.

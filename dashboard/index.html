@@ -5,200 +5,296 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>DTM AI — MSP Operations</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
   <script>
-    tailwind.config = { darkMode: 'class', theme: { extend: { colors: {
-      ink: '#0b0f17', panel: '#111725', edge: '#1e2636', accent: '#6366f1' } } } };
+    tailwind.config = { darkMode: 'class', theme: { extend: {
+      colors: { ink:'#0a0e16', panel:'#0f1521', edge:'#1c2638', accent:'#6366f1', accent2:'#8b5cf6' },
+      fontFamily: { sans: ['Inter','ui-sans-serif','system-ui','sans-serif'] },
+      keyframes: {
+        fadeup: { '0%':{opacity:0,transform:'translateY(8px)'}, '100%':{opacity:1,transform:'translateY(0)'} },
+        pulseDot: { '0%,100%':{opacity:1}, '50%':{opacity:.3} },
+        blink: { '0%,80%,100%':{opacity:.2}, '40%':{opacity:1} },
+      },
+      animation: { fadeup:'fadeup .35s ease both', pulseDot:'pulseDot 1.8s ease-in-out infinite' },
+    } } };
   </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
-    body { background:#0b0f17; }
-    ::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:#283143;border-radius:8px}
-    .pill{font-size:11px;padding:2px 8px;border-radius:9999px;font-weight:600}
+    body{font-family:Inter,system-ui,sans-serif;background:
+      radial-gradient(1100px 600px at 12% -8%, rgba(99,102,241,.16), transparent 60%),
+      radial-gradient(900px 500px at 100% 0%, rgba(139,92,246,.12), transparent 55%),
+      #0a0e16; min-height:100vh;}
+    ::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:#26324a;border-radius:9px}
+    ::-webkit-scrollbar-thumb:hover{background:#33415c}
+    .glass{background:rgba(15,21,33,.72);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+    .pill{font-size:11px;padding:2px 9px;border-radius:9999px;font-weight:600;letter-spacing:.02em}
+    .card{background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,0));
+      border:1px solid rgba(255,255,255,.07);border-radius:16px}
+    .card-hover{transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease}
+    .card-hover:hover{transform:translateY(-2px);border-color:rgba(99,102,241,.4);
+      box-shadow:0 12px 40px -12px rgba(99,102,241,.35)}
+    .grad{background:linear-gradient(135deg,#6366f1,#8b5cf6)}
+    .grad-text{background:linear-gradient(135deg,#a5b4fc,#c4b5fd);-webkit-background-clip:text;background-clip:text;color:transparent}
+    .switch{position:relative;width:40px;height:22px;border-radius:9999px;background:#26324a;transition:.2s;cursor:pointer;flex:none}
+    .switch::after{content:'';position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:.2s}
+    .switch.on{background:linear-gradient(135deg,#6366f1,#8b5cf6)}
+    .switch.on::after{transform:translateX(18px)}
+    .switch.disabled{opacity:.35;cursor:not-allowed}
+    [data-lucide]{width:1em;height:1em;display:inline-block;vertical-align:-.125em}
+    .navi{display:flex;align-items:center;gap:.6rem;padding:.55rem .7rem;border-radius:11px;cursor:pointer;color:#94a3b8;font-weight:500;font-size:.875rem;position:relative;transition:.15s}
+    .navi:hover{background:rgba(255,255,255,.04);color:#e2e8f0}
+    .navi.active{background:linear-gradient(90deg,rgba(99,102,241,.18),rgba(139,92,246,.06));color:#fff}
+    .navi.active::before{content:'';position:absolute;left:0;top:18%;height:64%;width:3px;border-radius:3px;background:linear-gradient(180deg,#6366f1,#8b5cf6)}
   </style>
 </head>
 <body class="text-slate-200 antialiased">
 
 <!-- LOGIN -->
-<div id="login" class="hidden fixed inset-0 z-50 grid place-items-center bg-ink">
-  <form id="loginForm" class="w-80 bg-panel border border-edge rounded-2xl p-7 space-y-4">
-    <div class="flex items-center gap-2">
-      <div class="h-9 w-9 rounded-xl bg-accent grid place-items-center font-bold text-white">D</div>
-      <div><div class="font-semibold text-lg leading-none">DTM AI</div>
-        <div class="text-xs text-slate-400">MSP Operations</div></div>
+<div id="login" class="hidden fixed inset-0 z-50 grid place-items-center">
+  <form id="loginForm" class="card glass w-[22rem] p-8 space-y-5 animate-fadeup">
+    <div class="flex items-center gap-3">
+      <div class="h-11 w-11 rounded-2xl grad grid place-items-center font-extrabold text-white text-lg shadow-lg shadow-indigo-500/30">D</div>
+      <div><div class="font-bold text-xl leading-none grad-text">DTM AI</div>
+        <div class="text-xs text-slate-400 mt-1">MSP Operations Console</div></div>
     </div>
-    <input id="u" placeholder="username" autocomplete="username"
-      class="w-full bg-ink border border-edge rounded-lg px-3 py-2 text-sm" value="admin"/>
-    <input id="p" type="password" placeholder="password" autocomplete="current-password"
-      class="w-full bg-ink border border-edge rounded-lg px-3 py-2 text-sm"/>
-    <button class="w-full bg-accent hover:bg-indigo-500 text-white rounded-lg py-2 text-sm font-semibold">Sign in</button>
-    <div id="loginErr" class="text-rose-400 text-xs h-4"></div>
+    <div class="space-y-3">
+      <div class="relative"><i data-lucide="user" class="absolute left-3 top-3 text-slate-500"></i>
+        <input id="u" placeholder="username" autocomplete="username" value="admin"
+          class="w-full bg-ink/80 border border-edge rounded-xl pl-10 pr-3 py-2.5 text-sm focus:border-accent focus:outline-none"/></div>
+      <div class="relative"><i data-lucide="lock" class="absolute left-3 top-3 text-slate-500"></i>
+        <input id="p" type="password" placeholder="password" autocomplete="current-password"
+          class="w-full bg-ink/80 border border-edge rounded-xl pl-10 pr-3 py-2.5 text-sm focus:border-accent focus:outline-none"/></div>
+    </div>
+    <button class="w-full grad text-white rounded-xl py-2.5 text-sm font-semibold shadow-lg shadow-indigo-500/25 hover:opacity-95 flex items-center justify-center gap-2">
+      <i data-lucide="log-in"></i> Sign in</button>
+    <div id="loginErr" class="text-rose-400 text-xs h-4 text-center"></div>
   </form>
 </div>
 
 <!-- APP -->
 <div id="app" class="hidden min-h-screen flex">
-  <!-- sidebar -->
-  <aside class="w-56 shrink-0 border-r border-edge bg-panel/60 flex flex-col">
-    <div class="px-5 py-4 flex items-center gap-2 border-b border-edge">
-      <div class="h-8 w-8 rounded-lg bg-accent grid place-items-center font-bold text-white">D</div>
-      <div class="font-semibold">DTM AI</div>
+  <aside class="w-60 shrink-0 glass border-r border-edge flex flex-col">
+    <div class="px-5 py-5 flex items-center gap-3">
+      <div class="h-9 w-9 rounded-xl grad grid place-items-center font-extrabold text-white shadow-lg shadow-indigo-500/30">D</div>
+      <div><div class="font-bold leading-none">DTM AI</div><div class="text-[10px] text-slate-500 mt-1 tracking-wide">MSP OPERATIONS</div></div>
     </div>
-    <nav id="nav" class="flex-1 p-3 space-y-1 text-sm"></nav>
-    <div class="p-3 border-t border-edge text-xs text-slate-400">
-      <button id="logout" class="hover:text-slate-200">Sign out</button>
+    <nav id="nav" class="flex-1 px-3 space-y-1"></nav>
+    <div class="p-3 mx-3 mb-3 card flex items-center gap-2 text-xs text-slate-400">
+      <span class="h-2 w-2 rounded-full bg-emerald-400 animate-pulseDot"></span>
+      <span>System online</span>
+      <button id="logout" class="ml-auto hover:text-slate-200 flex items-center gap-1"><i data-lucide="log-out"></i></button>
     </div>
   </aside>
 
-  <!-- main -->
   <main class="flex-1 flex flex-col min-w-0">
-    <header class="h-14 border-b border-edge flex items-center gap-3 px-5 bg-panel/40 sticky top-0 z-10">
-      <div id="title" class="font-semibold">Chat</div>
-      <span class="pill bg-emerald-500/15 text-emerald-300">READ-ONLY</span>
-      <div class="ml-auto flex items-center gap-2 text-sm">
-        <span class="text-slate-400">Client</span>
-        <input id="tenant" value="*" class="w-28 bg-ink border border-edge rounded-lg px-2 py-1 text-sm"/>
+    <header class="h-16 glass border-b border-edge flex items-center gap-3 px-6 sticky top-0 z-10">
+      <div><div id="title" class="font-semibold text-[15px]">Overview</div>
+        <div id="subtitle" class="text-xs text-slate-500"></div></div>
+      <span class="pill bg-emerald-500/15 text-emerald-300 ml-1 flex items-center gap-1"><i data-lucide="shield-check" class="text-[13px]"></i> READ-ONLY</span>
+      <div class="ml-auto flex items-center gap-2">
+        <div class="relative"><i data-lucide="building-2" class="absolute left-3 top-2.5 text-slate-500 text-sm"></i>
+          <input id="tenant" value="*" title="Client / tenant"
+            class="w-36 bg-ink/70 border border-edge rounded-xl pl-9 pr-3 py-2 text-sm focus:border-accent focus:outline-none"/></div>
       </div>
     </header>
-    <section id="view" class="flex-1 overflow-auto p-5"></section>
+    <section id="view" class="flex-1 overflow-auto p-6"></section>
   </main>
 </div>
 
+<div id="toast" class="fixed bottom-5 right-5 z-50 space-y-2"></div>
+
 <script>
 const $ = s => document.querySelector(s);
-let TENANT = '*';
-const NAV = [['chat','Chat'],['integrations','Integrations'],['capabilities','Capabilities'],['audit','Audit']];
+let TENANT='*', current='overview';
+const NAV=[['overview','Overview','layout-dashboard'],['chat','Chat','message-square'],
+  ['integrations','Integrations','plug-zap'],['capabilities','Capabilities','sliders-horizontal'],
+  ['audit','Audit','scroll-text']];
+const SUB={overview:'Live health across your clients',chat:'Ask about a client — read-only',
+  integrations:'Connection status & credentials',capabilities:'Open capabilities as you build trust',
+  audit:'Every action, logged'};
 
-async function api(method, path, body){
-  const r = await fetch(path, {method, credentials:'same-origin',
-    headers:{'Content-Type':'application/json'}, body: body?JSON.stringify(body):undefined});
-  if(r.status===401){ showLogin(); throw new Error('auth'); }
-  return r.json();
-}
-function showLogin(){ $('#login').classList.remove('hidden'); $('#app').classList.add('hidden'); }
-function showApp(){ $('#login').classList.add('hidden'); $('#app').classList.remove('hidden'); }
+function icons(){ if(window.lucide) lucide.createIcons(); }
+async function api(m,p,b){const r=await fetch(p,{method:m,credentials:'same-origin',
+  headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined});
+  if(r.status===401){showLogin();throw new Error('auth');}return r.json();}
+function showLogin(){$('#login').classList.remove('hidden');$('#app').classList.add('hidden');icons();}
+function showApp(){$('#login').classList.add('hidden');$('#app').classList.remove('hidden');}
+function toast(msg,ok=true){const t=document.createElement('div');
+  t.className=`card glass px-4 py-2.5 text-sm flex items-center gap-2 animate-fadeup ${ok?'text-emerald-300':'text-rose-300'}`;
+  t.innerHTML=`<i data-lucide="${ok?'check-circle-2':'alert-circle'}"></i> ${msg}`;
+  $('#toast').appendChild(t);icons();setTimeout(()=>t.remove(),2600);}
+const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
-$('#loginForm').onsubmit = async e => {
-  e.preventDefault();
-  const res = await api('POST','/api/login',{username:$('#u').value,password:$('#p').value});
-  if(res.ok){ showApp(); route('chat'); } else { $('#loginErr').textContent = res.error||'login failed'; }
-};
-$('#logout').onclick = async ()=>{ await api('POST','/api/logout'); showLogin(); };
-$('#tenant').onchange = e => { TENANT = e.target.value.trim()||'*'; route(current); };
+$('#loginForm').onsubmit=async e=>{e.preventDefault();
+  try{const r=await api('POST','/api/login',{username:$('#u').value,password:$('#p').value});
+    if(r.ok){showApp();route('overview');}else $('#loginErr').textContent=r.error||'login failed';}
+  catch(_){$('#loginErr').textContent='login failed';}};
+$('#logout').onclick=async()=>{await api('POST','/api/logout');showLogin();};
+$('#tenant').onchange=e=>{TENANT=e.target.value.trim()||'*';route(current);};
 
-function renderNav(){
-  $('#nav').innerHTML = NAV.map(([id,label])=>
-    `<a data-id="${id}" class="navlink block px-3 py-2 rounded-lg cursor-pointer hover:bg-edge ${id===current?'bg-edge text-white':'text-slate-300'}">${label}</a>`).join('');
-  document.querySelectorAll('.navlink').forEach(a=>a.onclick=()=>route(a.dataset.id));
-}
-let current='chat';
-function route(id){ current=id; $('#title').textContent = NAV.find(n=>n[0]===id)[1]; renderNav(); VIEWS[id](); }
+function renderNav(){$('#nav').innerHTML=NAV.map(([id,label,ic])=>
+  `<a data-id="${id}" class="navi ${id===current?'active':''}"><i data-lucide="${ic}"></i><span>${label}</span></a>`).join('');
+  document.querySelectorAll('[data-id]').forEach(a=>a.onclick=()=>route(a.dataset.id));icons();}
+function route(id){current=id;$('#title').textContent=NAV.find(n=>n[0]===id)[1];
+  $('#subtitle').textContent=SUB[id]||'';renderNav();$('#view').classList.remove('animate-fadeup');
+  void $('#view').offsetWidth;$('#view').classList.add('animate-fadeup');VIEWS[id]();}
 
-const esc = s => String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-const card = inner => `<div class="bg-panel border border-edge rounded-xl p-4">${inner}</div>`;
-function catPill(c){ const m={read:'bg-sky-500/15 text-sky-300',alert:'bg-amber-500/15 text-amber-300',
-  write:'bg-orange-500/15 text-orange-300',destructive:'bg-rose-500/15 text-rose-300'};
-  return `<span class="pill ${m[c]||'bg-slate-600/30 text-slate-300'}">${c}</span>`; }
+const catChip=c=>{const m={read:['sky','eye'],alert:['amber','bell'],write:['orange','pencil'],destructive:['rose','flame']}[c]||['slate','circle'];
+  return `<span class="pill bg-${m[0]}-500/15 text-${m[0]}-300 inline-flex items-center gap-1"><i data-lucide="${m[1]}" class="text-[12px]"></i>${c}</span>`;}
+const riskDot=r=>{const c={none:'slate',low:'emerald',medium:'amber',high:'rose'}[r]||'slate';
+  return `<span class="inline-flex items-center gap-1 text-xs text-slate-400"><span class="h-1.5 w-1.5 rounded-full bg-${c}-400"></span>${r}</span>`;}
+function ring(pct,color='#6366f1',size=54){const r=22,c=2*Math.PI*r,off=c*(1-pct);
+  return `<svg width="${size}" height="${size}" viewBox="0 0 54 54" class="-rotate-90">
+    <circle cx="27" cy="27" r="${r}" fill="none" stroke="#1c2638" stroke-width="5"/>
+    <circle cx="27" cy="27" r="${r}" fill="none" stroke="${color}" stroke-width="5" stroke-linecap="round"
+      stroke-dasharray="${c}" stroke-dashoffset="${off}"/></svg>`;}
 
-const VIEWS = {
-  // ── CHAT ──
-  async chat(){
-    $('#view').innerHTML = `
-      <div class="max-w-3xl mx-auto flex flex-col h-full">
-        <div id="msgs" class="flex-1 space-y-3 mb-3"></div>
-        <form id="chatForm" class="flex gap-2">
-          <input id="msg" placeholder="Ask about ${esc(TENANT)} … e.g. how many assets does this client have?"
-            class="flex-1 bg-ink border border-edge rounded-xl px-4 py-3 text-sm"/>
-          <button class="bg-accent hover:bg-indigo-500 text-white rounded-xl px-5 text-sm font-semibold">Ask</button>
-        </form>
-        <div class="text-xs text-slate-500 mt-2">DTM AI is analysing only — it never changes client systems in this mode.</div>
-      </div>`;
-    $('#chatForm').onsubmit = async e => {
-      e.preventDefault();
-      const m = $('#msg').value.trim(); if(!m) return; $('#msg').value='';
-      add('you', esc(m));
-      const tid = add('ai','<span class="text-slate-400">thinking…</span>');
-      try{
-        const r = await api('POST','/api/chat',{tenant:TENANT, message:m});
-        let html = esc(r.answer);
-        if(r.tool_events?.length){
-          html += `<div class="mt-2 flex flex-wrap gap-1">`+
-            r.tool_events.map(t=>`<span class="pill ${t.ok?'bg-emerald-500/15 text-emerald-300':'bg-rose-500/15 text-rose-300'}">${t.ok?'✓':'✗'} ${esc(t.name)}</span>`).join('')+`</div>`;
-        }
-        if(r.citations?.length) html += `<div class="text-xs text-slate-500 mt-1">sources: ${r.citations.map(esc).join(', ')}</div>`;
-        html += `<div class="text-xs text-slate-600 mt-1">${esc(r.provider)}/${esc(r.model)} · ${r.rounds} round(s)</div>`;
-        document.getElementById(tid).innerHTML = html;
-      }catch(_){ document.getElementById(tid).innerHTML = '<span class="text-rose-400">error</span>'; }
-    };
-  },
-  // ── INTEGRATIONS ──
-  async integrations(){
-    const {integrations} = await api('GET','/api/integrations');
-    $('#view').innerHTML = `<div class="grid gap-3 md:grid-cols-3 max-w-4xl">`+
-      integrations.map(i=>card(`
-        <div class="flex items-center justify-between">
-          <div class="font-semibold">${esc(i.label)}</div>
-          <span class="pill ${i.configured?'bg-emerald-500/15 text-emerald-300':'bg-slate-600/30 text-slate-400'}">${i.configured?'configured':'not set'}</span>
+const VIEWS={
+  async overview(){
+    const [tools,ints,aud]=await Promise.all([api('GET','/api/tools'),api('GET','/api/integrations'),
+      api('GET','/api/audit?limit=8'+(TENANT!=='*'?'&tenant='+encodeURIComponent(TENANT):''))]);
+    const T=tools.tools,I=ints.integrations;
+    const cfg=I.filter(i=>i.configured).length, writes=T.filter(t=>t.allow_write).length;
+    const stat=(ic,grad,val,label,sub)=>`<div class="card card-hover p-5">
+      <div class="flex items-start justify-between">
+        <div class="h-10 w-10 rounded-xl grid place-items-center text-white" style="background:${grad}"><i data-lucide="${ic}"></i></div>
+        ${sub?`<span class="text-[11px] text-slate-500">${sub}</span>`:''}
+      </div>
+      <div class="text-3xl font-bold mt-4">${val}</div>
+      <div class="text-sm text-slate-400">${label}</div></div>`;
+    $('#view').innerHTML=`
+      <div class="grid gap-4 md:grid-cols-4 mb-5">
+        ${stat('wrench','linear-gradient(135deg,#6366f1,#8b5cf6)',T.length,'Capabilities','enabled tools')}
+        ${stat('plug-zap','linear-gradient(135deg,#22d3ee,#3b82f6)',cfg+' / '+I.length,'Integrations','configured')}
+        ${stat('shield-check','linear-gradient(135deg,#34d399,#10b981)',T.length-writes,'Read-only tools','safe by default')}
+        ${stat('pencil','linear-gradient(135deg,#fb923c,#f43f5e)',writes,'Write-enabled','via console')}
+      </div>
+      <div class="grid gap-4 lg:grid-cols-3">
+        <div class="card p-5 lg:col-span-2">
+          <div class="flex items-center gap-2 mb-4 font-semibold"><i data-lucide="activity" class="text-accent"></i> Recent activity</div>
+          <div class="space-y-2">${aud.audit.length?aud.audit.map(a=>`
+            <div class="flex items-center gap-3 text-sm py-1.5 border-b border-edge/40">
+              <i data-lucide="${a.result_ok?'check':a.result_ok===0?'x':'minus'}" class="${a.result_ok?'text-emerald-400':a.result_ok===0?'text-rose-400':'text-slate-500'}"></i>
+              <span class="text-slate-300">${esc(a.tool||a.action)}</span>
+              <span class="text-slate-500 text-xs">${esc(a.tenant_id)}</span>
+              <span class="ml-auto text-slate-600 text-xs">${esc((a.ts||'').slice(11,19))}</span></div>`).join('')
+            :'<div class="text-slate-500 text-sm py-6 text-center">No activity yet — try the Chat.</div>'}</div>
         </div>
-        <div class="text-xs text-slate-500 mt-2">${i.configured?Object.entries(i.fingerprints).map(([k,v])=>`${esc(k)}: <code>${esc(v)}</code>`).join('<br>'):'missing: '+i.missing.map(esc).join(', ')}</div>
-        <button data-int="${esc(i.integration)}" class="probe mt-3 text-xs bg-edge hover:bg-slate-700 rounded-lg px-3 py-1">Test connection</button>
-        <div class="probe-res text-xs mt-2"></div>`)).join('')+`</div>`;
-    document.querySelectorAll('.probe').forEach(b=>b.onclick=async()=>{
-      const res=b.parentElement.querySelector('.probe-res'); res.textContent='probing…';
-      const {probes}=await api('GET','/api/integrations/probe?integration='+b.dataset.int);
-      const p=probes[b.dataset.int];
-      res.innerHTML=`<span class="${p.ok?'text-emerald-300':'text-rose-400'}">${p.ok?'✓ ok':'✗ '+esc(p.detail)}</span> <span class="text-slate-600">${p.latency_ms}ms</span>`;
-    });
+        <div class="card p-5">
+          <div class="flex items-center gap-2 mb-4 font-semibold"><i data-lucide="heart-pulse" class="text-accent"></i> Integration health</div>
+          <div class="space-y-3">${I.map(i=>`<div class="flex items-center gap-3">
+            <span class="h-2.5 w-2.5 rounded-full ${i.configured?'bg-emerald-400':'bg-slate-600'}"></span>
+            <span class="text-sm">${esc(i.label)}</span>
+            <span class="ml-auto pill ${i.configured?'bg-emerald-500/15 text-emerald-300':'bg-slate-600/30 text-slate-400'}">${i.configured?'ready':'not set'}</span>
+          </div>`).join('')}</div>
+        </div>
+      </div>`;icons();
   },
-  // ── CAPABILITIES (the enable/disable area) ──
+
+  async chat(){
+    $('#view').innerHTML=`<div class="max-w-3xl mx-auto flex flex-col h-full">
+      <div id="msgs" class="flex-1 space-y-4 mb-3"></div>
+      <div id="suggest" class="flex flex-wrap gap-2 mb-3"></div>
+      <form id="chatForm" class="card glass flex gap-2 p-2">
+        <input id="msg" placeholder="Ask about ${esc(TENANT)} …"
+          class="flex-1 bg-transparent px-3 py-2 text-sm focus:outline-none"/>
+        <button class="grad text-white rounded-xl px-4 text-sm font-semibold flex items-center gap-1"><i data-lucide="send"></i></button>
+      </form>
+      <div class="text-[11px] text-slate-500 mt-2 flex items-center gap-1.5"><i data-lucide="shield-check"></i> Analysing only — DTM AI never changes client systems in this mode.</div></div>`;
+    const sg=['How many assets does this client have?','Any open Huntress incidents?','Summarise this client’s security posture'];
+    $('#suggest').innerHTML=sg.map(s=>`<button class="pill bg-white/5 hover:bg-white/10 text-slate-300 border border-edge">${esc(s)}</button>`).join('');
+    $('#suggest').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('#msg').value=b.textContent;$('#msg').focus();});
+    $('#chatForm').onsubmit=async e=>{e.preventDefault();const m=$('#msg').value.trim();if(!m)return;$('#msg').value='';
+      bubble('you',esc(m));const id=bubble('ai','<span class="inline-flex gap-1"><span class="dot">●</span><span class="dot">●</span><span class="dot">●</span></span>');
+      document.querySelectorAll('#'+id+' .dot').forEach((d,i)=>{d.style.animation=`blink 1.2s ${i*.2}s infinite`;});
+      try{const r=await api('POST','/api/chat',{tenant:TENANT,message:m});let h=esc(r.answer);
+        if(r.tool_events?.length)h+=`<div class="mt-2 flex flex-wrap gap-1">`+r.tool_events.map(t=>
+          `<span class="pill ${t.ok?'bg-emerald-500/15 text-emerald-300':'bg-rose-500/15 text-rose-300'} inline-flex items-center gap-1"><i data-lucide="${t.ok?'check':'x'}" class="text-[11px]"></i>${esc(t.name)}</span>`).join('')+`</div>`;
+        if(r.citations?.length)h+=`<div class="text-[11px] text-slate-500 mt-1.5 flex items-center gap-1"><i data-lucide="link"></i>${r.citations.map(esc).join(', ')}</div>`;
+        h+=`<div class="text-[11px] text-slate-600 mt-1">${esc(r.provider)}/${esc(r.model)} · ${r.rounds} round(s)</div>`;
+        document.getElementById(id).innerHTML=h;icons();
+      }catch(_){document.getElementById(id).innerHTML='<span class="text-rose-400">error</span>';}};icons();
+  },
+
+  async integrations(){
+    const {integrations}=await api('GET','/api/integrations');
+    $('#view').innerHTML=`<div class="grid gap-4 md:grid-cols-3 max-w-5xl">`+integrations.map(i=>`
+      <div class="card card-hover p-5">
+        <div class="flex items-center gap-3">
+          <div class="relative grid place-items-center">${ring(i.configured?1:0.06,i.configured?'#10b981':'#475569')}
+            <i data-lucide="${({kaseya:'monitor-dot',cylance:'shield',huntress:'radar'})[i.integration]||'plug'}" class="absolute text-lg ${i.configured?'text-emerald-300':'text-slate-500'}"></i></div>
+          <div><div class="font-semibold">${esc(i.label)}</div>
+            <span class="pill ${i.configured?'bg-emerald-500/15 text-emerald-300':'bg-slate-600/30 text-slate-400'}">${i.configured?'configured':'not set'}</span></div>
+        </div>
+        <div class="text-[11px] text-slate-500 mt-3 font-mono leading-relaxed">${i.configured?Object.entries(i.fingerprints).map(([k,v])=>`${esc(k)}: ${esc(v)}`).join('<br>'):'missing: '+i.missing.map(esc).join(', ')}</div>
+        <button data-int="${esc(i.integration)}" class="probe mt-4 w-full text-xs bg-white/5 hover:bg-white/10 border border-edge rounded-lg py-2 flex items-center justify-center gap-1.5"><i data-lucide="zap"></i> Test connection</button>
+        <div class="probe-res text-xs mt-2"></div></div>`).join('')+`</div>`;
+    document.querySelectorAll('.probe').forEach(b=>b.onclick=async()=>{const res=b.parentElement.querySelector('.probe-res');
+      res.innerHTML='<span class="text-slate-400">probing…</span>';
+      const {probes}=await api('GET','/api/integrations/probe?integration='+b.dataset.int);const p=probes[b.dataset.int];
+      res.innerHTML=`<span class="${p.ok?'text-emerald-300':'text-rose-400'} inline-flex items-center gap-1"><i data-lucide="${p.ok?'check-circle-2':'x-circle'}"></i>${p.ok?'connected':esc(p.detail)}</span> <span class="text-slate-600">${p.latency_ms}ms</span>`;icons();});
+    icons();
+  },
+
   async capabilities(){
-    const {capabilities} = await api('GET','/api/capabilities');
-    $('#view').innerHTML = `
-      <div class="max-w-4xl">
-        <div class="text-sm text-slate-400 mb-3">Open capabilities tool-by-tool as you build trust. Read-only by default. Destructive tools always require per-action approval — that floor can't be turned off.</div>
-        <div class="bg-panel border border-edge rounded-xl overflow-hidden">
-          <table class="w-full text-sm">
-            <thead class="text-xs text-slate-400 border-b border-edge">
-              <tr><th class="text-left p-3">Tool</th><th class="p-3">Type</th><th class="p-3">Enabled</th><th class="p-3">Allow write</th><th class="p-3">Require approval</th></tr>
-            </thead><tbody>`+
-        capabilities.map(t=>`<tr class="border-b border-edge/50">
-              <td class="p-3"><div class="font-medium">${esc(t.name)}</div><div class="text-xs text-slate-500">${esc(t.source)} · risk ${esc(t.risk)}</div></td>
-              <td class="p-3 text-center">${catPill(t.category)}</td>
-              ${tog(t.name,'enabled',t.enabled)}
-              ${tog(t.name,'allow_write',t.allow_write, t.category==='read'||t.category==='alert')}
-              ${tog(t.name,'require_approval',t.require_approval, t.category==='destructive')}
-            </tr>`).join('')+`</tbody></table></div></div>`;
-    document.querySelectorAll('.tog').forEach(el=>el.onchange=async()=>{
-      const {name,field}=el.dataset;
-      await api('POST','/api/capabilities/'+encodeURIComponent(name),{[field]:el.checked});
-      VIEWS.capabilities();
-    });
+    const {capabilities}=await api('GET','/api/capabilities');
+    const rows=t=>`<div class="card p-4 flex items-center gap-4 card-hover" data-name="${esc(t.name)}">
+      <div class="min-w-0 flex-1">
+        <div class="flex items-center gap-2"><span class="font-medium truncate">${esc(t.name)}</span>${catChip(t.category)}</div>
+        <div class="text-xs text-slate-500 mt-0.5 truncate">${esc(t.description)}</div>
+        <div class="flex items-center gap-3 mt-1.5">${riskDot(t.risk)}<span class="text-xs text-slate-600">· ${esc(t.source)}</span></div>
+      </div>
+      <div class="flex items-center gap-5 text-center">
+        ${toggle(t.name,'enabled',t.enabled,false,'Enabled')}
+        ${toggle(t.name,'allow_write',t.allow_write,(t.category==='read'||t.category==='alert'),'Write')}
+        ${toggle(t.name,'require_approval',t.require_approval,(t.category==='destructive'),'Approval')}
+      </div></div>`;
+    $('#view').innerHTML=`
+      <div class="card glass p-4 mb-4 flex items-start gap-3 max-w-5xl">
+        <i data-lucide="shield-half" class="text-accent mt-0.5"></i>
+        <div class="text-sm text-slate-400">Open capabilities tool-by-tool as you build trust. <span class="text-slate-200">Read-only by default.</span> Destructive tools always require per-action approval — that floor can't be turned off.</div></div>
+      <div class="hidden md:flex items-center gap-5 px-4 pb-2 text-[11px] uppercase tracking-wide text-slate-500 max-w-5xl">
+        <div class="flex-1">Tool</div><div class="w-12">Enabled</div><div class="w-12">Write</div><div class="w-14">Approval</div></div>
+      <div class="space-y-2 max-w-5xl">${capabilities.map(rows).join('')}</div>`;
+    document.querySelectorAll('.switch:not(.disabled)').forEach(sw=>sw.onclick=async()=>{
+      const name=sw.dataset.name,field=sw.dataset.field,val=!sw.classList.contains('on');
+      sw.classList.toggle('on',val);
+      await api('POST','/api/capabilities/'+encodeURIComponent(name),{[field]:val});
+      toast(`${name}: ${field.replace('_',' ')} ${val?'on':'off'}`);});
+    icons();
   },
-  // ── AUDIT ──
+
   async audit(){
-    const {audit} = await api('GET','/api/audit?limit=80'+(TENANT!=='*'?'&tenant='+encodeURIComponent(TENANT):''));
-    $('#view').innerHTML = card(`<table class="w-full text-xs"><thead class="text-slate-400 border-b border-edge">
-      <tr><th class="text-left p-2">time</th><th class="text-left p-2">actor</th><th class="text-left p-2">client</th><th class="text-left p-2">action</th><th class="text-left p-2">tool</th><th class="p-2">ok</th></tr></thead><tbody>`+
-      audit.map(a=>`<tr class="border-b border-edge/40"><td class="p-2 text-slate-500">${esc((a.ts||'').slice(0,19))}</td>
-        <td class="p-2">${esc(a.actor)}</td><td class="p-2">${esc(a.tenant_id)}</td>
-        <td class="p-2">${esc(a.action)}</td><td class="p-2">${esc(a.tool||'')}</td>
-        <td class="p-2 text-center">${a.result_ok==null?'·':(a.result_ok?'<span class="text-emerald-300">✓</span>':'<span class="text-rose-400">✗</span>')}</td></tr>`).join('')+
-      `</tbody></table>`);
+    const {audit}=await api('GET','/api/audit?limit=100'+(TENANT!=='*'?'&tenant='+encodeURIComponent(TENANT):''));
+    $('#view').innerHTML=`<div class="card overflow-hidden max-w-5xl">
+      <table class="w-full text-sm"><thead class="text-[11px] uppercase tracking-wide text-slate-500 border-b border-edge">
+        <tr><th class="text-left p-3 font-medium">Time</th><th class="text-left p-3 font-medium">Actor</th>
+        <th class="text-left p-3 font-medium">Client</th><th class="text-left p-3 font-medium">Action</th>
+        <th class="text-left p-3 font-medium">Tool</th><th class="p-3 font-medium">Result</th></tr></thead><tbody>`+
+      (audit.length?audit.map(a=>`<tr class="border-b border-edge/30 hover:bg-white/[.02]">
+        <td class="p-3 text-slate-500 font-mono text-xs">${esc((a.ts||'').slice(0,19).replace('T',' '))}</td>
+        <td class="p-3">${esc(a.actor)}</td><td class="p-3 text-slate-400">${esc(a.tenant_id)}</td>
+        <td class="p-3"><span class="pill bg-white/5 text-slate-300">${esc(a.action)}</span></td>
+        <td class="p-3 text-slate-300">${esc(a.tool||'—')}</td>
+        <td class="p-3 text-center">${a.result_ok==null?'<span class="text-slate-600">·</span>':(a.result_ok?'<i data-lucide="check-circle-2" class="text-emerald-400"></i>':'<i data-lucide="x-circle" class="text-rose-400"></i>')}</td></tr>`).join('')
+        :'<tr><td colspan="6" class="text-center text-slate-500 py-10">No audit entries yet.</td></tr>')+
+      `</tbody></table></div>`;icons();
   },
 };
 
-function tog(name, field, val, disabled){
-  return `<td class="p-3 text-center"><input type="checkbox" class="tog accent-indigo-500 h-4 w-4"
-    data-name="${esc(name)}" data-field="${field}" ${val?'checked':''} ${disabled?'disabled':''}/></td>`;
-}
-function add(who, html){
-  const id='m'+Math.random().toString(36).slice(2);
-  const mine = who==='you';
-  $('#msgs').insertAdjacentHTML('beforeend',
-    `<div class="flex ${mine?'justify-end':''}"><div id="${id}" class="${mine?'bg-accent/20':'bg-panel border border-edge'} rounded-2xl px-4 py-2 max-w-[80%] text-sm">${html}</div></div>`);
-  $('#msgs').scrollTop = 1e9; return id;
-}
+function toggle(name,field,val,disabled,label){
+  return `<div class="flex flex-col items-center gap-1">
+    <div class="switch ${val?'on':''} ${disabled?'disabled':''}" data-name="${esc(name)}" data-field="${field}"></div>
+    <span class="text-[10px] text-slate-600 md:hidden">${label}</span></div>`;}
+function bubble(who,html){const id='m'+Math.random().toString(36).slice(2);const mine=who==='you';
+  const avatar=mine?`<div class="h-8 w-8 rounded-full bg-edge grid place-items-center text-xs font-semibold shrink-0">You</div>`
+    :`<div class="h-8 w-8 rounded-full grad grid place-items-center shrink-0 shadow-lg shadow-indigo-500/30"><i data-lucide="sparkles" class="text-white text-sm"></i></div>`;
+  $('#msgs').insertAdjacentHTML('beforeend',`<div class="flex gap-3 ${mine?'flex-row-reverse':''} animate-fadeup">
+    ${avatar}<div id="${id}" class="${mine?'bg-accent/15 border-accent/20':'card glass'} border rounded-2xl px-4 py-2.5 max-w-[80%] text-sm leading-relaxed">${html}</div></div>`);
+  $('#msgs').scrollTop=1e9;icons();return id;}
 
-// boot: are we logged in?
-(async()=>{ try{ await api('GET','/api/me'); showApp(); route('chat'); }catch(_){ showLogin(); } })();
+(async()=>{try{await api('GET','/api/me');showApp();route('overview');}catch(_){showLogin();}})();
 </script>
 </body>
 </html>
