@@ -50,8 +50,19 @@ def http_json(
     try:
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:  # noqa: S310
             raw = resp.read()
-            body = json.loads(raw.decode("utf-8")) if raw else None
-            return resp.status, body
+            final_url = resp.geturl()
+            if not raw:
+                return resp.status, None
+            text = raw.decode("utf-8", "replace")
+            try:
+                return resp.status, json.loads(text)
+            except json.JSONDecodeError:
+                # A 2xx that isn't JSON is almost always an HTML login/redirect or error page —
+                # surface what actually came back (and where) instead of a bare parser error.
+                ctype = resp.headers.get("Content-Type", "?")
+                note = f"; redirected to {final_url}" if final_url != url else ""
+                snippet = " ".join(text.split())[:200]
+                raise HttpError(resp.status, f"expected JSON, got {ctype}{note}: {snippet}")
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", "replace") if e.fp else ""
         raise HttpError(e.code, raw) from e
