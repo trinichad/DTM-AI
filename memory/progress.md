@@ -138,6 +138,21 @@ Built + verified the security-critical core, stdlib-only (runs with NO Postgres/
 - **Tests: 92/92** (added test_hermes_skills: missing-dir clean, parse w/ category, frontmatterless
   fallback, example dir loads). Verified populated view via preview screenshot.
 
+### Dashboard: integrations expansion, Memory tab, static sidebar, user accounts  ✅ (2026-06-01)
+- **Sidebar static**: `#app` is now `h-screen overflow-hidden`; only the content `#view` scrolls.
+- **Hermes + Obsidian as integrations**: `/api/integrations` now returns `kind: api|local`; UI shows an
+  "API integrations" row (Kaseya/Cylance/Huntress + Manage keys) and a "Knowledge & agent" row
+  (Obsidian Vault: KB/notebook counts; Hermes Agent: learned-skill count). Local tiles = status only.
+- **Memory tab** (`brain` icon): `GET /api/memory?tenant=` → per-client `memory.md` text + KB doc list +
+  client-notebook chips (click to switch tenant). `VaultStore.list_kb()/list_client_memories()`.
+- **User accounts**: `auth.py` gains email column (+ migration) and CRUD (create/update/delete, role
+  admin|user, guards: can't delete/demote last admin). API: `/api/me` (role+email), `/api/me/password`
+  (self-service, verifies current), `/api/users` GET/POST, `/api/users/<n>` POST, DELETE (admin-only,
+  audited; deleted-user sessions rejected). Server gained `do_DELETE`. UI: sidebar user card → Settings
+  (My account password change + admin Users table: create/edit/delete).
+- **Tests: 103/103** (added test_users). Live-verified all endpoints incl. DELETE + 403 gating + the UI
+  via preview (integrations, memory, settings screenshots).
+
 ### Next
 - Approval workflow (one-shot args-bound tokens) → safely open WRITE primitives in the Console.
 - Deploy cutover (on owner's "deploy" go — D-14). Then `deploy/hermes/SETUP_HERMES.md` to stand up Hermes.

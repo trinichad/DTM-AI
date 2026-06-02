@@ -74,6 +74,16 @@ class VaultStore:
         path = self._memory_path(tenant_id)
         return path.read_text(encoding="utf-8") if path.exists() else ""
 
+    def list_kb(self) -> list[str]:
+        if not self.kb_dir.exists():
+            return []
+        return [str(p.relative_to(self.root)) for p in sorted(self.kb_dir.rglob("*.md"))]
+
+    def list_client_memories(self) -> list[str]:
+        if not self.clients_dir.exists():
+            return []
+        return [d.name for d in sorted(self.clients_dir.iterdir()) if (d / "memory.md").exists()]
+
     def append_memory(self, tenant_id: str, note: str, actor: str) -> dict[str, Any]:
         if tenant_id in ("", "*"):
             return {"error": "memory requires a specific client (tenant), not '*'"}

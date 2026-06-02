@@ -91,6 +91,10 @@ def _make_handler(api: Api, signer: SessionSigner, secure_cookie: bool):
                 return
             self._send_json(api.handle("POST", parsed.path, {}, self._body(), self._user()))
 
+        def do_DELETE(self):
+            parsed = urlparse(self.path)
+            self._send_json(api.handle("DELETE", parsed.path, {}, {}, self._user()))
+
     return Handler
 
 

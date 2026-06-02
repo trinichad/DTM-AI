@@ -73,17 +73,24 @@
 </div>
 
 <!-- APP -->
-<div id="app" class="hidden min-h-screen flex">
+<div id="app" class="hidden h-screen overflow-hidden flex">
   <aside class="w-60 shrink-0 glass border-r border-edge flex flex-col">
     <div class="px-5 py-5 flex items-center gap-3">
       <div class="h-9 w-9 rounded-xl grad grid place-items-center font-extrabold text-white shadow-lg shadow-indigo-500/30">D</div>
       <div><div class="font-bold leading-none">DTM AI</div><div class="text-[10px] text-slate-500 mt-1 tracking-wide">MSP OPERATIONS</div></div>
     </div>
-    <nav id="nav" class="flex-1 px-3 space-y-1"></nav>
-    <div class="p-3 mx-3 mb-3 card flex items-center gap-2 text-xs text-slate-400">
-      <span class="h-2 w-2 rounded-full bg-emerald-400 animate-pulseDot"></span>
-      <span>System online</span>
-      <button id="logout" class="ml-auto hover:text-slate-200 flex items-center gap-1"><i data-lucide="log-out"></i></button>
+    <nav id="nav" class="flex-1 px-3 space-y-1 overflow-y-auto"></nav>
+    <div class="px-3 pb-3 pt-2 space-y-2">
+      <button id="userCard" class="w-full card p-2.5 flex items-center gap-2.5 text-left hover:border-accent/40 transition">
+        <div id="userAvatar" class="h-8 w-8 rounded-full grad grid place-items-center text-xs font-bold text-white shrink-0">?</div>
+        <div class="min-w-0"><div id="userName" class="text-sm font-medium truncate">—</div>
+          <div id="userRole" class="text-[10px] text-slate-500 uppercase tracking-wide">—</div></div>
+        <i data-lucide="settings" class="ml-auto text-slate-500"></i>
+      </button>
+      <div class="px-1 flex items-center gap-2 text-xs text-slate-400">
+        <span class="h-2 w-2 rounded-full bg-emerald-400 animate-pulseDot"></span><span>System online</span>
+        <button id="logout" class="ml-auto hover:text-slate-200 flex items-center gap-1"><i data-lucide="log-out"></i></button>
+      </div>
     </div>
   </aside>
 
@@ -109,10 +116,12 @@ const $ = s => document.querySelector(s);
 let TENANT='*', current='overview';
 const NAV=[['overview','Overview','layout-dashboard'],['chat','Chat','message-square'],
   ['integrations','Integrations','plug-zap'],['capabilities','Capabilities','sliders-horizontal'],
-  ['skills','Skills','graduation-cap'],['audit','Audit','scroll-text']];
+  ['skills','Skills','graduation-cap'],['memory','Memory','brain'],['audit','Audit','scroll-text']];
 const SUB={overview:'Live health across your clients',chat:'Ask about a client — read-only',
-  integrations:'Connection status & credentials',capabilities:'Primitives the AI may use',
-  skills:'What Hermes has learned',audit:'Every action, logged'};
+  integrations:'Connections, knowledge & credentials',capabilities:'Primitives the AI may use',
+  skills:'What Hermes has learned',memory:'Knowledge base & per-client notes',
+  audit:'Every action, logged',settings:'Account & users'};
+let ME=null;
 
 function icons(){ if(window.lucide) lucide.createIcons(); }
 async function api(m,p,b){const r=await fetch(p,{method:m,credentials:'same-origin',
@@ -128,15 +137,20 @@ const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt
 
 $('#loginForm').onsubmit=async e=>{e.preventDefault();
   try{const r=await api('POST','/api/login',{username:$('#u').value,password:$('#p').value});
-    if(r.ok){showApp();route('overview');}else $('#loginErr').textContent=r.error||'login failed';}
+    if(r.ok){showApp();await loadMe();route('overview');}else $('#loginErr').textContent=r.error||'login failed';}
   catch(_){$('#loginErr').textContent='login failed';}};
 $('#logout').onclick=async()=>{await api('POST','/api/logout');showLogin();};
+$('#userCard').onclick=()=>route('settings');
 $('#tenant').onchange=e=>{TENANT=e.target.value.trim()||'*';route(current);};
+async function loadMe(){ try{ ME=await api('GET','/api/me'); renderUser(); }catch(_){} }
+function renderUser(){ if(!ME)return; $('#userName').textContent=ME.username;
+  $('#userRole').textContent=ME.role; $('#userAvatar').textContent=(ME.username||'?')[0].toUpperCase(); }
 
 function renderNav(){$('#nav').innerHTML=NAV.map(([id,label,ic])=>
   `<a data-id="${id}" class="navi ${id===current?'active':''}"><i data-lucide="${ic}"></i><span>${label}</span></a>`).join('');
   document.querySelectorAll('[data-id]').forEach(a=>a.onclick=()=>route(a.dataset.id));icons();}
-function route(id){current=id;$('#title').textContent=NAV.find(n=>n[0]===id)[1];
+function route(id){current=id;const n=NAV.find(x=>x[0]===id);
+  $('#title').textContent=n?n[1]:(id.charAt(0).toUpperCase()+id.slice(1));
   $('#subtitle').textContent=SUB[id]||'';renderNav();$('#view').classList.remove('animate-fadeup');
   void $('#view').offsetWidth;$('#view').classList.add('animate-fadeup');VIEWS[id]();}
 
@@ -219,9 +233,10 @@ const VIEWS={
 
   async integrations(){
     const {integrations}=await api('GET','/api/integrations');
-    const ico={kaseya:'monitor-dot',cylance:'shield',huntress:'radar'};
-    $('#view').innerHTML=`<div class="grid gap-4 md:grid-cols-3 max-w-5xl">`+integrations.map(i=>`
-      <div class="card card-hover p-5" data-card="${esc(i.integration)}">
+    const ico={kaseya:'monitor-dot',cylance:'shield',huntress:'radar',obsidian:'notebook-pen',hermes:'bot'};
+    const apiCards=integrations.filter(i=>i.kind==='api'), local=integrations.filter(i=>i.kind==='local');
+    const head=t=>`<div class="text-[11px] uppercase tracking-wide text-slate-500 mb-2 mt-1">${t}</div>`;
+    const apiCard=i=>`<div class="card card-hover p-5" data-card="${esc(i.integration)}">
         <div class="flex items-center gap-3">
           <div class="relative grid place-items-center">${ring(i.configured?1:0.06,i.configured?'#10b981':'#475569')}
             <i data-lucide="${ico[i.integration]||'plug'}" class="absolute text-lg ${i.configured?'text-emerald-300':'text-slate-500'}"></i></div>
@@ -233,8 +248,19 @@ const VIEWS={
           <button data-int="${esc(i.integration)}" class="probe text-xs bg-white/5 hover:bg-white/10 border border-edge rounded-lg py-2 flex items-center justify-center gap-1.5"><i data-lucide="zap"></i> Test</button>
           <button data-int="${esc(i.integration)}" class="manage text-xs bg-white/5 hover:bg-white/10 border border-edge rounded-lg py-2 flex items-center justify-center gap-1.5"><i data-lucide="key-round"></i> Manage keys</button>
         </div>
-        <div class="probe-res text-xs mt-2"></div>
-        <div class="creds mt-3"></div></div>`).join('')+`</div>`;
+        <div class="probe-res text-xs mt-2"></div><div class="creds mt-3"></div></div>`;
+    const localCard=i=>`<div class="card card-hover p-5">
+        <div class="flex items-center gap-3">
+          <div class="relative grid place-items-center">${ring(i.configured?1:0.06,i.configured?'#8b5cf6':'#475569')}
+            <i data-lucide="${ico[i.integration]||'box'}" class="absolute text-lg ${i.configured?'text-violet-300':'text-slate-500'}"></i></div>
+          <div><div class="font-semibold">${esc(i.label)}</div>
+            <span class="pill ${i.configured?'bg-violet-500/15 text-violet-300':'bg-slate-600/30 text-slate-400'}">${i.configured?'connected':'not connected'}</span></div>
+        </div>
+        <div class="text-sm text-slate-300 mt-3">${esc(i.detail)}</div>
+        <div class="text-[11px] text-slate-600 mt-2 font-mono break-all">${esc(i.path)}</div></div>`;
+    $('#view').innerHTML=`<div class="max-w-5xl">
+        ${head('API integrations')}<div class="grid gap-4 md:grid-cols-3">${apiCards.map(apiCard).join('')}</div>
+        ${head('Knowledge & agent')}<div class="grid gap-4 md:grid-cols-3">${local.map(localCard).join('')}</div></div>`;
     document.querySelectorAll('.probe').forEach(b=>b.onclick=async()=>{const res=b.closest('[data-card]').querySelector('.probe-res');
       res.innerHTML='<span class="text-slate-400">probing…</span>';
       const {probes}=await api('GET','/api/integrations/probe?integration='+b.dataset.int);const p=probes[b.dataset.int];
@@ -294,6 +320,64 @@ const VIEWS={
     icons();
   },
 
+  async memory(){
+    const d=await api('GET','/api/memory?tenant='+encodeURIComponent(TENANT));
+    const kb=d.kb.length?d.kb.map(k=>`<div class="flex items-center gap-2 text-sm py-1.5 border-b border-edge/40"><i data-lucide="file-text" class="text-slate-500"></i> ${esc(k.replace(/^kb\//,''))}</div>`).join('')
+      :'<div class="text-slate-500 text-sm py-4">No KB docs yet. Add markdown under <span class="font-mono">vault/kb/</span>.</div>';
+    const mem=TENANT==='*'
+      ? `<div class="text-slate-400 text-sm">Pick a client in the top-right selector to view its memory. Memory is per-client.</div>`
+      : (d.memory.trim()
+          ? `<pre class="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed font-sans">${esc(d.memory)}</pre>`
+          : `<div class="text-slate-500 text-sm">No memory saved for <span class="text-slate-300">${esc(TENANT)}</span> yet — the AI writes notes here as it learns about this client.</div>`);
+    const chips=d.clients.length?`<div class="text-[11px] text-slate-500 mt-4 mb-1">Client notebooks:</div><div class="flex flex-wrap gap-2">${d.clients.map(c=>`<button class="memcli pill bg-white/5 hover:bg-white/10 border border-edge text-slate-300" data-c="${esc(c)}">${esc(c)}</button>`).join('')}</div>`:'';
+    $('#view').innerHTML=`<div class="grid gap-4 lg:grid-cols-3 max-w-5xl">
+      <div class="card p-5 lg:col-span-2"><div class="flex items-center gap-2 mb-3 font-semibold"><i data-lucide="brain" class="text-accent"></i> Memory — ${esc(TENANT)}</div>${mem}${chips}</div>
+      <div class="card p-5"><div class="flex items-center gap-2 mb-3 font-semibold"><i data-lucide="book-open" class="text-accent"></i> Knowledge base</div>${kb}</div></div>`;
+    document.querySelectorAll('.memcli').forEach(b=>b.onclick=()=>{TENANT=b.dataset.c;$('#tenant').value=TENANT;route('memory');});
+    icons();
+  },
+
+  async settings(){
+    const me=ME||await api('GET','/api/me');
+    let users='';
+    if(me.role==='admin'){
+      const u=await api('GET','/api/users');
+      users=`<div class="card p-5 max-w-3xl"><div class="flex items-center gap-2 mb-4 font-semibold"><i data-lucide="users" class="text-accent"></i> Users</div>
+        <div class="space-y-1 mb-4">${u.users.map(x=>`<div class="flex items-center gap-3 text-sm border-b border-edge/40 py-2">
+          <div class="h-7 w-7 rounded-full bg-edge grid place-items-center text-xs font-semibold">${esc(x.username[0].toUpperCase())}</div>
+          <div class="min-w-0"><div class="font-medium truncate">${esc(x.username)}</div><div class="text-[11px] text-slate-500 truncate">${esc(x.email||'no email')}</div></div>
+          <span class="pill ${x.role==='admin'?'bg-indigo-500/15 text-indigo-300':'bg-slate-600/30 text-slate-400'}">${esc(x.role)}</span>
+          <div class="ml-auto flex gap-1"><button class="uedit text-xs bg-white/5 hover:bg-white/10 border border-edge rounded px-2 py-1" data-u="${esc(x.username)}" data-role="${esc(x.role)}" data-email="${esc(x.email||'')}">Edit</button>
+          ${x.username!==me.username?`<button class="udel text-xs bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/20 rounded px-2 py-1" data-u="${esc(x.username)}">Delete</button>`:''}</div></div>`).join('')}</div>
+        <div class="border-t border-edge pt-4"><div class="text-sm font-medium mb-2">New user</div>
+          <div class="grid sm:grid-cols-2 gap-2">
+            <input id="nu-name" placeholder="username" class="bg-ink/80 border border-edge rounded-lg px-3 py-2 text-sm"/>
+            <input id="nu-email" placeholder="email (optional)" class="bg-ink/80 border border-edge rounded-lg px-3 py-2 text-sm"/>
+            <input id="nu-pass" type="password" placeholder="password (min 8)" class="bg-ink/80 border border-edge rounded-lg px-3 py-2 text-sm"/>
+            <select id="nu-role" class="bg-ink/80 border border-edge rounded-lg px-3 py-2 text-sm"><option value="user">user</option><option value="admin">admin</option></select></div>
+          <button id="nu-create" class="grad text-white rounded-lg px-4 py-2 text-sm font-semibold mt-2 inline-flex items-center gap-1"><i data-lucide="user-plus"></i> Create user</button></div></div>`;
+    } else users=`<div class="card p-5 max-w-3xl text-sm text-slate-400">Contact an admin to manage user accounts.</div>`;
+    $('#view').innerHTML=`<div class="space-y-4">
+      <div class="card p-5 max-w-3xl"><div class="flex items-center gap-2 mb-4 font-semibold"><i data-lucide="user-cog" class="text-accent"></i> My account</div>
+        <div class="text-sm text-slate-400 mb-4">Signed in as <span class="text-slate-200 font-medium">${esc(me.username)}</span> <span class="pill bg-indigo-500/15 text-indigo-300">${esc(me.role)}</span>${me.email?' · '+esc(me.email):''}</div>
+        <div class="text-sm font-medium mb-2">Change password</div>
+        <div class="grid sm:grid-cols-3 gap-2 max-w-xl">
+          <input id="cp-cur" type="password" placeholder="current" class="bg-ink/80 border border-edge rounded-lg px-3 py-2 text-sm"/>
+          <input id="cp-new" type="password" placeholder="new (min 8)" class="bg-ink/80 border border-edge rounded-lg px-3 py-2 text-sm"/>
+          <button id="cp-save" class="grad text-white rounded-lg px-3 py-2 text-sm font-semibold inline-flex items-center justify-center gap-1"><i data-lucide="key-round"></i> Update</button></div></div>
+      ${users}</div>`;
+    $('#cp-save').onclick=async()=>{const r=await api('POST','/api/me/password',{current:$('#cp-cur').value,new:$('#cp-new').value});
+      if(r.ok){toast('password updated');$('#cp-cur').value='';$('#cp-new').value='';}else toast(esc(r.error),false);};
+    if(me.role==='admin'){
+      $('#nu-create').onclick=async()=>{const r=await api('POST','/api/users',{username:$('#nu-name').value,email:$('#nu-email').value,password:$('#nu-pass').value,role:$('#nu-role').value});
+        r.ok?(toast('user created'),route('settings')):toast(esc(r.error),false);};
+      document.querySelectorAll('.udel').forEach(b=>b.onclick=async()=>{if(!confirm('Delete user '+b.dataset.u+'?'))return;
+        const r=await api('DELETE','/api/users/'+encodeURIComponent(b.dataset.u));r.ok?(toast('user deleted'),route('settings')):toast(esc(r.error),false);});
+      document.querySelectorAll('.uedit').forEach(b=>b.onclick=()=>editUser(b.dataset.u,b.dataset.role,b.dataset.email));
+    }
+    icons();
+  },
+
   async audit(){
     const {audit}=await api('GET','/api/audit?limit=100'+(TENANT!=='*'?'&tenant='+encodeURIComponent(TENANT):''));
     $('#view').innerHTML=`<div class="card overflow-hidden max-w-5xl">
@@ -312,6 +396,14 @@ const VIEWS={
   },
 };
 
+async function editUser(username, role, email){
+  const newRole=prompt(`Role for ${username} (admin or user):`, role); if(newRole===null) return;
+  const newEmail=prompt(`Email for ${username} (blank = none):`, email||''); if(newEmail===null) return;
+  const newPass=prompt(`New password for ${username} (blank = keep current):`, '');
+  const body={role:newRole.trim(), email:newEmail.trim()}; if(newPass) body.password=newPass;
+  const r=await api('POST','/api/users/'+encodeURIComponent(username), body);
+  r.ok?(toast('user updated'),route('settings')):toast(esc(r.error),false);
+}
 async function toggleCreds(integration, box){
   if(box.dataset.open==='1'){ box.innerHTML=''; box.dataset.open=''; return; }
   box.dataset.open='1';
@@ -349,7 +441,7 @@ function bubble(who,html){const id='m'+Math.random().toString(36).slice(2);const
     ${avatar}<div id="${id}" class="${mine?'bg-accent/15 border-accent/20':'card glass'} border rounded-2xl px-4 py-2.5 max-w-[80%] text-sm leading-relaxed">${html}</div></div>`);
   $('#msgs').scrollTop=1e9;icons();return id;}
 
-(async()=>{try{await api('GET','/api/me');showApp();route('overview');}catch(_){showLogin();}})();
+(async()=>{try{await loadMe();if(!ME)throw 0;showApp();route('overview');}catch(_){showLogin();}})();
 </script>
 </body>
 </html>

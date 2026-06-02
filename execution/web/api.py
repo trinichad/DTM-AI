@@ -46,9 +46,25 @@ class Api:
         # everything else requires a session (fail-closed)
         if not user:
             return Resp(401, {"error": "authentication required"})
+        role = self.auth.get_role(user)
+        if role is None:
+            return Resp(401, {"error": "user no longer exists"})  # deleted mid-session
 
         if method == "GET" and path == "/api/me":
-            return Resp(200, {"username": user})
+            me = self.auth.get_user(user) or {"username": user, "role": role, "email": ""}
+            return Resp(200, me)
+        if method == "POST" and path == "/api/me/password":
+            return self._change_own_password(user, body)
+        if method == "GET" and path == "/api/users":
+            return self._require_admin(role) or Resp(200, {"users": self.auth.list_users()})
+        if method == "POST" and path == "/api/users":
+            return self._require_admin(role) or self._create_user(body, user)
+        if method == "POST" and path.startswith("/api/users/"):
+            return self._require_admin(role) or self._update_user(path.split("/")[3], body, user)
+        if method == "DELETE" and path.startswith("/api/users/"):
+            return self._require_admin(role) or self._delete_user(path.split("/")[3], user)
+        if method == "GET" and path == "/api/memory":
+            return self._memory(query.get("tenant") or "*")
         if method == "GET" and path == "/api/tools":
             return Resp(200, {"tools": self._tools()})
         if method == "GET" and path == "/api/integrations":
@@ -95,9 +111,76 @@ class Api:
         return out
 
     def _integrations(self) -> list[dict]:
-        return [{"integration": s.integration, "label": s.label, "configured": s.configured,
-                 "missing": s.missing, "fingerprints": s.fingerprints}
-                for s in credentials.status()]
+        out = [{"integration": s.integration, "label": s.label, "kind": "api",
+                "configured": s.configured, "missing": s.missing, "fingerprints": s.fingerprints}
+               for s in credentials.status()]
+        # local (non-credential) integrations — Obsidian vault + Hermes Agent
+        from ..core.memory import VaultStore
+        from ..core.hermes_skills import HermesSkillsReader
+        v = VaultStore()
+        kb, mems = v.list_kb(), v.list_client_memories()
+        out.append({"integration": "obsidian", "label": "Obsidian Vault", "kind": "local",
+                    "configured": v.root.exists(),
+                    "detail": (f"{len(kb)} KB docs · {len(mems)} client notebooks" if v.root.exists()
+                               else "vault not created yet"),
+                    "path": str(v.root)})
+        h = HermesSkillsReader()
+        out.append({"integration": "hermes", "label": "Hermes Agent", "kind": "local",
+                    "configured": h.available,
+                    "detail": (f"{len(h.list_skills())} learned skills" if h.available
+                               else "not connected"),
+                    "path": str(h.root)})
+        return out
+
+    def _memory(self, tenant: str) -> Resp:
+        from ..core.memory import VaultStore
+        v = VaultStore()
+        text = "" if tenant in ("", "*") else v.read_memory(tenant)
+        return Resp(200, {"tenant": tenant, "memory": text, "kb": v.list_kb(),
+                          "clients": v.list_client_memories()})
+
+    # ── user accounts ───────────────────────────────────────────────────────
+    def _require_admin(self, role: str) -> Optional[Resp]:
+        return None if role == "admin" else Resp(403, {"error": "admin role required"})
+
+    def _change_own_password(self, user: str, body: dict) -> Resp:
+        if not self.auth.verify_login(user, body.get("current", "")):
+            return Resp(400, {"error": "current password is incorrect"})
+        newpw = body.get("new", "")
+        if len(newpw) < 8:
+            return Resp(400, {"error": "new password must be at least 8 characters"})
+        self.auth.set_password(user, newpw)
+        self.agent.audit.record(actor=user, tenant_id="*", action="password_change", tool=user)
+        return Resp(200, {"ok": True})
+
+    def _create_user(self, body: dict, actor: str) -> Resp:
+        try:
+            self.auth.create_user(body.get("username", ""), body.get("password", ""),
+                                  body.get("role", "user"), body.get("email", ""))
+        except ValueError as e:
+            return Resp(400, {"error": str(e)})
+        self.agent.audit.record(actor=actor, tenant_id="*", action="user_create",
+                                tool=body.get("username", ""), detail=f"role={body.get('role','user')}")
+        return Resp(200, {"ok": True, "users": self.auth.list_users()})
+
+    def _update_user(self, name: str, body: dict, actor: str) -> Resp:
+        try:
+            self.auth.update_user(name, password=body.get("password") or None,
+                                  role=body.get("role"), email=body.get("email"))
+        except ValueError as e:
+            return Resp(400, {"error": str(e)})
+        self.agent.audit.record(actor=actor, tenant_id="*", action="user_update", tool=name)
+        return Resp(200, {"ok": True, "users": self.auth.list_users()})
+
+    def _delete_user(self, name: str, actor: str) -> Resp:
+        if name == actor:
+            return Resp(400, {"error": "you cannot delete your own account"})
+        try:
+            self.auth.delete_user(name)
+        except ValueError as e:
+            return Resp(400, {"error": str(e)})
+        self.agent.audit.record(actor=actor, tenant_id="*", action="user_delete", tool=name)
+        return Resp(200, {"ok": True, "users": self.auth.list_users()})
 
     def _probe(self, integration: Optional[str]) -> dict:
         from ..clients import probe

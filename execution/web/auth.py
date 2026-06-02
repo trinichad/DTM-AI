@@ -85,9 +85,11 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     username TEXT PRIMARY KEY,
     pw_hash  TEXT NOT NULL,
-    role     TEXT NOT NULL DEFAULT 'admin'
+    role     TEXT NOT NULL DEFAULT 'admin',
+    email    TEXT NOT NULL DEFAULT ''
 );
 """
+ROLES = ("admin", "user")
 
 
 class AuthStore:
@@ -95,6 +97,10 @@ class AuthStore:
         self._conn = sqlite3.connect(str(db_path or _DEFAULT_DB), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
+        # migrate older dbs that predate the email column
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(users)")}
+        if "email" not in cols:
+            self._conn.execute("ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''")
         self._conn.commit()
 
     def ensure_admin(self, password: Optional[str]) -> Optional[str]:
@@ -124,6 +130,61 @@ class AuthStore:
     def set_password(self, username: str, password: str) -> None:
         self._conn.execute("UPDATE users SET pw_hash=? WHERE username=?",
                            (hash_password(password), username))
+        self._conn.commit()
+
+    # ── user CRUD (admin) + self-service ────────────────────────────────────
+    def get_role(self, username: str) -> Optional[str]:
+        row = self._conn.execute("SELECT role FROM users WHERE username=?", (username,)).fetchone()
+        return row["role"] if row else None
+
+    def get_user(self, username: str) -> Optional[dict]:
+        row = self._conn.execute("SELECT username, role, email FROM users WHERE username=?",
+                                 (username,)).fetchone()
+        return dict(row) if row else None
+
+    def list_users(self) -> list[dict]:
+        return [dict(r) for r in self._conn.execute(
+            "SELECT username, role, email FROM users ORDER BY username")]
+
+    def count_admins(self) -> int:
+        return self._conn.execute("SELECT COUNT(*) c FROM users WHERE role='admin'").fetchone()["c"]
+
+    def create_user(self, username: str, password: str, role: str = "user", email: str = "") -> None:
+        username = (username or "").strip()
+        if not username or not password:
+            raise ValueError("username and password are required")
+        if role not in ROLES:
+            raise ValueError(f"role must be one of {ROLES}")
+        if self.get_user(username):
+            raise ValueError(f"user '{username}' already exists")
+        self._conn.execute("INSERT INTO users(username, pw_hash, role, email) VALUES(?,?,?,?)",
+                           (username, hash_password(password), role, email or ""))
+        self._conn.commit()
+
+    def update_user(self, username: str, *, password: Optional[str] = None,
+                    role: Optional[str] = None, email: Optional[str] = None) -> None:
+        if not self.get_user(username):
+            raise ValueError(f"user '{username}' not found")
+        if role is not None:
+            if role not in ROLES:
+                raise ValueError(f"role must be one of {ROLES}")
+            # don't allow demoting the last admin
+            if role != "admin" and self.get_role(username) == "admin" and self.count_admins() <= 1:
+                raise ValueError("cannot demote the last admin")
+            self._conn.execute("UPDATE users SET role=? WHERE username=?", (role, username))
+        if password:
+            self._conn.execute("UPDATE users SET pw_hash=? WHERE username=?",
+                               (hash_password(password), username))
+        if email is not None:
+            self._conn.execute("UPDATE users SET email=? WHERE username=?", (email, username))
+        self._conn.commit()
+
+    def delete_user(self, username: str) -> None:
+        if not self.get_user(username):
+            raise ValueError(f"user '{username}' not found")
+        if self.get_role(username) == "admin" and self.count_admins() <= 1:
+            raise ValueError("cannot delete the last admin")
+        self._conn.execute("DELETE FROM users WHERE username=?", (username,))
         self._conn.commit()
 
     def close(self) -> None:
