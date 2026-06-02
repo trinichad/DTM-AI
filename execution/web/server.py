@@ -115,7 +115,12 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="DTM AI dashboard + API server")
     p.add_argument("--port", type=int, default=8088)
     p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--hermes-skills-dir", default=None,
+                   help="override where Hermes learned skills are read from (default ~/.hermes/skills)")
     args = p.parse_args(argv)
+    if args.hermes_skills_dir:
+        import os
+        os.environ["DTM_HERMES_SKILLS_DIR"] = args.hermes_skills_dir
     srv = create_server(args.port, args.host)
     print(f"DTM AI listening on http://{args.host}:{args.port}  (Ctrl-C to stop)")
     try:

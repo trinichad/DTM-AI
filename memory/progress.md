@@ -126,6 +126,18 @@ Built + verified the security-critical core, stdlib-only (runs with NO Postgres/
 - **Tests: 88/88** (added test_secrets: 0600, allowlist, clear, world-readable refusal, set roundtrip
   fingerprint-only, foreign-key/unknown-integration rejection, partial→complete).
 
+### Skills page — view Hermes' learned skills  ✅ (2026-06-01)
+- `core/hermes_skills.py` (HermesSkillsReader): walks `~/.hermes/skills/` (or DTM_HERMES_SKILLS_DIR),
+  parses each `SKILL.md` frontmatter (name/description/category), tolerant of missing dir. Read-only.
+- API `GET /api/skills` → {available, dir, skills}. Server flag `--hermes-skills-dir`.
+- Dashboard: new **Skills** nav item + view — grouped by category, skill cards; clean empty state
+  ("No learned skills yet…") + setup pointer until Hermes runs. Distinction made explicit in UI:
+  Capabilities = primitives the AI MAY use; Skills = what Hermes has LEARNED (compositions).
+- `examples/hermes-skills/` (3 sample SKILL.md) + dev preview points there via launch.json so the page
+  renders populated; real server uses ~/.hermes/skills.
+- **Tests: 92/92** (added test_hermes_skills: missing-dir clean, parse w/ category, frontmatterless
+  fallback, example dir loads). Verified populated view via preview screenshot.
+
 ### Next
 - Approval workflow (one-shot args-bound tokens) → safely open WRITE primitives in the Console.
 - Deploy cutover (on owner's "deploy" go — D-14). Then `deploy/hermes/SETUP_HERMES.md` to stand up Hermes.

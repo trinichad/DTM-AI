@@ -61,6 +61,8 @@ class Api:
             return self._set_credentials(path.split("/")[3], body, user)
         if method == "GET" and path == "/api/capabilities":
             return Resp(200, {"capabilities": self._tools()})  # tools carry their policy
+        if method == "GET" and path == "/api/skills":
+            return Resp(200, self._skills())
         if method == "POST" and path.startswith("/api/capabilities/"):
             return self._set_capability(path.rsplit("/", 1)[-1], body)
         if method == "GET" and path == "/api/audit":
@@ -101,6 +103,12 @@ class Api:
         from ..clients import probe
         targets = [integration] if integration else ["kaseya", "cylance", "huntress"]
         return {t: probe(t) for t in targets}
+
+    def _skills(self) -> dict:
+        """Hermes' learned skills (read-only). Empty + available=false until Hermes runs."""
+        from ..core.hermes_skills import HermesSkillsReader
+        r = HermesSkillsReader()
+        return {"available": r.available, "dir": str(r.root), "skills": r.list_skills()}
 
     def _integration_fields(self, name: str) -> Resp:
         """The credential fields for an integration (which are set, fingerprints) — never raw."""

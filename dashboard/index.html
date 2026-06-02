@@ -109,10 +109,10 @@ const $ = s => document.querySelector(s);
 let TENANT='*', current='overview';
 const NAV=[['overview','Overview','layout-dashboard'],['chat','Chat','message-square'],
   ['integrations','Integrations','plug-zap'],['capabilities','Capabilities','sliders-horizontal'],
-  ['audit','Audit','scroll-text']];
+  ['skills','Skills','graduation-cap'],['audit','Audit','scroll-text']];
 const SUB={overview:'Live health across your clients',chat:'Ask about a client — read-only',
-  integrations:'Connection status & credentials',capabilities:'Open capabilities as you build trust',
-  audit:'Every action, logged'};
+  integrations:'Connection status & credentials',capabilities:'Primitives the AI may use',
+  skills:'What Hermes has learned',audit:'Every action, logged'};
 
 function icons(){ if(window.lucide) lucide.createIcons(); }
 async function api(m,p,b){const r=await fetch(p,{method:m,credentials:'same-origin',
@@ -268,6 +268,29 @@ const VIEWS={
       sw.classList.toggle('on',val);
       await api('POST','/api/capabilities/'+encodeURIComponent(name),{[field]:val});
       toast(`${name}: ${field.replace('_',' ')} ${val?'on':'off'}`);});
+    icons();
+  },
+
+  async skills(){
+    const d=await api('GET','/api/skills');
+    if(!d.available){
+      $('#view').innerHTML=`<div class="card glass p-10 max-w-2xl mx-auto text-center animate-fadeup">
+        <div class="h-14 w-14 rounded-2xl grad grid place-items-center mx-auto mb-4 shadow-lg shadow-indigo-500/30"><i data-lucide="graduation-cap" class="text-white text-2xl"></i></div>
+        <div class="font-semibold text-lg">No learned skills yet</div>
+        <div class="text-sm text-slate-400 mt-2 max-w-md mx-auto">Hermes saves reusable skills here as it works — compositions of your guarded capabilities. Connect Hermes on the server and they'll appear automatically.</div>
+        <div class="text-[11px] text-slate-600 mt-4 font-mono">reading: ${esc(d.dir)}</div>
+        <div class="text-xs text-slate-500 mt-3">Setup: <span class="font-mono">deploy/hermes/SETUP_HERMES.md</span></div></div>`;icons();return;}
+    if(!d.skills.length){
+      $('#view').innerHTML=`<div class="card p-8 text-center text-slate-400 max-w-2xl mx-auto">Hermes is connected, but hasn't saved any skills yet.<div class="text-[11px] text-slate-600 mt-2 font-mono">${esc(d.dir)}</div></div>`;return;}
+    const cats={}; d.skills.forEach(s=>{(cats[s.category]=cats[s.category]||[]).push(s);});
+    $('#view').innerHTML=`<div class="flex items-center gap-2 text-sm text-slate-400 mb-4 max-w-5xl">
+        <i data-lucide="sparkles" class="text-accent"></i> ${d.skills.length} learned skill${d.skills.length>1?'s':''} across ${Object.keys(cats).length} categor${Object.keys(cats).length>1?'ies':'y'} — compositions of your guarded primitives.</div>`+
+      Object.entries(cats).map(([cat,list])=>`<div class="max-w-5xl mb-5">
+        <div class="text-[11px] uppercase tracking-wide text-slate-500 mb-2 flex items-center gap-1.5"><i data-lucide="folder"></i> ${esc(cat)}</div>
+        <div class="grid gap-3 md:grid-cols-2">${list.map(s=>`<div class="card card-hover p-4">
+          <div class="flex items-center gap-2"><i data-lucide="wand-sparkles" class="text-accent2"></i><span class="font-medium">${esc(s.name)}</span></div>
+          <div class="text-xs text-slate-400 mt-1.5 leading-relaxed">${esc(s.description)||'<span class="text-slate-600">no description</span>'}</div>
+          <div class="text-[10px] text-slate-600 mt-2 font-mono">${esc(s.path)}</div></div>`).join('')}</div></div>`).join('');
     icons();
   },
 
