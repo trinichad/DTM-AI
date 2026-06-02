@@ -37,7 +37,8 @@ stubs, wired in Phase 3 as creds become available (M365/Entra next).
 - [ ] **MCP server** exposing the registry, so Hermes / any MCP brain uses our guarded tools (D-12)
 - [ ] **Hermes Agent integration** (fenced): wire Hermes as brain via MCP; surface its native toolsets
       in the Capability Console (start off). (D-12)
-- [ ] **Memory + Obsidian**: fresh vault; read-only `kb_search`; per-tenant `memory.md`; FTS5 recall (D-13)
+- [x] **Memory + Obsidian** (D-13): VaultStore + `kb_search` (read), `memory_read` (read),
+      `memory_note` (internal write, seeded-allowed/toggleable); path-safe; SOP `architecture/memory-vault.md`.
 - [ ] Capability Console UI (the dashboard surface for enable/allow_write/require_approval + autonomy ramp)
 - [ ] Report-generation framework (normalized snapshot → client-ready report)
 - [ ] **Sandboxed coding agent** + `skills_candidate/` staging + promotion gate (lint/test/scan/merge)

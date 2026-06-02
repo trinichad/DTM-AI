@@ -37,6 +37,13 @@ def build_agent(cfg: Optional[Config] = None, db_path: Optional[Path] = None) ->
     # Read-only by DEFAULT (no capability rows -> allow_write False everywhere), but now
     # tunable per tool via the Capability Console as trust is earned. Safety floors live
     # in ConfigurableApprovalGate + dispatch + audit and cannot be toggled off.
+    # Seed internal-write policy: DTM AI's OWN tools (source=dtm_ai) that write only touch our
+    # vault/memory — not client systems — so they're allowed by default (still shown + toggleable
+    # in the Capability Console). Only seed when no policy row exists, so owner changes persist.
+    existing = caps.all()
+    for t in registry.all():
+        if t.source == "dtm_ai" and t.is_write and t.name not in existing:
+            caps.set(t.name, allow_write=True, require_approval=t.requires_approval)
     gate = ConfigurableApprovalGate(caps, registry)
     agent = Agent(registry, audit, router, gate=gate)
     agent.caps = caps                            # expose for the console/CLI

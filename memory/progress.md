@@ -59,10 +59,26 @@ Built + verified the security-critical core, stdlib-only (runs with NO Postgres/
   via preview (login, Capability Console, chat shell screenshots).
 - Dev: `.claude/launch.json` (preview server). Seed admin via DTM_ADMIN_PASSWORD or first-run prints one.
 
+### Phase 2 — Memory + Knowledge vault  ✅ (2026-06-01)
+- `execution/core/memory.py` (VaultStore): markdown vault (Obsidian-style), path `DTM_VAULT_PATH`.
+  `kb/` knowledge base + `clients/<tenant>/memory.md` per-client notebook. Path-traversal-safe.
+- Skills: `kb_search` (read, term-match + ranked snippets), `memory_read` (read), `memory_note`
+  (internal write). **Internal-write rule:** dtm_ai-source writes touch only our vault (not client
+  systems) → seeded `allow_write=True, require_approval=False` in build_agent, shown+toggleable in Console.
+- SOP: `architecture/memory-vault.md` (first A-layer SOP). `vault/` gitignored (client data).
+- **Tests: 71/71** (added test_memory: kb search/rank, memory roundtrip, wildcard refusal, path-safety,
+  skills via dispatch). Demoed: kb_search finds a SonicWall runbook; memory_note→memory_read persists.
+- 11 tools total now.
+
+### Deploy decision (D-14, DEFERRED — do NOT touch live repo/server until owner says "deploy")
+- Reuse `trinichad/KaseyaLink` repo, rename → DTM-AI (GitHub redirects so server's clone keeps pulling),
+  tag last old commit `v0-kaseya-link`. One-time server migration (entrypoint + .env key remap), then
+  `git pull && restart`. `gh` authed as trinichad. This is a Phase-T cutover, done on request only.
+
 ### Next
-- Wire Hermes Agent to the MCP server (on Ubuntu, with models); add Hermes native toolsets to the
-  Capability Console. Build Obsidian memory/KB (D-13). Real approval-token workflow (replace the
-  present-token placeholder in gates.py). Optional: upgrade dashboard to full shadcn/React later.
+- Wire Hermes Agent to the MCP server (on Ubuntu, with models) + add its toolsets to the Console.
+- Real approval-token workflow (replace present-token placeholder in gates.py).
+- Deploy cutover (on request). Optional: upgrade dashboard to shadcn/React later.
 - On the server: fill `.env` (Kaseya/Cylance/Huntress) → `python3 -m execution.cli probe` goes green.
 
 ### Errors / tests

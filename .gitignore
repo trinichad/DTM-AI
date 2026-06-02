@@ -20,6 +20,9 @@ dashboard/**/live-data.json
 .tmp/
 *.log
 
+# Vault — per-client memory + KB docs are client data; never commit
+vault/
+
 # Python
 __pycache__/
 *.pyc

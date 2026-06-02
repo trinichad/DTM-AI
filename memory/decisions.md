@@ -93,6 +93,18 @@ tool (the self-coding agent). It is distinct from D-11's runtime toggling of an 
 tool's capability. Both stay true: you can open an existing tool's writes from the console,
 but a brand-new tool still requires sandbox + human merge to exist at all.
 
+## Deployment (2026-06-01)
+
+**D-14 — Deploy via the existing `trinichad/KaseyaLink` GitHub repo, renamed to DTM-AI.**
+The server already pulls from `github.com/trinichad/KaseyaLink` (origin/main) for the old Kaseya AI
+app. Plan: rename that repo → DTM-AI (GitHub redirects the old URL, so the server's existing clone
+keeps pulling with no re-clone), push the DTM AI build onto main (old app files removed but preserved in
+history), tag the last old commit `v0-kaseya-link`. _One-time server migration required either way
+(new entrypoint `python3 -m execution.web`; `.env` key remap KASEYA_URL→KASEYA_BASE_URL,
+KASEYA_PASS→KASEYA_PASSWORD, add CYLANCE_*/HUNTRESS_*). After that, every update = `git pull && restart`._
+**This is a deliberate Phase-T cutover — NOT done yet.** Do NOT touch the live repo/server until the
+owner says "deploy". We keep building the clean code in the meantime. (locked; deferred)
+
 ## Resolved Blueprint questions (2026-06-01)
 - **North Star** — read-only conversational assistant for the team to check things across all clients
   (option 1a). Write actions deferred to Phase 5 behind approval gate. (locked)
