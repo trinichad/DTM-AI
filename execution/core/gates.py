@@ -1,9 +1,11 @@
 """Approval gates — the policy objects dispatch() consults for write/destructive tools.
 
-DenyAllApprovals       hard read-only (used by tests and as the ultra-safe default).
-ConfigurableApprovalGate  reads the Capability Console policy so the owner can open
-                       capabilities tool-by-tool, ramping toward autonomy — while the
-                       safety floors stay enforced here in code.
+DenyAllApprovals        hard read-only (tests / ultra-safe default).
+ConfigurableApprovalGate reads the Capability Console policy AND, in production, DEFERS every
+                        approval-needed write to the explicit human approval workflow (it never
+                        runs an approval-needed write inline). Trusted (require_approval=False,
+                        non-destructive) writes run immediately.
+AlwaysApprove           used by the API to EXECUTE an already-approved action exactly once.
 """
 from __future__ import annotations
 
@@ -14,9 +16,10 @@ from .registry import Registry
 
 
 class ConfigurableApprovalGate:
-    def __init__(self, caps: CapabilityStore, registry: Registry) -> None:
+    def __init__(self, caps: CapabilityStore, registry: Registry, approvals=None) -> None:
         self.caps = caps
         self.registry = registry
+        self.approvals = approvals   # ApprovalStore in production; None in unit tests
 
     def _policy(self, tool: str):
         info = self.registry.get(tool)
@@ -27,16 +30,33 @@ class ConfigurableApprovalGate:
         policy, _info = self._policy(tool)
         return policy.allow_write
 
-    def consume(self, token: Optional[str], tenant_id: str, tool: str, args: dict) -> bool:
+    def needs_approval(self, tenant_id: str, tool: str) -> bool:
+        """Destructive ALWAYS needs approval (floor); otherwise the policy decides."""
         policy, info = self._policy(tool)
-        # SAFETY FLOOR: destructive tools ALWAYS require an approval token, even if the
-        # owner set require_approval=False. Autonomy is allowed to ramp on writes, never
-        # on destructive actions, without an explicit per-action approval.
-        force_approval = bool(info and info.category == "destructive")
-        if policy.require_approval or force_approval:
-            # Phase-2 will mint real one-shot, args-bound tokens. For now a present token
-            # represents a human approval; absence blocks the action (fail-closed).
-            return bool(token)
-        # Owner has explicitly marked this (write, non-destructive) tool trusted for
-        # autonomous use — it runs without a per-action approval. Still audited.
+        return bool(info and info.category == "destructive") or policy.require_approval
+
+    def consume(self, token: Optional[str], tenant_id: str, tool: str, args: dict) -> bool:
+        """Return True iff the action may run RIGHT NOW.
+
+        - approval not needed (trusted, non-destructive)        -> run now
+        - approval needed + an ApprovalStore is wired (prod)    -> NEVER run inline; defer to the
+                                                                   human approval workflow
+        - approval needed + no store (tests)                    -> a present token counts as approval
+        """
+        if not self.needs_approval(tenant_id, tool):
+            return True
+        if self.approvals is not None:
+            return False
+        return bool(token)
+
+
+class AlwaysApprove:
+    """Run an already-approved action once (used only by the approval-execution path)."""
+    def write_allowed_for_tenant(self, tenant_id: str, tool: str) -> bool:
+        return True
+
+    def needs_approval(self, tenant_id: str, tool: str) -> bool:
+        return False
+
+    def consume(self, token: Optional[str], tenant_id: str, tool: str, args: dict) -> bool:
         return True

@@ -169,8 +169,24 @@ Built + verified the security-critical core, stdlib-only (runs with NO Postgres/
   removed obsolete test_router). Live-verified: no key→only local; add Claude key via form→3 Claude models
   appear in selector + AI-models section shows fingerprint.
 
+### Write-action approval workflow  ✅ (2026-06-02)
+- `core/approvals.py` (ApprovalStore): proposed-action records (tool+exact args+tenant+actor), status
+  pending|approved|rejected|executed|failed; one-shot via `claim_for_execution` (atomic pending→approved).
+- `core/gates.py`: ConfigurableApprovalGate gains `needs_approval` + DEFERS approval-needed writes to the
+  workflow in prod (never inline); `AlwaysApprove` gate executes an approved action once.
+- `core/dispatch.py`: when a write needs approval and an ApprovalStore is wired, it CREATES a pending
+  request and returns `{ok:false, status:"pending_approval", approval_id}` instead of executing.
+- runtime wires ApprovalStore into the gate + `agent.approvals`; agent/mcp_server pass it to dispatch.
+- API: `GET /api/approvals`, `POST /api/approvals/<id>/approve` (admin → executes args-bound via
+  AlwaysApprove → mark_result), `/reject`; `/api/me` returns `pending_approvals` count.
+- UI: **Approvals** nav item w/ pending badge; review cards (tool, args JSON, requester) + Approve &amp; run
+  / Reject (admin); empty state; recent-decisions list.
+- **Tests: 112/112** (added test_approvals: pending-not-executed, approve-executes-exact-args, reject,
+  one-shot 409, non-admin 403, trusted-skips). Live-verified full chain: pending→approve→vault written,
+  audit = approval_requested→tool_call→approval_executed, badge clears.
+
 ### Next
-- Approval workflow (one-shot args-bound tokens) → safely open WRITE primitives in the Console.
+- Build tab (gated self-development agent) — drafts tools in a sandbox, runs tests, human approves.
 - Deploy cutover (on owner's "deploy" go — D-14). Then `deploy/hermes/SETUP_HERMES.md` to stand up Hermes.
 - New vendors (M365/Google/Datto/…): add creds + a scoped connector each → unlimited learned reads on top.
 

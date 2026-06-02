@@ -39,6 +39,9 @@ class DenyAllApprovals:
     def write_allowed_for_tenant(self, tenant_id: str, tool: str) -> bool:
         return False
 
+    def needs_approval(self, tenant_id: str, tool: str) -> bool:
+        return True
+
     def consume(self, token: Optional[str], tenant_id: str, tool: str, args: dict) -> bool:
         return False
 
@@ -68,6 +71,7 @@ def dispatch(
     args: Optional[dict[str, Any]] = None,
     approval_token: Optional[str] = None,
     gate: Optional[ApprovalGate] = None,
+    approvals=None,
 ) -> dict[str, Any]:
     args = args or {}
     gate = gate or DenyAllApprovals()
@@ -95,17 +99,29 @@ def dispatch(
     except SchemaError as e:
         return deny(f"invalid arguments: {e}", category=tool.category)
 
-    # 4. CATEGORY enforcement — write/destructive gated by approval + tenant flag
+    # 4. CATEGORY enforcement — write/destructive gated by capability + approval workflow
     if tool.is_write:
         if not gate.write_allowed_for_tenant(ctx.tenant_id, name):
             return deny(
                 f"write tool '{name}' blocked: tenant '{ctx.tenant_id}' has no write flag",
                 category=tool.category,
             )
-        if tool.requires_approval and not gate.consume(approval_token, ctx.tenant_id, name, valid):
+        if not gate.consume(approval_token, ctx.tenant_id, name, valid):
+            needs = getattr(gate, "needs_approval", lambda t, n: True)(ctx.tenant_id, name)
+            if needs and approvals is not None:
+                # Don't execute — record a proposed action for explicit human review.
+                aid = approvals.create(actor=ctx.actor, tenant_id=ctx.tenant_id,
+                                       tool=name, category=tool.category, args=valid)
+                audit.record(actor=ctx.actor, tenant_id=ctx.tenant_id,
+                             action="approval_requested", tool=name, category=tool.category,
+                             args=valid, result_ok=False, detail=f"approval#{aid}")
+                env = _envelope(False, src, ctx.tenant_id,
+                                error="approval required — submitted for human review")
+                env["approval_id"] = aid
+                env["status"] = "pending_approval"
+                return env
             return deny(
-                f"write tool '{name}' blocked: missing/invalid approval token",
-                category=tool.category,
+                f"write tool '{name}' blocked: missing/invalid approval", category=tool.category,
             )
 
     # 5. run, tenant-scoped, catching everything (Rule: tools never raise to the loop)

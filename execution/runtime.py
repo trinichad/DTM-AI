@@ -9,6 +9,7 @@ from typing import Optional
 
 from .agent import Agent
 from .clients import ClientFactory
+from .core.approvals import ApprovalStore
 from .core.audit import AuditStore
 from .core.capabilities import CapabilityStore
 from .core.config import Config, get_config
@@ -33,6 +34,7 @@ def build_agent(cfg: Optional[Config] = None, db_path: Optional[Path] = None) ->
     registry = Registry()                       # discovers execution.skills
     audit = AuditStore(db_path)                  # sqlite dev / (porting target: postgres prod)
     caps = CapabilityStore(db_path)              # the Capability Console's policy store
+    approvals = ApprovalStore(db_path)           # write-action approval workflow
     router = ModelRouter(cfg)
     # Read-only by DEFAULT (no capability rows -> allow_write False everywhere), but now
     # tunable per tool via the Capability Console as trust is earned. Safety floors live
@@ -44,9 +46,10 @@ def build_agent(cfg: Optional[Config] = None, db_path: Optional[Path] = None) ->
     for t in registry.all():
         if t.source == "dtm_ai" and t.is_write and t.name not in existing:
             caps.set(t.name, allow_write=True, require_approval=t.requires_approval)
-    gate = ConfigurableApprovalGate(caps, registry)
+    gate = ConfigurableApprovalGate(caps, registry, approvals=approvals)
     agent = Agent(registry, audit, router, gate=gate)
     agent.caps = caps                            # expose for the console/CLI
+    agent.approvals = approvals                  # expose for the approval API + agent dispatch
     return agent
 
 

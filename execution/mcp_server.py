@@ -67,7 +67,8 @@ class DtmMcpServer:
         args.pop("_tenant", None)
         ctx = make_context(self.tenant_id, actor=self.actor)
         env = dispatch(registry=self.agent.registry, audit=self.agent.audit, ctx=ctx,
-                       name=name, args=args, approval_token=approval, gate=self.agent.gate)
+                       name=name, args=args, approval_token=approval, gate=self.agent.gate,
+                       approvals=getattr(self.agent, "approvals", None))
         return self._ok(mid, {
             "content": [{"type": "text", "text": json.dumps(env, default=str)}],
             "isError": not env["ok"],

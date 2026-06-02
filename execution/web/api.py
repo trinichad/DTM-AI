@@ -52,6 +52,7 @@ class Api:
 
         if method == "GET" and path == "/api/me":
             me = self.auth.get_user(user) or {"username": user, "role": role, "email": ""}
+            me["pending_approvals"] = self.agent.approvals.count_pending()
             return Resp(200, me)
         if method == "POST" and path == "/api/me/password":
             return self._change_own_password(user, body)
@@ -65,6 +66,13 @@ class Api:
             return self._require_admin(role) or self._delete_user(path.split("/")[3], user)
         if method == "GET" and path == "/api/memory":
             return self._memory(query.get("tenant") or "*")
+        if method == "GET" and path == "/api/approvals":
+            return Resp(200, {"approvals": self.agent.approvals.list(query.get("status") or None),
+                              "pending": self.agent.approvals.count_pending()})
+        if method == "POST" and path.startswith("/api/approvals/") and path.endswith("/approve"):
+            return self._require_admin(role) or self._approve(int(path.split("/")[3]), user)
+        if method == "POST" and path.startswith("/api/approvals/") and path.endswith("/reject"):
+            return self._require_admin(role) or self._reject(int(path.split("/")[3]), user)
         if method == "GET" and path == "/api/tools":
             return Resp(200, {"tools": self._tools()})
         if method == "GET" and path == "/api/models":
@@ -134,6 +142,34 @@ class Api:
                                else "not connected"),
                     "path": str(h.root)})
         return out
+
+    def _approve(self, approval_id: int, user: str) -> Resp:
+        """Approve a pending action and EXECUTE it exactly as proposed (args-bound), once."""
+        from ..core.gates import AlwaysApprove
+        from ..runtime import get_client_factory
+        row = self.agent.approvals.get(approval_id)
+        if not row:
+            return Resp(404, {"error": "approval not found"})
+        if row["status"] != "pending":
+            return Resp(409, {"error": f"already {row['status']}"})
+        if not self.agent.approvals.claim_for_execution(approval_id, by=user):
+            return Resp(409, {"error": "already decided"})
+        ctx = ToolContext(tenant_id=row["tenant_id"], actor=f"{user} (approval#{approval_id})",
+                          client_factory=get_client_factory())
+        env = dispatch(registry=self.agent.registry, audit=self.agent.audit, ctx=ctx,
+                       name=row["tool"], args=row["args"], gate=AlwaysApprove())
+        self.agent.approvals.mark_result(approval_id, bool(env["ok"]))
+        self.agent.audit.record(actor=user, tenant_id=row["tenant_id"], action="approval_executed",
+                                tool=row["tool"], category=row["category"], result_ok=bool(env["ok"]),
+                                detail=f"approval#{approval_id}")
+        return Resp(200, {"ok": True, "executed": env["ok"], "result": env})
+
+    def _reject(self, approval_id: int, user: str) -> Resp:
+        if not self.agent.approvals.reject(approval_id, by=user):
+            return Resp(409, {"error": "not pending"})
+        self.agent.audit.record(actor=user, tenant_id="*", action="approval_rejected",
+                                detail=f"approval#{approval_id}")
+        return Resp(200, {"ok": True})
 
     def _memory(self, tenant: str) -> Resp:
         from ..core.memory import VaultStore

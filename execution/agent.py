@@ -127,6 +127,7 @@ class Agent:
                 envelope = dispatch(
                     registry=self.registry, audit=self.audit, ctx=ctx,
                     name=name, args=call["arguments"], approval_token=approval_token, gate=self.gate,
+                    approvals=getattr(self, "approvals", None),
                 )
                 if envelope["ok"]:
                     citations.append(f"{name}@{ctx.tenant_id}")

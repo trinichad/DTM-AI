@@ -116,11 +116,12 @@ const $ = s => document.querySelector(s);
 let TENANT='*', current='overview';
 const NAV=[['overview','Overview','layout-dashboard'],['chat','Chat','message-square'],
   ['integrations','Integrations','plug-zap'],['capabilities','Capabilities','sliders-horizontal'],
-  ['skills','Skills','graduation-cap'],['memory','Memory','brain'],['audit','Audit','scroll-text']];
+  ['skills','Skills','graduation-cap'],['memory','Memory','brain'],
+  ['approvals','Approvals','shield-alert'],['audit','Audit','scroll-text']];
 const SUB={overview:'Live health across your clients',chat:'Ask about a client — read-only',
   integrations:'Connections, knowledge & credentials',capabilities:'Primitives the AI may use',
   skills:'What Hermes has learned',memory:'Knowledge base & per-client notes',
-  audit:'Every action, logged',settings:'Account & users'};
+  approvals:'Write actions awaiting your sign-off',audit:'Every action, logged',settings:'Account & users'};
 let ME=null, MODEL='';
 
 function icons(){ if(window.lucide) lucide.createIcons(); }
@@ -146,8 +147,9 @@ async function loadMe(){ try{ ME=await api('GET','/api/me'); renderUser(); }catc
 function renderUser(){ if(!ME)return; $('#userName').textContent=ME.username;
   $('#userRole').textContent=ME.role; $('#userAvatar').textContent=(ME.username||'?')[0].toUpperCase(); }
 
-function renderNav(){$('#nav').innerHTML=NAV.map(([id,label,ic])=>
-  `<a data-id="${id}" class="navi ${id===current?'active':''}"><i data-lucide="${ic}"></i><span>${label}</span></a>`).join('');
+function renderNav(){$('#nav').innerHTML=NAV.map(([id,label,ic])=>{
+  const badge=(id==='approvals'&&ME&&ME.pending_approvals)?`<span class="ml-auto pill bg-rose-500/20 text-rose-300">${ME.pending_approvals}</span>`:'';
+  return `<a data-id="${id}" class="navi ${id===current?'active':''}"><i data-lucide="${ic}"></i><span>${label}</span>${badge}</a>`;}).join('');
   document.querySelectorAll('[data-id]').forEach(a=>a.onclick=()=>route(a.dataset.id));icons();}
 function route(id){current=id;const n=NAV.find(x=>x[0]===id);
   $('#title').textContent=n?n[1]:(id.charAt(0).toUpperCase()+id.slice(1));
@@ -404,6 +406,42 @@ const VIEWS={
       document.querySelectorAll('.udel').forEach(b=>b.onclick=async()=>{if(!confirm('Delete user '+b.dataset.u+'?'))return;
         const r=await api('DELETE','/api/users/'+encodeURIComponent(b.dataset.u));r.ok?(toast('user deleted'),route('settings')):toast(esc(r.error),false);});
       document.querySelectorAll('.uedit').forEach(b=>b.onclick=()=>editUser(b.dataset.u,b.dataset.role,b.dataset.email));
+    }
+    icons();
+  },
+
+  async approvals(){
+    const d=await api('GET','/api/approvals');
+    const pending=d.approvals.filter(a=>a.status==='pending');
+    const admin=ME&&ME.role==='admin';
+    const card=a=>`<div class="card p-4">
+      <div class="flex items-center gap-2"><i data-lucide="alert-triangle" class="text-amber-400"></i>
+        <span class="font-medium">${esc(a.tool)}</span>${catChip(a.category)}
+        <span class="text-xs text-slate-500">client ${esc(a.tenant_id)}</span>
+        <span class="ml-auto text-[11px] text-slate-600">${esc((a.ts||'').slice(0,19).replace('T',' '))}</span></div>
+      <div class="text-xs text-slate-400 mt-2">requested by <span class="text-slate-300">${esc(a.actor)}</span></div>
+      <pre class="text-xs text-slate-300 bg-ink/60 border border-edge rounded-lg p-2 mt-2 whitespace-pre-wrap font-mono">${esc(JSON.stringify(a.args,null,2))}</pre>
+      ${admin?`<div class="flex gap-2 mt-3">
+        <button class="ap-approve grad text-white rounded-lg px-3 py-1.5 text-xs font-semibold inline-flex items-center gap-1" data-a="${a.id}"><i data-lucide="check"></i> Approve &amp; run</button>
+        <button class="ap-reject bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/20 rounded-lg px-3 py-1.5 text-xs" data-a="${a.id}">Reject</button></div>`
+        :`<div class="text-[11px] text-slate-500 mt-3">Only an admin can approve this action.</div>`}</div>`;
+    const empty=`<div class="card glass p-10 text-center max-w-2xl mx-auto">
+      <div class="h-12 w-12 rounded-2xl grad grid place-items-center mx-auto mb-3"><i data-lucide="shield-check" class="text-white text-xl"></i></div>
+      <div class="font-semibold">Nothing awaiting approval</div>
+      <div class="text-sm text-slate-400 mt-1 max-w-md mx-auto">DTM AI is read-only by default. When a write tool is enabled and the AI proposes an action, it lands here for your sign-off — nothing runs until you approve it.</div></div>`;
+    const recent=d.approvals.filter(a=>a.status!=='pending').slice(0,12);
+    const rec=recent.length?`<div class="text-[11px] uppercase tracking-wide text-slate-500 mt-5 mb-1">Recent decisions</div>`+
+      recent.map(a=>`<div class="flex items-center gap-2 text-sm border-b border-edge/40 py-2">
+        <i data-lucide="${a.status==='executed'?'check-circle-2':(a.status==='rejected'||a.status==='failed')?'x-circle':'circle'}" class="${a.status==='executed'?'text-emerald-400':(a.status==='rejected'||a.status==='failed')?'text-rose-400':'text-slate-500'}"></i>
+        <span>${esc(a.tool)}</span><span class="text-xs text-slate-500">${esc(a.tenant_id)}</span>
+        <span class="pill bg-white/5 text-slate-300">${esc(a.status)}</span>
+        <span class="ml-auto text-[11px] text-slate-600">${esc(a.decided_by||'')}</span></div>`).join(''):'';
+    $('#view').innerHTML=`<div class="max-w-3xl space-y-3">${pending.length?pending.map(card).join(''):empty}${rec}</div>`;
+    if(admin){
+      document.querySelectorAll('.ap-approve').forEach(b=>b.onclick=async()=>{const r=await api('POST','/api/approvals/'+b.dataset.a+'/approve');
+        r.ok?(toast(r.executed?'approved & executed':'approved — action failed',!!r.executed),await loadMe(),route('approvals')):toast(esc(r.error),false);});
+      document.querySelectorAll('.ap-reject').forEach(b=>b.onclick=async()=>{const r=await api('POST','/api/approvals/'+b.dataset.a+'/reject');
+        r.ok?(toast('rejected'),await loadMe(),route('approvals')):toast(esc(r.error),false);});
     }
     icons();
   },
