@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dtm-dashboard",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "execution.web", "--port", "8099"],
+      "port": 8099
+    }
+  ]
+}

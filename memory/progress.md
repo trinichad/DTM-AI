@@ -43,11 +43,27 @@ Built + verified the security-critical core, stdlib-only (runs with NO Postgres/
 - **Tests: 56/56 pass** (added test_clients incl. JWT vector, test_skills_integration w/ fake clients,
   test_mcp incl. tenant-can't-be-overridden).
 
+### Phase 3 — Push 3: dashboard + web API + Capability Console UI  ✅ (2026-06-01)
+- Stack decision (logged): web layer is **stdlib http.server + self-contained Tailwind dashboard**
+  (no FastAPI/React/build step) — runs identically dev + Ubuntu, zero new deps, hard to break on edit.
+- `execution/web/`: auth.py (stdlib PBKDF2 + HMAC-signed sessions w/ TTL + single-admin bootstrap),
+  api.py (pure testable router: login/logout, tools, integrations(+probe), capabilities GET/POST,
+  audit, chat — all /api gated by session, fail-closed), server.py (ThreadingHTTPServer, cookies,
+  serves SPA), __main__.py. Run: `python3 -m execution.web` → 127.0.0.1:8088.
+- `dashboard/index.html`: self-contained SPA (Tailwind CDN, dark Hermes-style): login, sidebar,
+  Chat (read-only badge, client selector, tool-event + citation chips), Integrations (status tiles +
+  Test-connection probe), **Capability Console** (per-tool enabled/allow_write/require_approval toggles
+  — the owner's throttle), Audit table.
+- **Tests: 64/64 pass** (added test_api: auth-required, login, capability-edit-persists, chat, session-
+  expiry). Live smoke-tested with curl (login→cookie→tools→caps edit→chat→integrations) AND visually
+  via preview (login, Capability Console, chat shell screenshots).
+- Dev: `.claude/launch.json` (preview server). Seed admin via DTM_ADMIN_PASSWORD or first-run prints one.
+
 ### Next
-- Wire Hermes Agent to the MCP server (on the Ubuntu box, with models); add Hermes native toolsets to
-  the Capability Console. Build Obsidian memory/KB (D-13). Build FastAPI app + dashboard + Capability
-  Console UI. Real approval-token workflow (replace the present-token placeholder in gates.py).
-- On the server: fill `.env` (Kaseya/Cylance/Huntress) → `python3 -m execution.cli probe` should go green.
+- Wire Hermes Agent to the MCP server (on Ubuntu, with models); add Hermes native toolsets to the
+  Capability Console. Build Obsidian memory/KB (D-13). Real approval-token workflow (replace the
+  present-token placeholder in gates.py). Optional: upgrade dashboard to full shadcn/React later.
+- On the server: fill `.env` (Kaseya/Cylance/Huntress) → `python3 -m execution.cli probe` goes green.
 
 ### Errors / tests
 - All green. ResourceWarning (unclosed sqlite) fixed by adding AuditStore.close().

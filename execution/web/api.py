@@ -1,0 +1,127 @@
+"""API router — pure, testable mapping of (method, path, body, user) -> Resp.
+
+Thin layer over the same runtime the CLI uses. The HTTP server (server.py) handles
+sockets/cookies and delegates here. Every /api route except login requires a valid
+session (fail-closed). All mutations are audited via dispatch()/the stores.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Optional
+
+from ..agent import Agent
+from ..core import credentials
+from ..core.context import ToolContext
+from ..core.dispatch import dispatch
+from ..runtime import get_client_factory
+from .auth import AuthStore, SessionSigner
+
+SESSION_COOKIE = "dtm_session"
+
+
+@dataclass
+class Resp:
+    status: int
+    payload: Any
+    set_cookie: Optional[str] = None
+    clear_cookie: bool = False
+
+
+class Api:
+    def __init__(self, agent: Agent, auth: AuthStore, signer: SessionSigner,
+                 *, session_ttl_min: int = 720) -> None:
+        self.agent = agent
+        self.auth = auth
+        self.signer = signer
+        self.ttl = session_ttl_min
+
+    def handle(self, method: str, path: str, query: dict, body: dict,
+               user: Optional[str]) -> Resp:
+        # public
+        if method == "POST" and path == "/api/login":
+            return self._login(body)
+        if method == "POST" and path == "/api/logout":
+            return Resp(200, {"ok": True}, clear_cookie=True)
+
+        # everything else requires a session (fail-closed)
+        if not user:
+            return Resp(401, {"error": "authentication required"})
+
+        if method == "GET" and path == "/api/me":
+            return Resp(200, {"username": user})
+        if method == "GET" and path == "/api/tools":
+            return Resp(200, {"tools": self._tools()})
+        if method == "GET" and path == "/api/integrations":
+            return Resp(200, {"integrations": self._integrations()})
+        if method == "GET" and path == "/api/integrations/probe":
+            return Resp(200, {"probes": self._probe(query.get("integration"))})
+        if method == "GET" and path == "/api/capabilities":
+            return Resp(200, {"capabilities": self._tools()})  # tools carry their policy
+        if method == "POST" and path.startswith("/api/capabilities/"):
+            return self._set_capability(path.rsplit("/", 1)[-1], body)
+        if method == "GET" and path == "/api/audit":
+            tenant = query.get("tenant") or None
+            limit = int(query.get("limit") or 50)
+            return Resp(200, {"audit": self.agent.audit.query(tenant_id=tenant, limit=limit)})
+        if method == "POST" and path == "/api/chat":
+            return self._chat(body, user)
+
+        return Resp(404, {"error": f"no route {method} {path}"})
+
+    # ── handlers ──
+    def _login(self, body: dict) -> Resp:
+        role = self.auth.verify_login(body.get("username", ""), body.get("password", ""))
+        if not role:
+            return Resp(401, {"error": "invalid credentials"})
+        token = self.signer.make(body["username"], self.ttl)
+        return Resp(200, {"ok": True, "role": role}, set_cookie=token)
+
+    def _tools(self) -> list[dict]:
+        out = []
+        for t in self.agent.registry.all():
+            pol = self.agent.caps.get(t.name, default_enabled=t.enabled_by_default)
+            out.append({
+                "name": t.name, "description": t.description, "source": t.source,
+                "category": t.category, "risk": t.risk_level,
+                "enabled": self.agent.audit.is_enabled(t.name, t.enabled_by_default),
+                "allow_write": pol.allow_write, "require_approval": pol.require_approval,
+            })
+        return out
+
+    def _integrations(self) -> list[dict]:
+        return [{"integration": s.integration, "label": s.label, "configured": s.configured,
+                 "missing": s.missing, "fingerprints": s.fingerprints}
+                for s in credentials.status()]
+
+    def _probe(self, integration: Optional[str]) -> dict:
+        from ..clients import probe
+        targets = [integration] if integration else ["kaseya", "cylance", "huntress"]
+        return {t: probe(t) for t in targets}
+
+    def _set_capability(self, name: str, body: dict) -> Resp:
+        if self.agent.registry.get(name) is None:
+            return Resp(404, {"error": f"unknown tool '{name}'"})
+        if "enabled" in body:
+            self.agent.audit.set_enabled(name, bool(body["enabled"]))
+        kw = {k: bool(body[k]) for k in ("allow_write", "require_approval") if k in body}
+        pol = self.agent.caps.set(name, **kw) if kw else \
+            self.agent.caps.get(name, default_enabled=True)
+        return Resp(200, {"name": name,
+                          "enabled": self.agent.audit.is_enabled(name, True),
+                          "allow_write": pol.allow_write,
+                          "require_approval": pol.require_approval})
+
+    def _chat(self, body: dict, user: str) -> Resp:
+        message = (body.get("message") or "").strip()
+        if not message:
+            return Resp(400, {"error": "message is required"})
+        tenant = body.get("tenant") or "*"
+        ctx = ToolContext(tenant_id=tenant, actor=user,
+                          allow_cloud=bool(body.get("allow_cloud")),
+                          client_factory=get_client_factory())
+        turn = self.agent.chat(ctx, message)
+        return Resp(200, {
+            "answer": turn.answer, "citations": turn.citations,
+            "tool_events": turn.tool_events, "provider": turn.provider,
+            "model": turn.model, "rounds": turn.rounds, "tenant": tenant,
+        })

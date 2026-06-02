@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DTM AI — MSP Operations</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { darkMode: 'class', theme: { extend: { colors: {
+      ink: '#0b0f17', panel: '#111725', edge: '#1e2636', accent: '#6366f1' } } } };
+  </script>
+  <style>
+    body { background:#0b0f17; }
+    ::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:#283143;border-radius:8px}
+    .pill{font-size:11px;padding:2px 8px;border-radius:9999px;font-weight:600}
+  </style>
+</head>
+<body class="text-slate-200 antialiased">
+
+<!-- LOGIN -->
+<div id="login" class="hidden fixed inset-0 z-50 grid place-items-center bg-ink">
+  <form id="loginForm" class="w-80 bg-panel border border-edge rounded-2xl p-7 space-y-4">
+    <div class="flex items-center gap-2">
+      <div class="h-9 w-9 rounded-xl bg-accent grid place-items-center font-bold text-white">D</div>
+      <div><div class="font-semibold text-lg leading-none">DTM AI</div>
+        <div class="text-xs text-slate-400">MSP Operations</div></div>
+    </div>
+    <input id="u" placeholder="username" autocomplete="username"
+      class="w-full bg-ink border border-edge rounded-lg px-3 py-2 text-sm" value="admin"/>
+    <input id="p" type="password" placeholder="password" autocomplete="current-password"
+      class="w-full bg-ink border border-edge rounded-lg px-3 py-2 text-sm"/>
+    <button class="w-full bg-accent hover:bg-indigo-500 text-white rounded-lg py-2 text-sm font-semibold">Sign in</button>
+    <div id="loginErr" class="text-rose-400 text-xs h-4"></div>
+  </form>
+</div>
+
+<!-- APP -->
+<div id="app" class="hidden min-h-screen flex">
+  <!-- sidebar -->
+  <aside class="w-56 shrink-0 border-r border-edge bg-panel/60 flex flex-col">
+    <div class="px-5 py-4 flex items-center gap-2 border-b border-edge">
+      <div class="h-8 w-8 rounded-lg bg-accent grid place-items-center font-bold text-white">D</div>
+      <div class="font-semibold">DTM AI</div>
+    </div>
+    <nav id="nav" class="flex-1 p-3 space-y-1 text-sm"></nav>
+    <div class="p-3 border-t border-edge text-xs text-slate-400">
+      <button id="logout" class="hover:text-slate-200">Sign out</button>
+    </div>
+  </aside>
+
+  <!-- main -->
+  <main class="flex-1 flex flex-col min-w-0">
+    <header class="h-14 border-b border-edge flex items-center gap-3 px-5 bg-panel/40 sticky top-0 z-10">
+      <div id="title" class="font-semibold">Chat</div>
+      <span class="pill bg-emerald-500/15 text-emerald-300">READ-ONLY</span>
+      <div class="ml-auto flex items-center gap-2 text-sm">
+        <span class="text-slate-400">Client</span>
+        <input id="tenant" value="*" class="w-28 bg-ink border border-edge rounded-lg px-2 py-1 text-sm"/>
+      </div>
+    </header>
+    <section id="view" class="flex-1 overflow-auto p-5"></section>
+  </main>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let TENANT = '*';
+const NAV = [['chat','Chat'],['integrations','Integrations'],['capabilities','Capabilities'],['audit','Audit']];
+
+async function api(method, path, body){
+  const r = await fetch(path, {method, credentials:'same-origin',
+    headers:{'Content-Type':'application/json'}, body: body?JSON.stringify(body):undefined});
+  if(r.status===401){ showLogin(); throw new Error('auth'); }
+  return r.json();
+}
+function showLogin(){ $('#login').classList.remove('hidden'); $('#app').classList.add('hidden'); }
+function showApp(){ $('#login').classList.add('hidden'); $('#app').classList.remove('hidden'); }
+
+$('#loginForm').onsubmit = async e => {
+  e.preventDefault();
+  const res = await api('POST','/api/login',{username:$('#u').value,password:$('#p').value});
+  if(res.ok){ showApp(); route('chat'); } else { $('#loginErr').textContent = res.error||'login failed'; }
+};
+$('#logout').onclick = async ()=>{ await api('POST','/api/logout'); showLogin(); };
+$('#tenant').onchange = e => { TENANT = e.target.value.trim()||'*'; route(current); };
+
+function renderNav(){
+  $('#nav').innerHTML = NAV.map(([id,label])=>
+    `<a data-id="${id}" class="navlink block px-3 py-2 rounded-lg cursor-pointer hover:bg-edge ${id===current?'bg-edge text-white':'text-slate-300'}">${label}</a>`).join('');
+  document.querySelectorAll('.navlink').forEach(a=>a.onclick=()=>route(a.dataset.id));
+}
+let current='chat';
+function route(id){ current=id; $('#title').textContent = NAV.find(n=>n[0]===id)[1]; renderNav(); VIEWS[id](); }
+
+const esc = s => String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const card = inner => `<div class="bg-panel border border-edge rounded-xl p-4">${inner}</div>`;
+function catPill(c){ const m={read:'bg-sky-500/15 text-sky-300',alert:'bg-amber-500/15 text-amber-300',
+  write:'bg-orange-500/15 text-orange-300',destructive:'bg-rose-500/15 text-rose-300'};
+  return `<span class="pill ${m[c]||'bg-slate-600/30 text-slate-300'}">${c}</span>`; }
+
+const VIEWS = {
+  // ── CHAT ──
+  async chat(){
+    $('#view').innerHTML = `
+      <div class="max-w-3xl mx-auto flex flex-col h-full">
+        <div id="msgs" class="flex-1 space-y-3 mb-3"></div>
+        <form id="chatForm" class="flex gap-2">
+          <input id="msg" placeholder="Ask about ${esc(TENANT)} … e.g. how many assets does this client have?"
+            class="flex-1 bg-ink border border-edge rounded-xl px-4 py-3 text-sm"/>
+          <button class="bg-accent hover:bg-indigo-500 text-white rounded-xl px-5 text-sm font-semibold">Ask</button>
+        </form>
+        <div class="text-xs text-slate-500 mt-2">DTM AI is analysing only — it never changes client systems in this mode.</div>
+      </div>`;
+    $('#chatForm').onsubmit = async e => {
+      e.preventDefault();
+      const m = $('#msg').value.trim(); if(!m) return; $('#msg').value='';
+      add('you', esc(m));
+      const tid = add('ai','<span class="text-slate-400">thinking…</span>');
+      try{
+        const r = await api('POST','/api/chat',{tenant:TENANT, message:m});
+        let html = esc(r.answer);
+        if(r.tool_events?.length){
+          html += `<div class="mt-2 flex flex-wrap gap-1">`+
+            r.tool_events.map(t=>`<span class="pill ${t.ok?'bg-emerald-500/15 text-emerald-300':'bg-rose-500/15 text-rose-300'}">${t.ok?'✓':'✗'} ${esc(t.name)}</span>`).join('')+`</div>`;
+        }
+        if(r.citations?.length) html += `<div class="text-xs text-slate-500 mt-1">sources: ${r.citations.map(esc).join(', ')}</div>`;
+        html += `<div class="text-xs text-slate-600 mt-1">${esc(r.provider)}/${esc(r.model)} · ${r.rounds} round(s)</div>`;
+        document.getElementById(tid).innerHTML = html;
+      }catch(_){ document.getElementById(tid).innerHTML = '<span class="text-rose-400">error</span>'; }
+    };
+  },
+  // ── INTEGRATIONS ──
+  async integrations(){
+    const {integrations} = await api('GET','/api/integrations');
+    $('#view').innerHTML = `<div class="grid gap-3 md:grid-cols-3 max-w-4xl">`+
+      integrations.map(i=>card(`
+        <div class="flex items-center justify-between">
+          <div class="font-semibold">${esc(i.label)}</div>
+          <span class="pill ${i.configured?'bg-emerald-500/15 text-emerald-300':'bg-slate-600/30 text-slate-400'}">${i.configured?'configured':'not set'}</span>
+        </div>
+        <div class="text-xs text-slate-500 mt-2">${i.configured?Object.entries(i.fingerprints).map(([k,v])=>`${esc(k)}: <code>${esc(v)}</code>`).join('<br>'):'missing: '+i.missing.map(esc).join(', ')}</div>
+        <button data-int="${esc(i.integration)}" class="probe mt-3 text-xs bg-edge hover:bg-slate-700 rounded-lg px-3 py-1">Test connection</button>
+        <div class="probe-res text-xs mt-2"></div>`)).join('')+`</div>`;
+    document.querySelectorAll('.probe').forEach(b=>b.onclick=async()=>{
+      const res=b.parentElement.querySelector('.probe-res'); res.textContent='probing…';
+      const {probes}=await api('GET','/api/integrations/probe?integration='+b.dataset.int);
+      const p=probes[b.dataset.int];
+      res.innerHTML=`<span class="${p.ok?'text-emerald-300':'text-rose-400'}">${p.ok?'✓ ok':'✗ '+esc(p.detail)}</span> <span class="text-slate-600">${p.latency_ms}ms</span>`;
+    });
+  },
+  // ── CAPABILITIES (the enable/disable area) ──
+  async capabilities(){
+    const {capabilities} = await api('GET','/api/capabilities');
+    $('#view').innerHTML = `
+      <div class="max-w-4xl">
+        <div class="text-sm text-slate-400 mb-3">Open capabilities tool-by-tool as you build trust. Read-only by default. Destructive tools always require per-action approval — that floor can't be turned off.</div>
+        <div class="bg-panel border border-edge rounded-xl overflow-hidden">
+          <table class="w-full text-sm">
+            <thead class="text-xs text-slate-400 border-b border-edge">
+              <tr><th class="text-left p-3">Tool</th><th class="p-3">Type</th><th class="p-3">Enabled</th><th class="p-3">Allow write</th><th class="p-3">Require approval</th></tr>
+            </thead><tbody>`+
+        capabilities.map(t=>`<tr class="border-b border-edge/50">
+              <td class="p-3"><div class="font-medium">${esc(t.name)}</div><div class="text-xs text-slate-500">${esc(t.source)} · risk ${esc(t.risk)}</div></td>
+              <td class="p-3 text-center">${catPill(t.category)}</td>
+              ${tog(t.name,'enabled',t.enabled)}
+              ${tog(t.name,'allow_write',t.allow_write, t.category==='read'||t.category==='alert')}
+              ${tog(t.name,'require_approval',t.require_approval, t.category==='destructive')}
+            </tr>`).join('')+`</tbody></table></div></div>`;
+    document.querySelectorAll('.tog').forEach(el=>el.onchange=async()=>{
+      const {name,field}=el.dataset;
+      await api('POST','/api/capabilities/'+encodeURIComponent(name),{[field]:el.checked});
+      VIEWS.capabilities();
+    });
+  },
+  // ── AUDIT ──
+  async audit(){
+    const {audit} = await api('GET','/api/audit?limit=80'+(TENANT!=='*'?'&tenant='+encodeURIComponent(TENANT):''));
+    $('#view').innerHTML = card(`<table class="w-full text-xs"><thead class="text-slate-400 border-b border-edge">
+      <tr><th class="text-left p-2">time</th><th class="text-left p-2">actor</th><th class="text-left p-2">client</th><th class="text-left p-2">action</th><th class="text-left p-2">tool</th><th class="p-2">ok</th></tr></thead><tbody>`+
+      audit.map(a=>`<tr class="border-b border-edge/40"><td class="p-2 text-slate-500">${esc((a.ts||'').slice(0,19))}</td>
+        <td class="p-2">${esc(a.actor)}</td><td class="p-2">${esc(a.tenant_id)}</td>
+        <td class="p-2">${esc(a.action)}</td><td class="p-2">${esc(a.tool||'')}</td>
+        <td class="p-2 text-center">${a.result_ok==null?'·':(a.result_ok?'<span class="text-emerald-300">✓</span>':'<span class="text-rose-400">✗</span>')}</td></tr>`).join('')+
+      `</tbody></table>`);
+  },
+};
+
+function tog(name, field, val, disabled){
+  return `<td class="p-3 text-center"><input type="checkbox" class="tog accent-indigo-500 h-4 w-4"
+    data-name="${esc(name)}" data-field="${field}" ${val?'checked':''} ${disabled?'disabled':''}/></td>`;
+}
+function add(who, html){
+  const id='m'+Math.random().toString(36).slice(2);
+  const mine = who==='you';
+  $('#msgs').insertAdjacentHTML('beforeend',
+    `<div class="flex ${mine?'justify-end':''}"><div id="${id}" class="${mine?'bg-accent/20':'bg-panel border border-edge'} rounded-2xl px-4 py-2 max-w-[80%] text-sm">${html}</div></div>`);
+  $('#msgs').scrollTop = 1e9; return id;
+}
+
+// boot: are we logged in?
+(async()=>{ try{ await api('GET','/api/me'); showApp(); route('chat'); }catch(_){ showLogin(); } })();
+</script>
+</body>
+</html>
