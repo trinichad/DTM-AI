@@ -29,10 +29,25 @@ Built + verified the security-critical core, stdlib-only (runs with NO Postgres/
 - Env probe: local box has Python 3.14 / Node 25 / Bun; NO Postgres/Ollama/Docker → core built
   to run anywhere; Postgres+Ollama+live creds switch on via config on the Ubuntu server.
 
-### Next (Phase 1 — Push 2 & 3)
-- Push 2: port Kaseya/Cylance/Huntress clients (PyJWT for Cylance) → `clients/` + wire
-  `client_factory` into ToolContext + real read-only skills + per-integration probes.
-- Push 3: FastAPI app (REST + WebSocket chat, sessions w/ TTL) + dashboard shell (Hermes donor).
+### Phase 2 — Push 2: real data + MCP seam  ✅ (2026-06-01)
+- `execution/clients/`: ported Kaseya/Cylance/Huntress clients, read-only, **stdlib urllib**
+  (no requests/httpx dep), **injectable transport** for testing. Cylance JWT now via tested
+  `encode_jwt_hs256` (stdlib, byte-exact vs jwt.io vector) instead of hand-rolled. ClientFactory
+  + `credentials.require()` wired into `ToolContext.client()` (tenant-scoped, cached). `probe()` per client.
+- Real read-only skills: kaseya_list_assets, kaseya_get_asset, cylance_list_devices,
+  cylance_list_threats, huntress_list_agents, huntress_list_incidents (8 tools total w/ demos).
+- **MCP server** (`execution/mcp_server.py`): dependency-free JSON-RPC/stdio; exposes the registry
+  (initialize/tools/list/tools/call/ping); every call goes through dispatch(); **bound to one tenant**
+  (args can't override it) = the fence for Hermes (D-12).
+- CLI: added `probe` (Phase-L handshake) — verified fail-closed w/o creds; verified MCP over real stdio.
+- **Tests: 56/56 pass** (added test_clients incl. JWT vector, test_skills_integration w/ fake clients,
+  test_mcp incl. tenant-can't-be-overridden).
+
+### Next
+- Wire Hermes Agent to the MCP server (on the Ubuntu box, with models); add Hermes native toolsets to
+  the Capability Console. Build Obsidian memory/KB (D-13). Build FastAPI app + dashboard + Capability
+  Console UI. Real approval-token workflow (replace the present-token placeholder in gates.py).
+- On the server: fill `.env` (Kaseya/Cylance/Huntress) → `python3 -m execution.cli probe` should go green.
 
 ### Errors / tests
 - All green. ResourceWarning (unclosed sqlite) fixed by adding AuditStore.close().

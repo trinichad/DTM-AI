@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from .agent import Agent
+from .clients import ClientFactory
 from .core.audit import AuditStore
 from .core.capabilities import CapabilityStore
 from .core.config import Config, get_config
@@ -15,6 +16,16 @@ from .core.context import ToolContext
 from .core.gates import ConfigurableApprovalGate
 from .core.registry import Registry
 from .core.router import ModelRouter
+
+# Shared, caching client factory (tokens/rate-limiters live here across calls).
+_factory: Optional[ClientFactory] = None
+
+
+def get_client_factory(cfg: Optional[Config] = None) -> ClientFactory:
+    global _factory
+    if _factory is None:
+        _factory = ClientFactory(cfg or get_config())
+    return _factory
 
 
 def build_agent(cfg: Optional[Config] = None, db_path: Optional[Path] = None) -> Agent:
@@ -33,5 +44,6 @@ def build_agent(cfg: Optional[Config] = None, db_path: Optional[Path] = None) ->
 
 
 def make_context(tenant_id: str, actor: str, *, allow_cloud: bool = False) -> ToolContext:
-    # client_factory is wired in Phase 3 (clients/); core tools (system_health) don't need it.
-    return ToolContext(tenant_id=tenant_id, actor=actor, allow_cloud=allow_cloud)
+    # Tenant-scoped client factory: a tool gets vendor clients for its bound tenant only.
+    return ToolContext(tenant_id=tenant_id, actor=actor, allow_cloud=allow_cloud,
+                       client_factory=get_client_factory())

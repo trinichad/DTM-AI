@@ -72,6 +72,14 @@ def cmd_audit(args) -> int:
     return 0
 
 
+def cmd_probe(args) -> int:
+    """Phase-L connectivity handshake: smallest auth-proving call per integration."""
+    from .clients import probe
+    targets = [args.integration] if args.integration else ["kaseya", "cylance", "huntress"]
+    _print({t: probe(t) for t in targets})
+    return 0
+
+
 def cmd_caps(args) -> int:
     """Capability Console (CLI view): each tool's enable + write policy."""
     agent = build_agent()
@@ -129,6 +137,10 @@ def main(argv=None) -> int:
     a.add_argument("--tenant", default=None)
     a.add_argument("--limit", type=int, default=20)
     a.set_defaults(func=cmd_audit)
+
+    pr = sub.add_parser("probe", help="test integration connectivity (Phase L handshake)")
+    pr.add_argument("--integration", default=None, help="kaseya|cylance|huntress (default: all)")
+    pr.set_defaults(func=cmd_probe)
 
     cp = sub.add_parser("caps", help="show the capability policy for every tool")
     cp.set_defaults(func=cmd_caps)
