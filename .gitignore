@@ -38,3 +38,6 @@ dist/
 .vite/
 .DS_Store
 secrets.local
+
+# AI-drafted tool candidates (sandbox) — never auto-live
+skills_candidate/*.py

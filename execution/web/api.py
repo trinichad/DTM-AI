@@ -66,6 +66,15 @@ class Api:
             return self._require_admin(role) or self._delete_user(path.split("/")[3], user)
         if method == "GET" and path == "/api/memory":
             return self._memory(query.get("tenant") or "*")
+        if method == "GET" and path == "/api/build/candidates":
+            from ..core import builder
+            return self._require_admin(role) or Resp(200, {"candidates": builder.list_candidates()})
+        if method == "POST" and path == "/api/build/draft":
+            return self._require_admin(role) or self._build_draft(body, user)
+        if method == "POST" and path.startswith("/api/build/") and path.endswith("/promote"):
+            return self._require_admin(role) or self._build_promote(path.split("/")[3], user)
+        if method == "POST" and path.startswith("/api/build/") and path.endswith("/reject"):
+            return self._require_admin(role) or self._build_reject(path.split("/")[3], user)
         if method == "GET" and path == "/api/approvals":
             return Resp(200, {"approvals": self.agent.approvals.list(query.get("status") or None),
                               "pending": self.agent.approvals.count_pending()})
@@ -170,6 +179,30 @@ class Api:
         self.agent.audit.record(actor=user, tenant_id="*", action="approval_rejected",
                                 detail=f"approval#{approval_id}")
         return Resp(200, {"ok": True})
+
+    def _build_draft(self, body: dict, user: str) -> Resp:
+        desc = (body.get("description") or "").strip()
+        if not desc:
+            return Resp(400, {"error": "describe the tool you want"})
+        from ..core import builder
+        r = builder.draft(desc, router=self.agent.router, model_id=body.get("model"))
+        self.agent.audit.record(actor=user, tenant_id="*", action="build_draft",
+                                tool=r.get("name"), detail=desc[:120])
+        return Resp(200, r)
+
+    def _build_promote(self, name: str, user: str) -> Resp:
+        from ..core import builder
+        r = builder.promote(name)
+        if r.get("ok"):
+            self.agent.registry.discover()   # make the new tool live (disabled by default)
+            self.agent.audit.record(actor=user, tenant_id="*", action="build_promote", tool=name)
+        return Resp(200 if r.get("ok") else 400, r)
+
+    def _build_reject(self, name: str, user: str) -> Resp:
+        from ..core import builder
+        ok = builder.reject(name)
+        self.agent.audit.record(actor=user, tenant_id="*", action="build_reject", tool=name)
+        return Resp(200, {"ok": ok})
 
     def _memory(self, tenant: str) -> Resp:
         from ..core.memory import VaultStore

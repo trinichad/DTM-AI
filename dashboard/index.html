@@ -117,11 +117,12 @@ let TENANT='*', current='overview';
 const NAV=[['overview','Overview','layout-dashboard'],['chat','Chat','message-square'],
   ['integrations','Integrations','plug-zap'],['capabilities','Capabilities','sliders-horizontal'],
   ['skills','Skills','graduation-cap'],['memory','Memory','brain'],
-  ['approvals','Approvals','shield-alert'],['audit','Audit','scroll-text']];
+  ['approvals','Approvals','shield-alert'],['build','Build','hammer'],['audit','Audit','scroll-text']];
 const SUB={overview:'Live health across your clients',chat:'Ask about a client — read-only',
   integrations:'Connections, knowledge & credentials',capabilities:'Primitives the AI may use',
   skills:'What Hermes has learned',memory:'Knowledge base & per-client notes',
-  approvals:'Write actions awaiting your sign-off',audit:'Every action, logged',settings:'Account & users'};
+  approvals:'Write actions awaiting your sign-off',build:'Draft new tools — sandboxed, you approve',
+  audit:'Every action, logged',settings:'Account & users'};
 let ME=null, MODEL='';
 
 function icons(){ if(window.lucide) lucide.createIcons(); }
@@ -147,7 +148,7 @@ async function loadMe(){ try{ ME=await api('GET','/api/me'); renderUser(); }catc
 function renderUser(){ if(!ME)return; $('#userName').textContent=ME.username;
   $('#userRole').textContent=ME.role; $('#userAvatar').textContent=(ME.username||'?')[0].toUpperCase(); }
 
-function renderNav(){$('#nav').innerHTML=NAV.map(([id,label,ic])=>{
+function renderNav(){$('#nav').innerHTML=NAV.filter(n=>n[0]!=='build'||(ME&&ME.role==='admin')).map(([id,label,ic])=>{
   const badge=(id==='approvals'&&ME&&ME.pending_approvals)?`<span class="ml-auto pill bg-rose-500/20 text-rose-300">${ME.pending_approvals}</span>`:'';
   return `<a data-id="${id}" class="navi ${id===current?'active':''}"><i data-lucide="${ic}"></i><span>${label}</span>${badge}</a>`;}).join('');
   document.querySelectorAll('[data-id]').forEach(a=>a.onclick=()=>route(a.dataset.id));icons();}
@@ -443,6 +444,40 @@ const VIEWS={
       document.querySelectorAll('.ap-reject').forEach(b=>b.onclick=async()=>{const r=await api('POST','/api/approvals/'+b.dataset.a+'/reject');
         r.ok?(toast('rejected'),await loadMe(),route('approvals')):toast(esc(r.error),false);});
     }
+    icons();
+  },
+
+  async build(){
+    if(!ME||ME.role!=='admin'){$('#view').innerHTML=`<div class="card p-5 max-w-2xl text-sm text-slate-400">The Build studio is admin-only.</div>`;return;}
+    const {candidates}=await api('GET','/api/build/candidates');
+    const cand=c=>`<div class="card p-4">
+      <div class="flex items-center gap-2"><i data-lucide="file-code-2" class="text-accent"></i><span class="font-medium">${esc(c.name)}</span>
+        ${c.validation.ok?`<span class="pill bg-emerald-500/15 text-emerald-300">validated</span>`:`<span class="pill bg-rose-500/15 text-rose-300">${c.validation.issues.length} issue(s)</span>`}
+        <span class="ml-auto text-[11px] text-slate-600">${esc((c.created||'').slice(0,19).replace('T',' '))}</span></div>
+      ${c.validation.ok?'':`<ul class="text-xs text-rose-300 mt-2 list-disc pl-5">${c.validation.issues.map(i=>`<li>${esc(i)}</li>`).join('')}</ul>`}
+      <pre class="text-[11px] text-slate-300 bg-ink/60 border border-edge rounded-lg p-3 mt-2 overflow-auto max-h-72 font-mono whitespace-pre">${esc(c.code)}</pre>
+      <div class="flex gap-2 mt-3">
+        ${c.validation.ok?`<button class="bp-promote grad text-white rounded-lg px-3 py-1.5 text-xs font-semibold inline-flex items-center gap-1" data-n="${esc(c.name)}"><i data-lucide="rocket"></i> Promote to live (starts disabled)</button>`:''}
+        <button class="bp-reject bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/20 rounded-lg px-3 py-1.5 text-xs" data-n="${esc(c.name)}">Discard</button></div></div>`;
+    $('#view').innerHTML=`<div class="max-w-3xl space-y-4">
+      <div class="card p-5">
+        <div class="flex items-center gap-2 mb-2 font-semibold"><i data-lucide="hammer" class="text-accent"></i> Draft a new tool</div>
+        <div class="text-sm text-slate-400 mb-3">Describe a read-only capability. The AI drafts it into a sandbox; it's validated (security scan + schema) and stays <span class="text-slate-200">disabled until you promote it</span>. Nothing touches client systems during drafting.</div>
+        <textarea id="bd" rows="3" placeholder="e.g. List Cylance devices that haven't checked in for 30 days" class="w-full bg-ink/80 border border-edge rounded-lg px-3 py-2 text-sm focus:border-accent focus:outline-none"></textarea>
+        <div class="flex items-center gap-2 mt-2"><button id="bd-go" class="grad text-white rounded-lg px-4 py-2 text-sm font-semibold inline-flex items-center gap-1"><i data-lucide="sparkles"></i> Generate draft</button>
+          <span id="bd-status" class="text-xs text-slate-500"></span></div>
+      </div>
+      <div class="space-y-3">${candidates.length?candidates.map(cand).join(''):'<div class="text-sm text-slate-500 px-1">No candidates yet — describe one above.</div>'}</div></div>`;
+    $('#bd-go').onclick=async()=>{const desc=$('#bd').value.trim();if(!desc)return;
+      $('#bd-status').textContent='drafting…';
+      const r=await api('POST','/api/build/draft',{description:desc,model:MODEL});
+      $('#bd-status').textContent='';
+      if(r.error){toast(esc(r.error),false);return;}
+      toast(r.validation&&r.validation.ok?'draft generated & validated':'draft generated — review issues',!!(r.validation&&r.validation.ok));
+      route('build');};
+    document.querySelectorAll('.bp-promote').forEach(b=>b.onclick=async()=>{const r=await api('POST','/api/build/'+encodeURIComponent(b.dataset.n)+'/promote');
+      r.ok?(toast('promoted — find it in Capabilities (disabled)'),route('build')):toast(esc(r.error||'promote failed'),false);});
+    document.querySelectorAll('.bp-reject').forEach(b=>b.onclick=async()=>{await api('POST','/api/build/'+encodeURIComponent(b.dataset.n)+'/reject');toast('discarded');route('build');});
     icons();
   },
 

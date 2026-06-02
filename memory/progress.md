@@ -185,8 +185,25 @@ Built + verified the security-critical core, stdlib-only (runs with NO Postgres/
   one-shot 409, non-admin 403, trusted-skips). Live-verified full chain: pending→approve→vault written,
   audit = approval_requested→tool_call→approval_executed, badge clears.
 
-### Next
-- Build tab (gated self-development agent) — drafts tools in a sandbox, runs tests, human approves.
+### Build tab — gated self-development agent (D-8)  ✅ (2026-06-02)
+- `core/builder.py`: draft(description, router) → LLM writes a candidate skill → `skills_candidate/`
+  (sandbox, NOT importable live) → `validate_candidate()` (AST security scan + schema lint) →
+  human `promote()` (re-validate → copy to execution/skills/ → registry.discover()) / `reject()`.
+- **Validator (safety-critical):** AST-based, fail-closed. Blocks os/subprocess/socket/etc imports,
+  eval/exec/open/getattr, dunder access, non-read CATEGORY, and ANY top-level statement (no import-time
+  exec). Promoted tools start CATEGORY=read + ENABLED_BY_DEFAULT=False (zero blast radius until enabled).
+- API (admin-only): POST /api/build/draft, GET /api/build/candidates, POST .../promote, .../reject.
+- UI: **Build** nav (admin-only) — describe a tool → drafted code + validation (green/issues) →
+  Promote/Discard; candidate list.
+- SOP: `architecture/self-development.md`. `skills_candidate/*.py` gitignored.
+- **Tests: 122/122** (added test_builder: validator accepts good / blocks os+exec+write+toplevel-call+
+  missing-attrs+syntax; draft→stage→promote→reject sandbox via FakeRouter). Live-verified: staged
+  candidate → Promote → 15 tools, new tool live but DISABLED, candidate consumed; demo artifact cleaned.
+
+### Next (continue building)
+- Harden Build: run the test suite against a candidate in an isolated worktree before promote.
+- Offline asset vendoring (Tailwind/Lucide/fonts) for air-gapped use. Deploy cutover on owner's go.
+- More read-only tools / scoped-connector coverage as new vendors are added.
 - Deploy cutover (on owner's "deploy" go — D-14). Then `deploy/hermes/SETUP_HERMES.md` to stand up Hermes.
 - New vendors (M365/Google/Datto/…): add creds + a scoped connector each → unlimited learned reads on top.
 
