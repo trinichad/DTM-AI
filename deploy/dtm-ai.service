@@ -1,0 +1,35 @@
+# DTM AI — systemd unit. Install to /etc/systemd/system/dtm-ai.service
+# Hardened, runs as a dedicated unprivileged user, stdlib web server (no venv needed).
+#   sudo cp deploy/dtm-ai.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now dtm-ai
+[Unit]
+Description=DTM AI — MSP operations platform
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dtm-ai
+Group=dtm-ai
+WorkingDirectory=/opt/dtm-ai
+EnvironmentFile=/opt/dtm-ai/.env
+ExecStart=/usr/bin/python3 -m execution.web --host 127.0.0.1 --port 8088
+Restart=on-failure
+RestartSec=3
+
+# ── hardening ──
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# the app owns its own dir (db, secrets.local, .session_secret, vault/, promoted skills)
+ReadWritePaths=/opt/dtm-ai
+# bind only to loopback; nginx terminates TLS in front (see nginx-dtm-ai.conf)
+IPAddressAllow=localhost
+
+[Install]
+WantedBy=multi-user.target
