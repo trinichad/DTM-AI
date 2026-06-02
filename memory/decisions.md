@@ -93,6 +93,27 @@ tool (the self-coding agent). It is distinct from D-11's runtime toggling of an 
 tool's capability. Both stay true: you can open an existing tool's writes from the console,
 but a brand-new tool still requires sandbox + human merge to exist at all.
 
+## Skill model — no hand-coded tools; learned skills over guarded primitives (2026-06-01)
+
+**D-15 — The owner will NOT hand-code tools. Capabilities grow as LEARNED SKILLS that compose a
+small, trusted set of guarded PRIMITIVES.** Two layers: (1) Primitives = guarded low-level
+capabilities that touch client systems (hold creds, decide read/write) — trusted code, built once by
+the maintainer, NOT AI-improvised; they are the security boundary. (2) Learned skills = unlimited
+reusable procedures the AI/Hermes composes from *enabled* primitives and saves for reuse — no human
+coding. Safe because a learned skill can only combine already-enabled primitives; it can't invent new
+access. Human control is at the primitive/Capability-Console layer, not per learned skill.
+**Primitive layer chosen: scoped generic read connectors** (`kaseya_read`/`cylance_read`/`huntress_read`
++ `clients/scopes.py`): arbitrary path but GET-only + per-vendor read-path allowlist, blocks
+auth/host-escape/out-of-scope, blocked path never calls the client (tested). Writes stay separate,
+individually-gated primitives. _Reason: realizes the owner's "no hand-coding, all learned skills"
+vision while keeping a hard, owner-controlled security boundary._ (locked; implemented + tested. SOP:
+`architecture/skill-model.md`.)
+
+**D-4 reframed by D-15:** the human-merge gate was about generated *Python primitives*. Learned skills
+are compositions (no new code) → no merge gate; control moved to the primitive layer. A brand-new
+*primitive* (new vendor/write op) is still deliberate trusted code, added by the maintainer — not
+hand-coded by the owner in normal operations.
+
 ## Deployment (2026-06-01)
 
 **D-14 — Deploy via the existing `trinichad/KaseyaLink` GitHub repo, renamed to DTM-AI.**

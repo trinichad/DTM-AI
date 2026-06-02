@@ -22,6 +22,12 @@ mcp_servers:
       # (Everything still passes through DTM AI dispatch(): read-only by default,
       #  capability/approval/tenant/audit all enforced regardless of Hermes.)
       include:
+        # scoped generic read connectors — let Hermes compose ANY allow-listed read
+        # into learned skills with zero new code (the primitive layer, D-15):
+        - kaseya_read
+        - cylance_read
+        - huntress_read
+        # curated/slimmed convenience reads:
         - system_health
         - kaseya_list_assets
         - kaseya_get_asset
@@ -29,6 +35,7 @@ mcp_servers:
         - cylance_list_threats
         - huntress_list_agents
         - huntress_list_incidents
+        # knowledge + memory:
         - kb_search
         - memory_read
         - memory_note

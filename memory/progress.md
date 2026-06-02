@@ -89,10 +89,21 @@ Built + verified the security-critical core, stdlib-only (runs with NO Postgres/
 - Two control planes documented: DTM AI Console (MSP/client tools) vs Hermes `tools`/MCP include (native).
 - Tests still 71/71. (Standing Hermes UP is owner's step on the Ubuntu box — can't run Hermes from dev.)
 
+### Phase 2 — Scoped read connectors / skill model (D-15)  ✅ (2026-06-01)
+- Owner direction: NO hand-coded tools; all capabilities = LEARNED SKILLS (Hermes) composed from a
+  small trusted set of guarded PRIMITIVES. Human control at the primitive layer (Console), not per skill.
+- Built scoped generic read connectors: `clients/scopes.py` (per-vendor read-path allowlist,
+  boundary-aware match, blocks auth/host-escape/out-of-scope) + skills `kaseya_read`/`cylance_read`/
+  `huntress_read` (arbitrary allow-listed GET path → compose any read with zero new code).
+- Writes stay SEPARATE individually-gated primitives. SOP: `architecture/skill-model.md`. D-4 reframed.
+- Hermes config snippet updated to include the read connectors. **14 tools now.**
+- **Tests: 80/80** (added test_scopes: allowlist allow/deny, auth blocked, host-escape/traversal blocked,
+  boundary match, blocked-path-never-calls-client via dispatch).
+
 ### Next
-- Real approval-token workflow (replace present-token placeholder in gates.py) → unlock trusted writes.
-- Deploy cutover (on owner's "deploy" go — see D-14). Optional: more read-only tools; shadcn/React UI.
-- On the server: fill `.env` → `python3 -m execution.cli probe` green; then follow `deploy/hermes/SETUP_HERMES.md`.
+- Approval workflow (one-shot args-bound tokens) → safely open WRITE primitives in the Console.
+- Deploy cutover (on owner's "deploy" go — D-14). Then `deploy/hermes/SETUP_HERMES.md` to stand up Hermes.
+- New vendors (M365/Google/Datto/…): add creds + a scoped connector each → unlimited learned reads on top.
 
 ### Errors / tests
 - All green. ResourceWarning (unclosed sqlite) fixed by adding AuditStore.close().
