@@ -24,6 +24,16 @@ class Reader(unittest.TestCase):
         self.assertFalse(r.available)
         self.assertEqual(r.list_skills(), [])
 
+    def test_permission_error_is_tolerated(self):
+        # regression: systemd ProtectHome makes ~/.hermes raise PermissionError on exists();
+        # that must read as "not available", not 500 the integrations endpoint.
+        import unittest.mock as mock
+        r = HermesSkillsReader(self.root)
+        r.root = mock.Mock()
+        r.root.exists.side_effect = PermissionError(13, "Permission denied")
+        self.assertFalse(r.available)
+        self.assertEqual(r.list_skills(), [])
+
     def test_parses_skills_with_category(self):
         self._skill("security/posture", "posture-report", "summarize posture")
         self._skill("network/sweep", "stale-sweep", "find stale agents")

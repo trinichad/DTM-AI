@@ -28,8 +28,10 @@ RestrictSUIDSGID=true
 LockPersonality=true
 # the app owns its own dir (db, secrets.local, .session_secret, vault/, promoted skills)
 ReadWritePaths=/opt/dtm-ai
-# bind only to loopback; nginx terminates TLS in front (see nginx-dtm-ai.conf)
-IPAddressAllow=localhost
+# NOTE: ProtectHome=true masks /home, so Hermes skills under ~/.hermes are unreadable by the
+# service (the integrations/skills views tolerate this gracefully). When you wire Hermes, set
+# DTM_HERMES_SKILLS_DIR to a path under /opt, or relax ProtectHome to read-only.
+# Inbound access is controlled by the bind address (--host) + the firewall, not a systemd filter.
 
 [Install]
 WantedBy=multi-user.target

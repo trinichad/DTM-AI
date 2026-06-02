@@ -42,10 +42,14 @@ class VaultStore:
     # ── knowledge base (read) ──
     def search_kb(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
         terms = [t for t in re.split(r"\s+", query.lower().strip()) if t]
-        if not terms or not self.kb_dir.exists():
+        try:
+            if not terms or not self.kb_dir.exists():
+                return []
+            kb_files = sorted(self.kb_dir.rglob("*.md"))
+        except OSError:
             return []
         hits: list[dict[str, Any]] = []
-        for md in sorted(self.kb_dir.rglob("*.md")):
+        for md in kb_files:
             try:
                 text = md.read_text(encoding="utf-8")
             except OSError:
@@ -71,18 +75,28 @@ class VaultStore:
         return self.clients_dir / _safe_tenant(tenant_id) / "memory.md"
 
     def read_memory(self, tenant_id: str) -> str:
-        path = self._memory_path(tenant_id)
-        return path.read_text(encoding="utf-8") if path.exists() else ""
+        # tolerate a missing/inaccessible vault (e.g. ProtectHome) -> empty, never 500
+        try:
+            path = self._memory_path(tenant_id)
+            return path.read_text(encoding="utf-8") if path.exists() else ""
+        except OSError:
+            return ""
 
     def list_kb(self) -> list[str]:
-        if not self.kb_dir.exists():
+        try:
+            if not self.kb_dir.exists():
+                return []
+            return [str(p.relative_to(self.root)) for p in sorted(self.kb_dir.rglob("*.md"))]
+        except OSError:
             return []
-        return [str(p.relative_to(self.root)) for p in sorted(self.kb_dir.rglob("*.md"))]
 
     def list_client_memories(self) -> list[str]:
-        if not self.clients_dir.exists():
+        try:
+            if not self.clients_dir.exists():
+                return []
+            return [d.name for d in sorted(self.clients_dir.iterdir()) if (d / "memory.md").exists()]
+        except OSError:
             return []
-        return [d.name for d in sorted(self.clients_dir.iterdir()) if (d / "memory.md").exists()]
 
     def append_memory(self, tenant_id: str, note: str, actor: str) -> dict[str, Any]:
         if tenant_id in ("", "*"):

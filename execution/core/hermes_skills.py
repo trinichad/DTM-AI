@@ -54,13 +54,22 @@ class HermesSkillsReader:
 
     @property
     def available(self) -> bool:
-        return self.root.exists()
+        # exists() can raise (e.g. systemd ProtectHome masks /home -> PermissionError).
+        # An unreadable/missing dir simply means "no Hermes here".
+        try:
+            return self.root.exists()
+        except OSError:
+            return False
 
     def list_skills(self) -> list[dict[str, Any]]:
-        if not self.root.exists():
+        if not self.available:
             return []
         skills: list[dict[str, Any]] = []
-        for md in self.root.rglob("*"):
+        try:
+            entries = list(self.root.rglob("*"))
+        except OSError:
+            return []
+        for md in entries:
             if md.is_file() and md.name.lower() == "skill.md":
                 try:
                     text = md.read_text(encoding="utf-8", errors="replace")
