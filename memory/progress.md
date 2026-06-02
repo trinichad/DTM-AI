@@ -207,5 +207,13 @@ Built + verified the security-critical core, stdlib-only (runs with NO Postgres/
 - Deploy cutover (on owner's "deploy" go — D-14). Then `deploy/hermes/SETUP_HERMES.md` to stand up Hermes.
 - New vendors (M365/Google/Datto/…): add creds + a scoped connector each → unlimited learned reads on top.
 
+### Deploy packaging + offline asset vendoring  ✅ (2026-06-02)
+- Deploy artifacts: `deploy/dtm-ai.service` (hardened systemd), `deploy/nginx-dtm-ai.conf`,
+  `deploy/SETUP.md` (from-zero Ubuntu), top-level `README.md`. Updates = `git pull && systemctl restart`.
+- **Offline vendoring**: vendored Tailwind Play CDN (407KB) + Lucide UMD (402KB) + Inter woff2 (400–800,
+  latin) into `dashboard/vendor/` + `vendor/fonts.css`. index.html → `/vendor/*` (zero CDN refs). server.py
+  serves `/vendor/` (content-types + Cache-Control) with a traversal guard (encoded-traversal → 404, no
+  source leak — verified). Dashboard renders fully offline (tailwind+lucide+Inter all local).
+
 ### Errors / tests
-- All green. ResourceWarning (unclosed sqlite) fixed by adding AuditStore.close().
+- All green (122 tests). ResourceWarning (unclosed sqlite) fixed by adding AuditStore.close().

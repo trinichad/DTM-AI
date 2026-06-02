@@ -21,6 +21,9 @@ from .api import SESSION_COOKIE, Api, Resp
 from .auth import AuthStore, SessionSigner
 
 _DASHBOARD = Path(__file__).resolve().parents[2] / "dashboard" / "index.html"
+_VENDOR = Path(__file__).resolve().parents[2] / "dashboard" / "vendor"
+_CTYPES = {".js": "application/javascript", ".css": "text/css", ".woff2": "font/woff2",
+           ".woff": "font/woff", ".svg": "image/svg+xml", ".png": "image/png"}
 
 
 def _make_handler(api: Api, signer: SessionSigner, secure_cookie: bool):
@@ -55,6 +58,20 @@ def _make_handler(api: Api, signer: SessionSigner, secure_cookie: bool):
                 attrs.append("Secure")
             self.send_header("Set-Cookie", "; ".join(attrs))
 
+        def _send_static(self, url_path: str) -> None:
+            rel = url_path[len("/vendor/"):]
+            target = (_VENDOR / rel).resolve()
+            # confine to the vendor dir (no traversal)
+            if ".." in rel or not str(target).startswith(str(_VENDOR.resolve())) or not target.is_file():
+                self.send_response(HTTPStatus.NOT_FOUND); self.end_headers(); return
+            body = target.read_bytes()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", _CTYPES.get(target.suffix, "application/octet-stream"))
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "public, max-age=86400")
+            self.end_headers()
+            self.wfile.write(body)
+
         def _send_html(self) -> None:
             try:
                 body = _DASHBOARD.read_bytes()
@@ -81,6 +98,8 @@ def _make_handler(api: Api, signer: SessionSigner, secure_cookie: bool):
             if parsed.path.startswith("/api/"):
                 query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
                 self._send_json(api.handle("GET", parsed.path, query, {}, self._user()))
+            elif parsed.path.startswith("/vendor/"):
+                self._send_static(parsed.path)   # offline assets (tailwind/lucide/fonts)
             else:
                 self._send_html()  # SPA: any non-api path serves the dashboard
 
