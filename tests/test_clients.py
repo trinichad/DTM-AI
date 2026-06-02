@@ -24,19 +24,21 @@ class JWT(unittest.TestCase):
 
 class Kaseya(unittest.TestCase):
     def _transport(self, method, url, headers=None, params=None, json_body=None):
-        if url.endswith("/system/orgs"):
-            return 200, {"Result": [{"OrgName": "Acme"}]}
-        if "/assetmgmt/assets" in url:
-            skip = (params or {}).get("$skip", 0)
-            top = (params or {}).get("$top", 100)
-            data = [{"AgentId": i, "AssetName": f"PC{i}", "OSType": "Windows"} for i in range(3)]
-            return 200, {"Result": data[skip:skip + top], "TotalRecords": len(data)}
+        # v2 Basic auth on every request (no /auth token exchange)
+        assert (headers or {}).get("Authorization", "").startswith("Basic ")
+        if "/vsa/api/v2/assetmgmt/asset" in url:
+            # v2 returns a bare list (one of the shapes _as_list normalizes)
+            return 200, [{"AgentId": i, "AssetName": f"PC{i}", "OSType": "Windows"} for i in range(3)]
         return 200, {}
 
-    def test_static_token_no_login_and_pagination(self):
-        k = KaseyaClient("https://x", token="static", transport=self._transport)
+    def test_basic_auth_and_assets(self):
+        k = KaseyaClient("https://x", "tid", "tsecret", transport=self._transport)
         self.assertEqual(len(k.get_assets()), 3)
         self.assertTrue(k.probe()["ok"])
+
+    def test_missing_token_pair_fails_closed(self):
+        with self.assertRaises(RuntimeError):
+            KaseyaClient("https://x", transport=self._transport).get_assets()
 
 
 class Cylance(unittest.TestCase):

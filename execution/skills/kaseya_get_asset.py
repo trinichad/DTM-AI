@@ -24,4 +24,5 @@ def run(ctx, asset_id: str, **_: Any):
     asset = ctx.client("kaseya").get_asset(asset_id)
     if not asset:
         return {"error": f"no Kaseya asset matched '{asset_id}'"}
-    return {k: asset.get(k) for k in _FIELDS}
+    picked = {k: asset[k] for k in _FIELDS if k in asset}
+    return picked or asset   # v2 field names may differ — return raw rather than all-null

@@ -20,8 +20,7 @@ from .kaseya import KaseyaClient
 
 _BUILDERS: dict[str, Callable[[dict], Any]] = {
     "kaseya": lambda env: KaseyaClient(
-        env["KASEYA_BASE_URL"], env.get("KASEYA_USER"), env.get("KASEYA_PASSWORD"),
-        token=env.get("KASEYA_TOKEN"),
+        env["KASEYA_URL"], env.get("KASEYA_TOKEN_ID"), env.get("KASEYA_TOKEN_SECRET"),
     ),
     "cylance": lambda env: CylanceClient(
         env.get("CYLANCE_REGION", "NA"), env["CYLANCE_TENANT_ID"],

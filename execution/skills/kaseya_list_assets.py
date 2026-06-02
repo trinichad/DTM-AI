@@ -17,4 +17,8 @@ _FIELDS = ("AgentId", "AssetName", "DisplayName", "OSType", "OSName", "IPAddress
 
 def run(ctx, **_: Any):
     assets = ctx.client("kaseya").get_assets()
-    return [{k: a.get(k) for k in _FIELDS} for a in assets]
+    out = []
+    for a in assets:
+        picked = {k: a[k] for k in _FIELDS if k in a}
+        out.append(picked or a)   # v2 field names may differ — pass the row raw rather than all-null
+    return out

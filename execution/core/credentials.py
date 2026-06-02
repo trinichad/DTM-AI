@@ -41,8 +41,7 @@ class CredentialSpec:
 SPECS: dict[str, CredentialSpec] = {
     "kaseya": CredentialSpec(
         "kaseya",
-        required=("KASEYA_BASE_URL",),
-        optional=("KASEYA_USER", "KASEYA_PASSWORD", "KASEYA_TOKEN"),
+        required=("KASEYA_URL", "KASEYA_TOKEN_ID", "KASEYA_TOKEN_SECRET"),
         label="Kaseya VSA",
     ),
     "cylance": CredentialSpec(

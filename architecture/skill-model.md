@@ -53,3 +53,12 @@ Hermes persists/curates its own learned skills (its memory + skills system). DTM
   If a vendor read returns large PII blobs, prefer a curated slimmed primitive for that path.
 - New vendor onboarding = creds (config) + a scoped connector + its allowlist (one-time code), then
   unlimited learned reads on top.
+- **Vendor auth schemes are not interchangeable — confirm against the live tenant, never assume.**
+  Kaseya ships in two incompatible API generations: VSA 9.5 (`/api/v1.0`, Bearer token via a `/auth`
+  exchange) vs **VSA X / API v2** (`/vsa/api/v2/...`, HTTP **Basic** auth with a `TOKEN_ID:TOKEN_SECRET`
+  pair, no token exchange). DTM AI was first ported with the 9.5 scheme; the live DTM tenant
+  (`ks2.dtmconsulting.com`) is VSA X. Fix landed in `clients/kaseya.py` + `core/credentials.py`
+  (spec keys `KASEYA_URL`/`KASEYA_TOKEN_ID`/`KASEYA_TOKEN_SECRET`) + `clients/scopes.py` (v2 prefixes).
+  The Manage-keys form derives its fields from the CredentialSpec, so it tracks this automatically.
+  v2 response envelopes vary by endpoint → `KaseyaClient._as_list` normalizes shapes, and the slimmed
+  reads fall back to the raw row when expected field names are absent.
