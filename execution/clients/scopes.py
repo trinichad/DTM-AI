@@ -19,10 +19,11 @@ from typing import Any, Optional
 # Per-vendor allowlist of safe READ path prefixes. Conservative by default; extend
 # deliberately. NOTE: auth/token endpoints are intentionally absent.
 READ_SCOPES: dict[str, tuple[str, ...]] = {
-    "kaseya": (                 # VSA X / API v2 (/vsa/api/v2 prefix added by the client)
-        "/assetmgmt/",          # assets, agents, hardware/software inventory
-        "/alertmgmt/",          # alerts
-        "/patch/",              # patch status / compliance
+    "kaseya": (                 # VSA 9.5 REST (/api/v1.0 prefix added by the client)
+        "/assetmgmt/",          # assets, agents, audit summaries, hardware/software
+        "/system/orgs",         # organizations
+        "/system/machinegroups",
+        "/audit/",
     ),
     "cylance": (
         "/devices/v2",
