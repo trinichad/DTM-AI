@@ -53,6 +53,46 @@ clean seam to swap in Vault/KMS later.** _Reason: no plaintext secrets, but don'
 **D-10 — TS types generated from the FastAPI OpenAPI schema; snapshot validated with zod on the frontend.**
 _Reason: single-source the API contract; the dashboard never trusts `any`-typed data._ (proposed)
 
+## Evolved model — graduated autonomy + Hermes + Obsidian (2026-06-01, second session)
+
+> The owner read the Nous Research **Hermes Agent** docs and wants it as the brain, with a
+> control panel to open capabilities gradually toward autonomy. NOTE: "Hermes" now means
+> **Nous Research Hermes Agent** (github.com/NousResearch/hermes-agent) — a real, separate
+> thing from the `ClaudeOS [Hermes] V2` folder (which remains only a UI/design donor).
+
+**D-11 — Graduated Capability model with a Capability Console + defense-in-depth.**
+Replaces "read-only by construction (DenyAllApprovals)" with "read-only by DEFAULT, tunable
+per tool by the owner." Three layers: (1) PRIMARY = capability policy per tool
+{enabled, allow_write, require_approval} set in the console; (2) BACKUP = least-privilege
+vendor API creds (start read-only where the API supports it); (3) ALWAYS-ON SAFETY FLOORS
+that the console cannot disable: audit every call, tenant isolation, secrets fingerprint-only,
+destructive tools always require a per-action approval token, and NEW-tool authoring still
+needs human merge (D-4). _Reason: owner wants the agent to "eventually work on its own";
+correction logged — upstream API scoping alone is insufficient (some vendors issue one
+read+write key), so our gate stays the primary throttle._ (locked; implemented in
+`core/capabilities.py` + `core/gates.py`, tested)
+
+**D-12 — Hermes Agent as the brain, fenced behind our tool layer via MCP.**
+Hermes brings memory, self-improving skills, and multi-channel reach. It reaches client
+systems ONLY through DTM AI's tools exposed as an **MCP server**, so dispatch()'s guardrails
+apply no matter how capable/autonomous Hermes is. Hermes' own native toolsets (terminal,
+execute_code, file, browser, memory, web) are surfaced as entries in the SAME Capability
+Console and start mostly off, enabled as trust is earned. _Reason: get Hermes' power without
+giving an autonomous agent unguarded access to client environments._ (locked; build seam =
+MCP server wrapping the registry)
+
+**D-13 — Obsidian as a fresh memory + knowledge-base vault.**
+Start a new Obsidian vault as DTM AI's knowledge base (per-client runbooks/SOPs) AND the
+agent's human-readable long-term memory (`Clients/<tenant>/memory.md`). Markdown on disk →
+git-trackable, backup-able, human-editable, auditable. Integrate read-only first (kb_search),
+then guarded writes for memory notes. Modeled on Hermes' MEMORY.md/USER.md + FTS5 approach.
+_Reason: owner has no central KB yet; pure-upside, no security tension._ (locked)
+
+**D-4 clarification:** D-4 ("human merge for every generated tool") governs AUTHORING a NEW
+tool (the self-coding agent). It is distinct from D-11's runtime toggling of an EXISTING
+tool's capability. Both stay true: you can open an existing tool's writes from the console,
+but a brand-new tool still requires sandbox + human merge to exist at all.
+
 ## Resolved Blueprint questions (2026-06-01)
 - **North Star** — read-only conversational assistant for the team to check things across all clients
   (option 1a). Write actions deferred to Phase 5 behind approval gate. (locked)

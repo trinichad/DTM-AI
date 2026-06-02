@@ -9,9 +9,10 @@ from typing import Optional
 
 from .agent import Agent
 from .core.audit import AuditStore
+from .core.capabilities import CapabilityStore
 from .core.config import Config, get_config
 from .core.context import ToolContext
-from .core.dispatch import DenyAllApprovals
+from .core.gates import ConfigurableApprovalGate
 from .core.registry import Registry
 from .core.router import ModelRouter
 
@@ -20,9 +21,15 @@ def build_agent(cfg: Optional[Config] = None, db_path: Optional[Path] = None) ->
     cfg = cfg or get_config()
     registry = Registry()                       # discovers execution.skills
     audit = AuditStore(db_path)                  # sqlite dev / (porting target: postgres prod)
+    caps = CapabilityStore(db_path)              # the Capability Console's policy store
     router = ModelRouter(cfg)
-    # v1 is read-only by construction: DenyAllApprovals blocks every write tool.
-    return Agent(registry, audit, router, gate=DenyAllApprovals())
+    # Read-only by DEFAULT (no capability rows -> allow_write False everywhere), but now
+    # tunable per tool via the Capability Console as trust is earned. Safety floors live
+    # in ConfigurableApprovalGate + dispatch + audit and cannot be toggled off.
+    gate = ConfigurableApprovalGate(caps, registry)
+    agent = Agent(registry, audit, router, gate=gate)
+    agent.caps = caps                            # expose for the console/CLI
+    return agent
 
 
 def make_context(tenant_id: str, actor: str, *, allow_cloud: bool = False) -> ToolContext:

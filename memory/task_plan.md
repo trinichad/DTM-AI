@@ -28,10 +28,17 @@ stubs, wired in Phase 3 as creds become available (M365/Entra next).
 - [ ] Auth: sessions w/ TTL + rotation; admin-gated mutations
 - [ ] **Verify:** local LLM round-trips a chat; one read-only sample tool runs end-to-end in the UI
 
-## Phase 2 — Agent Toolkit
-- [ ] Tool permission/risk model enforced in `dispatch()` (read/alert/write/destructive)
-- [ ] Approval workflow: write → proposed-action record → human approve → one-shot token consumed
-- [ ] Tool/library management UI (enable/disable, risk, last-run, AI rules)
+## Phase 2 — Agent Toolkit + Brain
+- [x] Tool permission/risk model enforced in `dispatch()` (read/alert/write/destructive)
+- [x] **Capability Console backend** (`core/capabilities.py` + `core/gates.py`): per-tool
+      enabled/allow_write/require_approval + safety floors; CLI `caps` / `caps-set`. (D-11)
+- [ ] Approval workflow: write → proposed-action record → human approve → one-shot args-bound token
+      (replaces the present-token placeholder in gates.py)
+- [ ] **MCP server** exposing the registry, so Hermes / any MCP brain uses our guarded tools (D-12)
+- [ ] **Hermes Agent integration** (fenced): wire Hermes as brain via MCP; surface its native toolsets
+      in the Capability Console (start off). (D-12)
+- [ ] **Memory + Obsidian**: fresh vault; read-only `kb_search`; per-tenant `memory.md`; FTS5 recall (D-13)
+- [ ] Capability Console UI (the dashboard surface for enable/allow_write/require_approval + autonomy ramp)
 - [ ] Report-generation framework (normalized snapshot → client-ready report)
 - [ ] **Sandboxed coding agent** + `skills_candidate/` staging + promotion gate (lint/test/scan/merge)
 

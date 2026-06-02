@@ -103,9 +103,14 @@ def run(ctx, **kwargs) -> dict | list   # ctx = {tenant_id, clients, actor}; ret
 
 ## 3. Behavioral Rules (hard — enforced in code, not just prose)
 
-1. **Read-only by default.** v1 ships only `read`/`alert` tools. `write`/`destructive` are blocked at
-   `dispatch()` unless: tool enabled in config **and** per-client write flag on **and** a valid one-shot
-   human-approval token is present. No exceptions in code paths.
+1. **Read-only by default, graduated by the owner (Capability Console).** Tools start read-only;
+   `write`/`destructive` are blocked at `dispatch()` unless the owner has opened them in the Capability
+   Console (`allow_write`) **and** the approval policy is satisfied. Autonomy may ramp per tool
+   (`require_approval=False` lets a *trusted, non-destructive* write run unattended). **Safety floors that
+   the console can NEVER disable:** every call is audited; tenant isolation holds; secrets stay
+   fingerprint-only; `destructive` tools ALWAYS require a per-action approval token; authoring a NEW tool
+   still needs sandbox + human merge. Defense-in-depth: least-privilege vendor creds are a backup layer,
+   never the only control.
 2. **Never invent identifiers or facts.** If a tool didn't return it, the assistant says it doesn't know.
    Every answer cites the tool(s) + tenant it came from.
 3. **Validate before running.** LLM tool args are checked against `PARAMETERS` (JSON-Schema, required
@@ -184,6 +189,20 @@ DTM AI/
 ├── skills_candidate/    # sandboxed coding-agent staging (never auto-live)
 └── .tmp/                # ephemeral workbench
 ```
+
+## 7b. The Brain layer — Hermes + memory + knowledge (D-11/12/13)
+
+- **Hermes Agent (Nous Research)** is the optional conversational brain, fenced behind our tools:
+  it reaches client systems ONLY through DTM AI's registry **exposed as an MCP server**, so every
+  dispatch() guardrail applies regardless of how autonomous Hermes is. Hermes' native toolsets
+  (terminal, code, file, browser, memory, web) are entries in the **Capability Console** and start
+  mostly off. *Distinct from the `ClaudeOS [Hermes] V2` folder, which is only a UI design donor.*
+- **Capability Console** = the owner's throttle. Per tool/toolset: `enabled`, `allow_write`,
+  `require_approval`. Backend: `core/capabilities.py` + `core/gates.py`. Safety floors (Rule #1) are
+  enforced in code, not in the console.
+- **Obsidian vault** = knowledge base (per-client runbooks/SOPs → read-only `kb_search`) + the agent's
+  human-readable long-term memory (`Clients/<tenant>/memory.md`). Markdown on disk: git-tracked,
+  backup-able, human-editable. Modeled on Hermes' MEMORY.md/USER.md + FTS5 session recall.
 
 ## 8. Maintenance / Self-Annealing
 On any failure: (a) read the real error/stack — no guessing; (b) patch in `execution/`; (c) test the fix;

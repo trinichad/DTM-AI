@@ -72,6 +72,37 @@ def cmd_audit(args) -> int:
     return 0
 
 
+def cmd_caps(args) -> int:
+    """Capability Console (CLI view): each tool's enable + write policy."""
+    agent = build_agent()
+    rows = []
+    for t in agent.registry.all():
+        pol = agent.caps.get(t.name, default_enabled=t.enabled_by_default)
+        rows.append({
+            "name": t.name, "category": t.category, "risk": t.risk_level,
+            "enabled": agent.audit.is_enabled(t.name, t.enabled_by_default),
+            "allow_write": pol.allow_write, "require_approval": pol.require_approval,
+        })
+    _print({"tools": rows})
+    return 0
+
+
+def cmd_caps_set(args) -> int:
+    agent = build_agent()
+    if args.enable is not None:
+        agent.audit.set_enabled(args.name, args.enable)
+    kw = {}
+    if args.allow_write is not None:
+        kw["allow_write"] = args.allow_write
+    if args.require_approval is not None:
+        kw["require_approval"] = args.require_approval
+    pol = agent.caps.set(args.name, **kw) if kw else agent.caps.get(args.name, default_enabled=True)
+    _print({"name": args.name,
+            "enabled": agent.audit.is_enabled(args.name, True),
+            "allow_write": pol.allow_write, "require_approval": pol.require_approval})
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="dtm-ai", description="DTM AI operations assistant (CLI)")
     p.add_argument("--actor", default="cli@dtm", help="actor identity for the audit log")
@@ -98,6 +129,19 @@ def main(argv=None) -> int:
     a.add_argument("--tenant", default=None)
     a.add_argument("--limit", type=int, default=20)
     a.set_defaults(func=cmd_audit)
+
+    cp = sub.add_parser("caps", help="show the capability policy for every tool")
+    cp.set_defaults(func=cmd_caps)
+
+    cs = sub.add_parser("caps-set", help="change a tool's capability policy")
+    cs.add_argument("name")
+    cs.add_argument("--enable", dest="enable", action="store_true", default=None)
+    cs.add_argument("--disable", dest="enable", action="store_false")
+    cs.add_argument("--allow-write", dest="allow_write", action="store_true", default=None)
+    cs.add_argument("--no-write", dest="allow_write", action="store_false")
+    cs.add_argument("--require-approval", dest="require_approval", action="store_true", default=None)
+    cs.add_argument("--no-approval", dest="require_approval", action="store_false")
+    cs.set_defaults(func=cmd_caps_set)
 
     args = p.parse_args(argv)
     return args.func(args)
