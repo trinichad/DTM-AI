@@ -219,21 +219,27 @@ const VIEWS={
 
   async integrations(){
     const {integrations}=await api('GET','/api/integrations');
+    const ico={kaseya:'monitor-dot',cylance:'shield',huntress:'radar'};
     $('#view').innerHTML=`<div class="grid gap-4 md:grid-cols-3 max-w-5xl">`+integrations.map(i=>`
-      <div class="card card-hover p-5">
+      <div class="card card-hover p-5" data-card="${esc(i.integration)}">
         <div class="flex items-center gap-3">
           <div class="relative grid place-items-center">${ring(i.configured?1:0.06,i.configured?'#10b981':'#475569')}
-            <i data-lucide="${({kaseya:'monitor-dot',cylance:'shield',huntress:'radar'})[i.integration]||'plug'}" class="absolute text-lg ${i.configured?'text-emerald-300':'text-slate-500'}"></i></div>
+            <i data-lucide="${ico[i.integration]||'plug'}" class="absolute text-lg ${i.configured?'text-emerald-300':'text-slate-500'}"></i></div>
           <div><div class="font-semibold">${esc(i.label)}</div>
             <span class="pill ${i.configured?'bg-emerald-500/15 text-emerald-300':'bg-slate-600/30 text-slate-400'}">${i.configured?'configured':'not set'}</span></div>
         </div>
-        <div class="text-[11px] text-slate-500 mt-3 font-mono leading-relaxed">${i.configured?Object.entries(i.fingerprints).map(([k,v])=>`${esc(k)}: ${esc(v)}`).join('<br>'):'missing: '+i.missing.map(esc).join(', ')}</div>
-        <button data-int="${esc(i.integration)}" class="probe mt-4 w-full text-xs bg-white/5 hover:bg-white/10 border border-edge rounded-lg py-2 flex items-center justify-center gap-1.5"><i data-lucide="zap"></i> Test connection</button>
-        <div class="probe-res text-xs mt-2"></div></div>`).join('')+`</div>`;
-    document.querySelectorAll('.probe').forEach(b=>b.onclick=async()=>{const res=b.parentElement.querySelector('.probe-res');
+        <div class="fp text-[11px] text-slate-500 mt-3 font-mono leading-relaxed">${i.configured?Object.entries(i.fingerprints).map(([k,v])=>`${esc(k)}: ${esc(v)}`).join('<br>'):'missing: '+i.missing.map(esc).join(', ')}</div>
+        <div class="grid grid-cols-2 gap-2 mt-4">
+          <button data-int="${esc(i.integration)}" class="probe text-xs bg-white/5 hover:bg-white/10 border border-edge rounded-lg py-2 flex items-center justify-center gap-1.5"><i data-lucide="zap"></i> Test</button>
+          <button data-int="${esc(i.integration)}" class="manage text-xs bg-white/5 hover:bg-white/10 border border-edge rounded-lg py-2 flex items-center justify-center gap-1.5"><i data-lucide="key-round"></i> Manage keys</button>
+        </div>
+        <div class="probe-res text-xs mt-2"></div>
+        <div class="creds mt-3"></div></div>`).join('')+`</div>`;
+    document.querySelectorAll('.probe').forEach(b=>b.onclick=async()=>{const res=b.closest('[data-card]').querySelector('.probe-res');
       res.innerHTML='<span class="text-slate-400">probing…</span>';
       const {probes}=await api('GET','/api/integrations/probe?integration='+b.dataset.int);const p=probes[b.dataset.int];
       res.innerHTML=`<span class="${p.ok?'text-emerald-300':'text-rose-400'} inline-flex items-center gap-1"><i data-lucide="${p.ok?'check-circle-2':'x-circle'}"></i>${p.ok?'connected':esc(p.detail)}</span> <span class="text-slate-600">${p.latency_ms}ms</span>`;icons();});
+    document.querySelectorAll('.manage').forEach(b=>b.onclick=()=>toggleCreds(b.dataset.int, b.closest('[data-card]').querySelector('.creds')));
     icons();
   },
 
@@ -283,6 +289,32 @@ const VIEWS={
   },
 };
 
+async function toggleCreds(integration, box){
+  if(box.dataset.open==='1'){ box.innerHTML=''; box.dataset.open=''; return; }
+  box.dataset.open='1';
+  const {fields,label}=await api('GET','/api/integrations/'+encodeURIComponent(integration)+'/fields');
+  box.innerHTML=`<div class="border-t border-edge pt-3 space-y-2">
+    <div class="text-[11px] text-slate-500 flex items-center gap-1"><i data-lucide="shield-check"></i> Stored 0600, shown only as a fingerprint. Leave blank to keep current.</div>
+    ${fields.map(f=>`<div>
+      <label class="text-xs text-slate-400 flex items-center gap-1">${esc(f.key)}${f.required?'<span class="text-rose-400">*</span>':''}
+        ${f.set?`<span class="ml-auto text-[10px] text-slate-600 font-mono">${esc(f.fingerprint)}</span>`:''}</label>
+      <input data-key="${esc(f.key)}" type="password" autocomplete="new-password"
+        placeholder="${f.set?'•••••• (set)':'not set'}"
+        class="cred-in w-full bg-ink/80 border border-edge rounded-lg px-3 py-1.5 text-sm mt-1 focus:border-accent focus:outline-none"/></div>`).join('')}
+    <div class="flex gap-2 pt-1">
+      <button class="cred-save grad text-white rounded-lg px-3 py-1.5 text-xs font-semibold flex-1 flex items-center justify-center gap-1"><i data-lucide="save"></i> Save</button>
+      <button class="cred-cancel bg-white/5 border border-edge rounded-lg px-3 py-1.5 text-xs">Cancel</button>
+    </div></div>`;
+  box.querySelector('.cred-cancel').onclick=()=>{box.innerHTML='';box.dataset.open='';};
+  box.querySelector('.cred-save').onclick=async()=>{
+    const vals={}; box.querySelectorAll('.cred-in').forEach(inp=>{ if(inp.value!=='') vals[inp.dataset.key]=inp.value; });
+    if(!Object.keys(vals).length){ toast('nothing to save',false); return; }
+    const r=await api('POST','/api/integrations/'+encodeURIComponent(integration)+'/credentials',vals);
+    if(r.error){ toast(esc(r.error),false); return; }
+    toast(`${label} credentials saved`); box.innerHTML=''; box.dataset.open=''; VIEWS.integrations();
+  };
+  icons();
+}
 function toggle(name,field,val,disabled,label){
   return `<div class="flex flex-col items-center gap-1">
     <div class="switch ${val?'on':''} ${disabled?'disabled':''}" data-name="${esc(name)}" data-field="${field}"></div>

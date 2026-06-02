@@ -77,6 +77,34 @@ def require(integration: str, cfg: Optional[Config] = None) -> dict[str, str]:
     return creds
 
 
+def allowed_keys(integration: str) -> set[str]:
+    spec = SPECS.get(integration)
+    if spec is None:
+        raise MissingCredential(f"unknown integration '{integration}'")
+    return set(spec.required) | set(spec.optional)
+
+
+def set_integration(integration: str, values: dict[str, str], cfg: Optional[Config] = None) -> "CredStatus":
+    """Securely store credentials for one integration (UI entry point).
+
+    Only keys belonging to this integration's CredentialSpec may be written (allowlist),
+    so this cannot inject arbitrary config. Empty value clears a key. Requires a SecretStore
+    on the config (the running app has one). Returns the new fingerprint-only status.
+    """
+    cfg = cfg or get_config()
+    spec = SPECS.get(integration)
+    if spec is None:
+        raise MissingCredential(f"unknown integration '{integration}'")
+    if getattr(cfg, "secrets", None) is None:
+        raise MissingCredential("no secret store configured; cannot persist credentials")
+    allow = allowed_keys(integration)
+    unknown = set(values) - allow
+    if unknown:
+        raise MissingCredential(f"keys not valid for {spec.display}: {', '.join(sorted(unknown))}")
+    cfg.secrets.set_many({k: v for k, v in values.items()}, allowed_keys=allow)
+    return next(s for s in status(cfg) if s.integration == integration)
+
+
 def is_configured(integration: str, cfg: Optional[Config] = None) -> bool:
     cfg = cfg or get_config()
     spec = SPECS.get(integration)

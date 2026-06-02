@@ -55,6 +55,10 @@ class Api:
             return Resp(200, {"integrations": self._integrations()})
         if method == "GET" and path == "/api/integrations/probe":
             return Resp(200, {"probes": self._probe(query.get("integration"))})
+        if method == "GET" and path.startswith("/api/integrations/") and path.endswith("/fields"):
+            return self._integration_fields(path.split("/")[3])
+        if method == "POST" and path.startswith("/api/integrations/") and path.endswith("/credentials"):
+            return self._set_credentials(path.split("/")[3], body, user)
         if method == "GET" and path == "/api/capabilities":
             return Resp(200, {"capabilities": self._tools()})  # tools carry their policy
         if method == "POST" and path.startswith("/api/capabilities/"):
@@ -97,6 +101,37 @@ class Api:
         from ..clients import probe
         targets = [integration] if integration else ["kaseya", "cylance", "huntress"]
         return {t: probe(t) for t in targets}
+
+    def _integration_fields(self, name: str) -> Resp:
+        """The credential fields for an integration (which are set, fingerprints) — never raw."""
+        spec = credentials.SPECS.get(name)
+        if spec is None:
+            return Resp(404, {"error": f"unknown integration '{name}'"})
+        from ..core.config import fingerprint, get_config
+        cfg = get_config()
+        fields = [{"key": k, "required": k in spec.required,
+                   "set": cfg.present(k), "fingerprint": fingerprint(cfg.get(k)) if cfg.present(k) else None}
+                  for k in (*spec.required, *spec.optional)]
+        return Resp(200, {"integration": name, "label": spec.display, "fields": fields})
+
+    def _set_credentials(self, name: str, body: dict, user: str) -> Resp:
+        """Securely store credentials entered in the UI. Values never echoed back."""
+        if not isinstance(body, dict) or not body:
+            return Resp(400, {"error": "no credential values provided"})
+        try:
+            new_status = credentials.set_integration(name, {k: str(v) for k, v in body.items()})
+        except credentials.MissingCredential as e:
+            return Resp(400, {"error": str(e)})
+        # take effect immediately + audit (keys only, never values)
+        try:
+            from ..runtime import get_client_factory
+            get_client_factory().invalidate(name)
+        except Exception:
+            pass
+        self.agent.audit.record(actor=user, tenant_id="*", action="credential_set",
+                                tool=name, detail=f"keys: {','.join(sorted(body.keys()))}")
+        return Resp(200, {"integration": name, "configured": new_status.configured,
+                          "fingerprints": new_status.fingerprints, "missing": new_status.missing})
 
     def _set_capability(self, name: str, body: dict) -> Resp:
         if self.agent.registry.get(name) is None:

@@ -109,6 +109,23 @@ Built + verified the security-critical core, stdlib-only (runs with NO Postgres/
   switches (enabled/write/approval). Chat = avatars + bubbles + suggested-prompt chips + typing dots +
   provider footer. Toasts on capability changes. Verified all views via preview screenshots @1340px.
 
+### Secure credential entry from the UI  ✅ (2026-06-01)
+- `core/secrets_store.py` (SecretStore): app-managed `secrets.local`, 0600, atomic write, refuses
+  world-readable, key allowlist enforced by caller. Wired into `config.Config` precedence
+  (process env > SecretStore > .env > default).
+- `credentials.set_integration(name, values)`: allowlist = that integration's spec keys only (no
+  arbitrary-key injection); returns fingerprint-only status. `ClientFactory.invalidate()` so new
+  creds take effect immediately.
+- API: `GET /api/integrations/<n>/fields` (which keys set + fingerprints), `POST .../credentials`
+  (admin, audited as credential_set with KEY NAMES only). Raw values never returned.
+- UI: Integrations card → "Manage keys" → password fields per key (placeholder shows fingerprint),
+  Save. Verified end-to-end via preview: entered Huntress key/secret → card went green/configured
+  showing fingerprints (727be58/2b603a8), raw values appear in 0 API responses, secrets.local is
+  -rw------- and gitignored, audit logged keys-only.
+- SOP: `architecture/secrets.md` (encryption-at-rest via keyring/SOPS is the documented upgrade path).
+- **Tests: 88/88** (added test_secrets: 0600, allowlist, clear, world-readable refusal, set roundtrip
+  fingerprint-only, foreign-key/unknown-integration rejection, partial→complete).
+
 ### Next
 - Approval workflow (one-shot args-bound tokens) → safely open WRITE primitives in the Console.
 - Deploy cutover (on owner's "deploy" go — D-14). Then `deploy/hermes/SETUP_HERMES.md` to stand up Hermes.

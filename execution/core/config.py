@@ -54,19 +54,28 @@ def _parse_env_file(path: Path) -> dict[str, str]:
 class Config:
     """Layered config: process env over .env file. Secrets never logged."""
 
-    def __init__(self, env_path: Optional[Path] = None) -> None:
+    def __init__(self, env_path: Optional[Path] = None, secret_store=None) -> None:
         self._file: dict[str, str] = {}
         path = env_path or _ENV_PATH
         if path.exists():
             _enforce_permissions(path)
             self._file = _parse_env_file(path)
+        self._secrets = secret_store  # optional SecretStore (app-managed, UI-entered)
 
     def get(self, key: str, default: Optional[str] = None) -> Optional[str]:
-        # Real environment always wins over the file.
+        # Precedence: real environment > app-managed SecretStore > .env file > default.
         if key in os.environ and os.environ[key] != "":
             return os.environ[key]
+        if self._secrets is not None:
+            sv = self._secrets.get(key)
+            if sv:
+                return sv
         val = self._file.get(key)
         return val if (val is not None and val != "") else default
+
+    @property
+    def secrets(self):
+        return self._secrets
 
     def require(self, key: str) -> str:
         val = self.get(key)
@@ -105,5 +114,12 @@ _cfg: Optional[Config] = None
 def get_config() -> Config:
     global _cfg
     if _cfg is None:
-        _cfg = Config()
+        # Attach the app-managed SecretStore so UI-entered credentials are visible to
+        # require()/clients process-wide. Imported lazily to avoid an import cycle.
+        try:
+            from .secrets_store import SecretStore
+            store = SecretStore()
+        except Exception:
+            store = None
+        _cfg = Config(secret_store=store)
     return _cfg

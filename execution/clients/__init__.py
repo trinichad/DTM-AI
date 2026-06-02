@@ -52,6 +52,11 @@ class ClientFactory:
             self._cache[key] = builder(env)
         return self._cache[key]
 
+    def invalidate(self, integration: str) -> None:
+        """Drop cached clients for an integration so updated credentials take effect now."""
+        for key in [k for k in self._cache if k[0] == integration]:
+            del self._cache[key]
+
 
 def probe(integration: str, cfg: Optional[Config] = None) -> dict[str, Any]:
     """Smallest auth-proving call per integration. Never raises; returns {ok, detail, latency_ms}."""
