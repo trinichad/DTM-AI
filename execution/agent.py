@@ -164,3 +164,21 @@ class Agent:
         turn.answer = "Reached the tool-call limit without a final answer."
         turn.citations = citations
         return turn
+
+    def summarize(self, history: Optional[list], *, model_id: Optional[str] = None) -> str:
+        """Compact a conversation into a concise summary (no tools) so chat can continue with the
+        key context preserved instead of oldest turns being dropped. Used by the UI 'Compact' button."""
+        msgs = clean_history(history)
+        if not msgs:
+            return ""
+        convo = "\n".join(f"{m['role']}: {m['content']}" for m in msgs)[:12000]
+        provider, model = self.router.resolve(model_id)
+        prompt = [
+            {"role": "system", "content": "You compress an IT-operations chat transcript. Produce a tight "
+             "summary that preserves key facts, findings, identifiers (hostnames, counts, tenants), decisions, "
+             "and any open threads, so the conversation can continue with full context. Use short bullet points; "
+             "do not invent anything not present."},
+            {"role": "user", "content": convo},
+        ]
+        result = self._call_provider(provider, prompt, [], model)
+        return (result.content or "").strip()

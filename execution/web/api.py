@@ -106,6 +106,12 @@ class Api:
             return Resp(200, {"audit": self.agent.audit.query(tenant_id=tenant, limit=limit)})
         if method == "POST" and path == "/api/chat":
             return self._chat(body, user)
+        if method == "POST" and path == "/api/chat/compact":
+            return Resp(200, {"summary": self.agent.summarize(body.get("history"),
+                                                              model_id=body.get("model"))})
+        if method == "GET" and path == "/api/system/stats":
+            from ..core import sysstats
+            return Resp(200, sysstats.collect())
 
         return Resp(404, {"error": f"no route {method} {path}"})
 

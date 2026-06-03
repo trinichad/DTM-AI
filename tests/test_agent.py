@@ -88,6 +88,22 @@ class AgentLoop(unittest.TestCase):
         self.assertNotIn("ignore me", [m["content"] for m in rec.seen])
 
 
+    def test_summarize_uses_history_and_no_tools(self):
+        rec = _Recorder()
+        # summarize() resolves its own provider, so point the router at our recorder
+        self.agent.router.resolve = lambda mid=None: (rec, "m")
+        summary = self.agent.summarize([{"role": "user", "content": "how many assets?"},
+                                        {"role": "assistant", "content": "42 assets."}])
+        self.assertEqual(summary, "ok")
+        self.assertEqual(rec.seen[0]["role"], "system")   # summarizer system prompt
+        self.assertEqual(rec.seen[-1]["role"], "user")    # the flattened transcript
+        self.assertIn("42 assets", rec.seen[-1]["content"])
+
+    def test_summarize_empty_is_empty(self):
+        self.assertEqual(self.agent.summarize([]), "")
+        self.assertEqual(self.agent.summarize(None), "")
+
+
 class HistoryGuard(unittest.TestCase):
     def test_drops_bad_entries_and_caps_count(self):
         h = [{"role": "user", "content": str(i)} for i in range(40)]
