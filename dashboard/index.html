@@ -359,6 +359,7 @@ const VIEWS={
           ${models.length<2?`<a class="text-[11px] text-slate-500 hover:text-slate-300 cursor-pointer" id="addModel">+ add a cloud model</a>`:''}
           <span id="ctxMeter" class="ml-auto text-[11px] text-slate-500" title="Conversation context sent to the model"></span>
           <button id="compactChat" class="text-[11px] text-slate-500 hover:text-accent inline-flex items-center gap-1" title="Summarise older turns to shrink context, keeping the recent ones"><i data-lucide="archive-restore" class="text-[12px]"></i> Compact</button>
+          <button id="delChat" class="text-[11px] text-slate-500 hover:text-rose-300 inline-flex items-center gap-1" title="Delete this conversation"><i data-lucide="trash-2" class="text-[12px]"></i> Delete</button>
           <button id="newChatTop" class="md:hidden text-[11px] text-slate-500 hover:text-accent inline-flex items-center gap-1"><i data-lucide="plus" class="text-[12px]"></i> New</button>
         </div>
         <div id="msgs" class="flex-1 space-y-4 mb-3 overflow-auto"></div>
@@ -387,8 +388,8 @@ const VIEWS={
             <div class="text-[12px] truncate ${active?'text-slate-100':'text-slate-300'}">${esc(c.title||'New chat')}</div>
             <div class="text-[10px] text-slate-500 flex items-center gap-1"><span class="truncate">${esc(c.tenant_id==='*'?'all clients':c.tenant_id)}</span><span>·</span><span class="shrink-0">${esc(ago(c.updated_at))}</span></div>
           </div>
-          <button class="convRen opacity-0 group-hover:opacity-100 text-slate-500 hover:text-accent shrink-0" data-id="${esc(c.id)}" title="Rename"><i data-lucide="pencil" class="text-[11px]"></i></button>
-          <button class="convDel opacity-0 group-hover:opacity-100 text-slate-500 hover:text-rose-400 shrink-0" data-id="${esc(c.id)}" title="Delete chat"><i data-lucide="trash-2" class="text-[12px]"></i></button>
+          <button class="convRen opacity-60 hover:opacity-100 text-slate-500 hover:text-accent shrink-0" data-id="${esc(c.id)}" title="Rename"><i data-lucide="pencil" class="text-[11px]"></i></button>
+          <button class="convDel opacity-60 hover:opacity-100 text-slate-500 hover:text-rose-400 shrink-0" data-id="${esc(c.id)}" title="Delete chat"><i data-lucide="trash-2" class="text-[12px]"></i></button>
         </div>`; }).join('');
       el.querySelectorAll('.convItem').forEach(it=>it.onclick=e=>{ if(e.target.closest('.convDel')||e.target.closest('.convRen'))return; openConv(it.dataset.id); });
       el.querySelectorAll('.convDel').forEach(b=>b.onclick=e=>{ e.stopPropagation(); delConv(b.dataset.id); });
@@ -413,6 +414,7 @@ const VIEWS={
     if($('#addModel'))$('#addModel').onclick=()=>route('integrations');
     if($('#newChat'))$('#newChat').onclick=newChat;
     if($('#newChatTop'))$('#newChatTop').onclick=newChat;
+    if($('#delChat'))$('#delChat').onclick=()=>{ if(!CONV){ toast('No saved conversation to delete yet',false); return; } delConv(CONV); };
     $('#compactChat').onclick=async()=>{ if(!CONV||MSGS.length<4){ toast('Not enough conversation to compact yet',false); return; }
       toast('Compacting…');
       let r; try{ r=await api('POST','/api/conversations/'+CONV+'/compact',{model:MODEL}); }catch(_){ toast('compact failed',false); return; }
