@@ -84,6 +84,25 @@ class Cylance(unittest.TestCase):
         devices = list(c.get_paginated("/devices/v2", page_size=2))
         self.assertEqual(len(devices), 4)   # 2 pages x 2 — stopped by total_pages, not 2*max_pages
 
+    def test_paginate_sends_page_request_param(self):
+        # Regression for the 200-cap bug: Cylance's REQUEST param is `page` (it only ECHOES
+        # `page_number`). Sending the wrong name => API returns page 1 forever. Assert `page` advances.
+        seen_pages = []
+
+        def transport(method, url, headers=None, params=None, json_body=None):
+            if url.endswith("/auth/v2/token"):
+                return 200, {"access_token": "t"}
+            seen_pages.append((params or {}).get("page"))
+            pg = (params or {}).get("page", 1)
+            # honor `page`: page 1 full, page 2 short -> stops
+            return (200, {"page_items": [{"id": "a"}, {"id": "b"}], "total_pages": 2}) if pg == 1 \
+                else (200, {"page_items": [{"id": "c"}], "total_pages": 2})
+
+        c = CylanceClient("NA", "t", "a", "s", transport=transport)
+        devices = list(c.get_paginated("/devices/v2", page_size=2))
+        self.assertEqual(seen_pages, [1, 2])          # the REQUEST advanced the page
+        self.assertEqual([d["id"] for d in devices], ["a", "b", "c"])  # real distinct enumeration
+
 
 class Huntress(unittest.TestCase):
     def _transport(self, method, url, headers=None, params=None, json_body=None):

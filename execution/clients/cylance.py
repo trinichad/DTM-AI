@@ -78,6 +78,11 @@ class CylanceClient:
         params = dict(params or {})
         params.setdefault("page_size", page_size)
         for page_number in range(1, max_pages + 1):
+            # Cylance's REQUEST param is `page`; its RESPONSE echoes `page_number`. The old client
+            # sent only `page_number`, which Cylance ignored -> it returned page 1 every time (every
+            # page identical -> bogus 1800 raw / 200 unique). We send `page` (the real one) and keep
+            # `page_number` too; unknown query params are ignored, so this is correct either way.
+            params["page"] = page_number
             params["page_number"] = page_number
             payload = self.get(path, params) or {}
             items = payload.get("page_items") or []

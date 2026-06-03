@@ -70,6 +70,16 @@ Hermes persists/curates its own learned skills (its memory + skills system). DTM
   `tests/test_skills_integration.py::test_cylance_devices_dedup_pagination_drift`. General rule: any
   paginated vendor list whose underlying set mutates during the read must be deduped by stable id, not
   trusted to be disjoint across pages.
+- **Cylance's pagination REQUEST param is `page`, not `page_number` (the response only ECHOES
+  `page_number`).** Sending `page_number` as the request param made Cylance ignore it and return page 1
+  on every iteration — so every page was identical (raw 1800, 200 after dedup). The ported Kaseya Link
+  client had the same latent bug; it never surfaced because that build read its count from the response's
+  `total_number_of_items` field (its probe reports exactly that), never actually enumerating all devices.
+  Fix: `clients/cylance.py` `get_paginated` sets `params["page"]` (and keeps `page_number` for safety —
+  unknown query params are ignored). Regression: `tests/test_clients.py::test_paginate_sends_page_request_param`.
+  Lesson: distinguish a vendor's request params from the fields it echoes in responses — they are NOT
+  always the same name, and a count that "looks plausible" (1708) can come from a total field while real
+  enumeration is silently broken.
 - **Verify a reference build actually WORKS before porting its auth — a module that imports cleanly
   is not a module that authenticated.** The live DTM Kaseya tenant (`ks2.dtmconsulting.com`) is
   **VSA 9.5**: REST API at `/api/v1.0/`, auth = plain Basic `base64(KASEYA_USER:KASEYA_PASS)` →
