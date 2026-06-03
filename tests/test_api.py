@@ -61,6 +61,39 @@ class WebApi(unittest.TestCase):
     def test_chat_requires_message(self):
         self.assertEqual(self.H("POST", "/api/chat", {"tenant": "acme"}, user="admin").status, 400)
 
+    def test_chat_persists_conversation(self):
+        # a chat with no conversation_id creates one and persists both turns
+        r = self.H("POST", "/api/chat", {"tenant": "acme", "message": "how many assets?"}, user="admin")
+        cid = r.payload["conversation_id"]
+        self.assertTrue(cid)
+        self.assertEqual(r.payload["title"], "how many assets?")            # auto-titled
+        convs = self.H("GET", "/api/conversations", user="admin").payload["conversations"]
+        self.assertEqual(len(convs), 1)
+        self.assertEqual(convs[0]["id"], cid)
+        # continuing the SAME conversation keeps one conversation with the full transcript
+        self.H("POST", "/api/chat", {"conversation_id": cid, "message": "and users?"}, user="admin")
+        convs = self.H("GET", "/api/conversations", user="admin").payload["conversations"]
+        self.assertEqual(len(convs), 1)
+        msgs = self.H("GET", f"/api/conversations/{cid}", user="admin").payload["messages"]
+        self.assertEqual([m["role"] for m in msgs], ["user", "assistant", "user", "assistant"])
+
+    def test_conversations_are_per_user(self):
+        r = self.H("POST", "/api/chat", {"tenant": "acme", "message": "private"}, user="admin")
+        cid = r.payload["conversation_id"]
+        self.auth.create_user("bob", "bobpass1", "user")
+        self.assertEqual(self.H("GET", "/api/conversations", user="bob").payload["conversations"], [])
+        self.assertEqual(self.H("GET", f"/api/conversations/{cid}", user="bob").status, 404)
+        self.assertEqual(self.H("DELETE", f"/api/conversations/{cid}", user="bob").status, 404)
+
+    def test_conversation_rename_and_delete(self):
+        cid = self.H("POST", "/api/conversations", {"tenant": "acme"}, user="admin").payload["id"]
+        self.assertEqual(self.H("POST", f"/api/conversations/{cid}/rename",
+                                {"title": "MFA audit"}, user="admin").status, 200)
+        convs = self.H("GET", "/api/conversations", user="admin").payload["conversations"]
+        self.assertEqual(convs[0]["title"], "MFA audit")
+        self.assertEqual(self.H("DELETE", f"/api/conversations/{cid}", user="admin").status, 200)
+        self.assertEqual(self.H("GET", "/api/conversations", user="admin").payload["conversations"], [])
+
     def test_fleet_counts_structure(self):
         self.assertEqual(self.H("GET", "/api/fleet").status, 401)         # auth gated
         r = self.H("GET", "/api/fleet", user="admin")

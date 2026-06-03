@@ -123,14 +123,19 @@ const SUB={overview:'Live health across your clients',chat:'Ask about a client �
   approvals:'Write actions awaiting your sign-off',build:'Draft new tools — sandboxed, you approve',
   audit:'Every action, logged',settings:'Account & users'};
 let ME=null, MODEL='';
-// Chat transcripts persist in the browser (per client) until explicitly cleared — never on the server.
-let CHAT={}; try{ CHAT=JSON.parse(localStorage.getItem('dtm_chat')||'{}')||{}; }catch(_){ CHAT={}; }
-const chatKey=()=>TENANT||'*';
-const chatLog=()=>(CHAT[chatKey()]=CHAT[chatKey()]||[]);
-function chatSave(){ try{ localStorage.setItem('dtm_chat',JSON.stringify(CHAT)); }catch(_){} }
-// Recent prior turns sent as context so the assistant remembers the conversation (capped; backend re-caps).
-function chatHistory(){ return chatLog().slice(0,-1).filter(t=>t.role==='user'||(t.role==='assistant'&&!t.error&&t.answer))
-  .map(t=>({role:t.role,content:t.role==='user'?t.text:t.answer})).slice(-50); }   // backend re-caps
+// Chat history lives on the SERVER now (per-user, multi-conversation) — it persists across
+// devices/browsers until a conversation is explicitly deleted, like ChatGPT/Claude.
+let CONV=null;   // current conversation id (null = unsaved new chat)
+let MSGS=[];     // current conversation's messages, normalised for rendering
+let CONVS=[];    // cached sidebar list of the user's conversations
+// Map a stored message {role,content,meta} to the shape bubble()/aiHtml() expect.
+function normMsg(m){ if(m.role==='user') return {role:'user',text:m.content};
+  const meta=m.meta||{}; return {role:'assistant',answer:m.content||'',tools:meta.tools||[],
+    citations:meta.citations||[],meta:meta.label||'',error:!!meta.error}; }
+const ago=iso=>{ if(!iso)return''; const s=(Date.now()-new Date(iso).getTime())/1000;
+  if(s<60)return'just now'; if(s<3600)return Math.floor(s/60)+'m ago';
+  if(s<86400)return Math.floor(s/3600)+'h ago'; if(s<604800)return Math.floor(s/86400)+'d ago';
+  return new Date(iso).toLocaleDateString(); };
 // ── markdown rendering (safe, dependency-free subset: tables, bold/italic/code, headings, lists, links) ──
 const _mdesc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const _mdsep=l=>/^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l);
@@ -202,7 +207,7 @@ function aiHtml(t){ let h=md(t.answer||'');
   if(t.meta) h+=`<div class="text-[11px] text-slate-600 mt-1">${esc(t.meta)}</div>`;
   return h; }
 function renderChatLog(){ const box=$('#msgs'); if(!box)return; box.innerHTML='';
-  for(const t of chatLog()) bubble(t.role==='user'?'you':'ai', t.role==='user'?esc(t.text):(t.error?'<span class="text-rose-400">error</span>':aiHtml(t)));
+  for(const t of MSGS) bubble(t.role==='user'?'you':'ai', t.role==='user'?esc(t.text):(t.error?'<span class="text-rose-400">error</span>':aiHtml(t)));
   box.scrollTop=1e9; icons(); }
 // ── host resource gauges (overview) ──
 async function loadHostStats(){ const el=$('#hoststats'); if(!el) return;
@@ -335,57 +340,98 @@ const VIEWS={
   async chat(){
     const mm=await api('GET','/api/models'); const models=mm.models||[];
     if(!MODEL||!models.find(m=>m.id===MODEL)) MODEL=(models.find(m=>m.default)||models[0]||{}).id||'';
-    $('#view').innerHTML=`<div class="max-w-3xl mx-auto flex flex-col h-full">
-      <div class="flex items-center gap-2 mb-3">
-        <i data-lucide="cpu" class="text-slate-500 text-sm"></i>
-        <select id="model" class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none">
-          ${models.map(m=>`<option value="${esc(m.id)}" ${m.id===MODEL?'selected':''}>${esc(m.label)}${m.local?'':' ☁'}</option>`).join('')}
-        </select>
-        ${models.length<2?`<a class="text-[11px] text-slate-500 hover:text-slate-300 cursor-pointer" id="addModel">+ add a cloud model</a>`:''}
-        <span id="ctxMeter" class="ml-auto text-[11px] text-slate-500" title="Conversation context sent to the model (auto-capped at ~6k chars)"></span>
-        <button id="compactChat" class="text-[11px] text-slate-500 hover:text-accent inline-flex items-center gap-1" title="Summarise older turns to shrink context, keeping the recent ones"><i data-lucide="archive-restore" class="text-[12px]"></i> Compact</button>
-        <button id="clearChat" class="text-[11px] text-slate-500 hover:text-rose-300 inline-flex items-center gap-1" title="Clear this client's chat history"><i data-lucide="trash-2" class="text-[12px]"></i> Clear</button>
-      </div>
-      <div id="msgs" class="flex-1 space-y-4 mb-3 overflow-auto"></div>
-      <div id="suggest" class="flex flex-wrap gap-2 mb-3"></div>
-      <form id="chatForm" class="card glass flex gap-2 p-2">
-        <input id="msg" placeholder="Ask about ${esc(TENANT)} …"
-          class="flex-1 bg-transparent px-3 py-2 text-sm focus:outline-none"/>
-        <button class="grad text-white rounded-xl px-4 text-sm font-semibold flex items-center gap-1"><i data-lucide="send"></i></button>
-      </form>
-      <div class="text-[11px] text-slate-500 mt-2 flex items-center gap-1.5"><i data-lucide="shield-check"></i> Analysing only — DTM AI never changes client systems in this mode. ☁ = cloud model.</div></div>`;
-    $('#model').onchange=e=>{MODEL=e.target.value; updateMeter();};
-    if($('#addModel'))$('#addModel').onclick=()=>route('integrations');
+    try{ CONVS=(await api('GET','/api/conversations')).conversations||[]; }catch(_){ CONVS=[]; }
+    // Choose which conversation to open: keep the current one if still valid; else the newest for
+    // this client; else start a fresh (unsaved) chat.
+    if(CONV && !CONVS.find(c=>c.id===CONV)) CONV=null;
+    if(!CONV){ const mine=CONVS.find(c=>c.tenant_id===TENANT); CONV=mine?mine.id:null; }
+    $('#view').innerHTML=`<div class="flex h-full gap-4">
+      <aside class="w-60 shrink-0 hidden md:flex flex-col">
+        <button id="newChat" class="grad text-white rounded-xl px-3 py-2 text-sm font-semibold inline-flex items-center justify-center gap-1.5 mb-3"><i data-lucide="plus"></i> New chat</button>
+        <div id="convList" class="flex-1 overflow-auto space-y-1 -mx-1 px-1"></div>
+      </aside>
+      <div class="flex-1 flex flex-col min-w-0 max-w-3xl mx-auto w-full">
+        <div class="flex items-center gap-2 mb-3">
+          <i data-lucide="cpu" class="text-slate-500 text-sm"></i>
+          <select id="model" class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none">
+            ${models.map(m=>`<option value="${esc(m.id)}" ${m.id===MODEL?'selected':''}>${esc(m.label)}${m.local?'':' ☁'}</option>`).join('')}
+          </select>
+          ${models.length<2?`<a class="text-[11px] text-slate-500 hover:text-slate-300 cursor-pointer" id="addModel">+ add a cloud model</a>`:''}
+          <span id="ctxMeter" class="ml-auto text-[11px] text-slate-500" title="Conversation context sent to the model"></span>
+          <button id="compactChat" class="text-[11px] text-slate-500 hover:text-accent inline-flex items-center gap-1" title="Summarise older turns to shrink context, keeping the recent ones"><i data-lucide="archive-restore" class="text-[12px]"></i> Compact</button>
+          <button id="newChatTop" class="md:hidden text-[11px] text-slate-500 hover:text-accent inline-flex items-center gap-1"><i data-lucide="plus" class="text-[12px]"></i> New</button>
+        </div>
+        <div id="msgs" class="flex-1 space-y-4 mb-3 overflow-auto"></div>
+        <div id="suggest" class="flex flex-wrap gap-2 mb-3"></div>
+        <form id="chatForm" class="card glass flex gap-2 p-2">
+          <input id="msg" placeholder="Ask about ${esc(TENANT==='*'?'all clients':TENANT)} …"
+            class="flex-1 bg-transparent px-3 py-2 text-sm focus:outline-none"/>
+          <button class="grad text-white rounded-xl px-4 text-sm font-semibold flex items-center gap-1"><i data-lucide="send"></i></button>
+        </form>
+        <div class="text-[11px] text-slate-500 mt-2 flex items-center gap-1.5"><i data-lucide="shield-check"></i> Analysing only — DTM AI never changes client systems in this mode. ☁ = cloud model.</div>
+      </div></div>`;
     const sg=['How many assets does this client have?','Any open Huntress incidents?','Summarise this client’s security posture'];
-    const showSuggest=()=>{ $('#suggest').innerHTML=chatLog().length?'':sg.map(s=>`<button class="pill bg-white/5 hover:bg-white/10 text-slate-300 border border-edge">${esc(s)}</button>`).join('');
-      $('#suggest').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('#msg').value=b.textContent;$('#msg').focus();}); };
+    const showSuggest=()=>{ const el=$('#suggest'); if(!el)return; el.innerHTML=MSGS.length?'':sg.map(s=>`<button class="pill bg-white/5 hover:bg-white/10 text-slate-300 border border-edge">${esc(s)}</button>`).join('');
+      el.querySelectorAll('button').forEach(b=>b.onclick=()=>{$('#msg').value=b.textContent;$('#msg').focus();}); };
     const ctxCap=()=>{ const m=models.find(x=>x.id===MODEL); return (m&&m.context_chars)||(mm.context&&mm.context.history_chars)||32000; };
-    const updateMeter=()=>{ const el=$('#ctxMeter'); if(!el)return; const cap=ctxCap(); const h=chatHistory();
+    const ctxMsgs=()=>MSGS.filter(t=>t.role==='user'?t.text:(t.answer&&!t.error)).map(t=>({role:t.role,content:t.role==='user'?t.text:t.answer}));
+    const updateMeter=()=>{ const el=$('#ctxMeter'); if(!el)return; const cap=ctxCap(); const h=ctxMsgs();
       const chars=h.reduce((a,m)=>a+m.content.length,0); const over=chars>cap;
       el.className='ml-auto text-[11px] '+(over?'text-amber-400':'text-slate-500');
       el.textContent=`ctx ${h.length} msg${h.length===1?'':'s'} · ~${(chars/1000).toFixed(1)}k/${Math.round(cap/1000)}k`; };
-    renderChatLog(); showSuggest(); updateMeter();   // restore this client's saved transcript
-    $('#clearChat').onclick=()=>{ CHAT[chatKey()]=[]; chatSave(); renderChatLog(); showSuggest(); updateMeter(); };
-    $('#compactChat').onclick=async()=>{ const log=chatLog();
-      if(log.length<4){ toast('Not enough conversation to compact yet',false); return; }
-      const keep=2, older=log.slice(0,-keep);
-      const hist=older.filter(t=>t.role==='user'||(t.role==='assistant'&&!t.error&&t.answer)).map(t=>({role:t.role,content:t.role==='user'?t.text:t.answer}));
+    const renderRail=()=>{ const el=$('#convList'); if(!el)return;
+      if(!CONVS.length){ el.innerHTML='<div class="text-[11px] text-slate-600 px-2 py-3">No conversations yet</div>'; return; }
+      el.innerHTML=CONVS.map(c=>{ const active=c.id===CONV;
+        return `<div class="convItem group flex items-center gap-1.5 rounded-lg px-2 py-1.5 cursor-pointer ${active?'bg-white/10':'hover:bg-white/5'}" data-id="${esc(c.id)}">
+          <div class="flex-1 min-w-0">
+            <div class="text-[12px] truncate ${active?'text-slate-100':'text-slate-300'}">${esc(c.title||'New chat')}</div>
+            <div class="text-[10px] text-slate-500 flex items-center gap-1"><span class="truncate">${esc(c.tenant_id==='*'?'all clients':c.tenant_id)}</span><span>·</span><span class="shrink-0">${esc(ago(c.updated_at))}</span></div>
+          </div>
+          <button class="convRen opacity-0 group-hover:opacity-100 text-slate-500 hover:text-accent shrink-0" data-id="${esc(c.id)}" title="Rename"><i data-lucide="pencil" class="text-[11px]"></i></button>
+          <button class="convDel opacity-0 group-hover:opacity-100 text-slate-500 hover:text-rose-400 shrink-0" data-id="${esc(c.id)}" title="Delete chat"><i data-lucide="trash-2" class="text-[12px]"></i></button>
+        </div>`; }).join('');
+      el.querySelectorAll('.convItem').forEach(it=>it.onclick=e=>{ if(e.target.closest('.convDel')||e.target.closest('.convRen'))return; openConv(it.dataset.id); });
+      el.querySelectorAll('.convDel').forEach(b=>b.onclick=e=>{ e.stopPropagation(); delConv(b.dataset.id); });
+      el.querySelectorAll('.convRen').forEach(b=>b.onclick=e=>{ e.stopPropagation(); renConv(b.dataset.id); });
+      icons(); };
+    async function loadMsgs(){ if(!CONV){ MSGS=[]; return; }
+      try{ const conv=await api('GET','/api/conversations/'+CONV); MSGS=(conv.messages||[]).map(normMsg);
+        if(conv.tenant_id&&conv.tenant_id!==TENANT){ TENANT=conv.tenant_id; const ts=$('#tenant'); if(ts)ts.value=TENANT; } }
+      catch(_){ MSGS=[]; CONV=null; } }
+    const openConv=async id=>{ CONV=id; await loadMsgs(); renderChatLog(); showSuggest(); updateMeter(); renderRail();
+      const ip=$('#msg'); if(ip)ip.placeholder=`Ask about ${TENANT==='*'?'all clients':TENANT} …`; };
+    const newChat=()=>{ CONV=null; MSGS=[]; renderChatLog(); showSuggest(); updateMeter(); renderRail(); const ip=$('#msg'); if(ip)ip.focus(); };
+    const delConv=async id=>{ if(!confirm('Delete this chat? This cannot be undone.'))return;
+      try{ await api('DELETE','/api/conversations/'+id); }catch(_){}
+      CONVS=CONVS.filter(c=>c.id!==id); if(CONV===id){ CONV=null; MSGS=[]; }
+      renderRail(); renderChatLog(); showSuggest(); updateMeter(); toast('Chat deleted'); };
+    const renConv=async id=>{ const c=CONVS.find(x=>x.id===id); const t=prompt('Rename chat:',c?c.title:''); if(t===null)return;
+      try{ await api('POST','/api/conversations/'+id+'/rename',{title:t}); }catch(_){ return; }
+      if(c)c.title=(t.trim()||'New chat'); renderRail(); };
+    const refreshConvs=async()=>{ try{ CONVS=(await api('GET','/api/conversations')).conversations||[]; }catch(_){} renderRail(); };
+    $('#model').onchange=e=>{MODEL=e.target.value; updateMeter();};
+    if($('#addModel'))$('#addModel').onclick=()=>route('integrations');
+    if($('#newChat'))$('#newChat').onclick=newChat;
+    if($('#newChatTop'))$('#newChatTop').onclick=newChat;
+    $('#compactChat').onclick=async()=>{ if(!CONV||MSGS.length<4){ toast('Not enough conversation to compact yet',false); return; }
       toast('Compacting…');
-      let r; try{ r=await api('POST','/api/chat/compact',{history:hist,model:MODEL}); }catch(_){ toast('compact failed',false); return; }
-      if(!r||!r.summary){ toast('compact failed',false); return; }
-      CHAT[chatKey()]=[{role:'assistant',answer:'🗜 **Earlier conversation (compacted):**\n'+r.summary,meta:'compacted summary'}, ...log.slice(-keep)];
-      chatSave(); renderChatLog(); showSuggest(); updateMeter(); toast('Conversation compacted'); };
+      let r; try{ r=await api('POST','/api/conversations/'+CONV+'/compact',{model:MODEL}); }catch(_){ toast('compact failed',false); return; }
+      if(!r||!r.messages){ toast('compact failed',false); return; }
+      MSGS=r.messages.map(normMsg); renderChatLog(); showSuggest(); updateMeter(); toast('Conversation compacted'); };
     $('#msgs').addEventListener('click',e=>{ const b=e.target.closest('.open-table'); if(b) openTablePopup(decodeURIComponent(b.dataset.answer)); });
     $('#chatForm').onsubmit=async e=>{e.preventDefault();const m=$('#msg').value.trim();if(!m)return;$('#msg').value='';
-      chatLog().push({role:'user',text:m}); chatSave(); showSuggest(); updateMeter();
+      MSGS.push({role:'user',text:m}); showSuggest(); updateMeter();
       bubble('you',esc(m));const id=bubble('ai','<span class="inline-flex gap-1"><span class="dot">●</span><span class="dot">●</span><span class="dot">●</span></span>');
       document.querySelectorAll('#'+id+' .dot').forEach((d,i)=>{d.style.animation=`blink 1.2s ${i*.2}s infinite`;});
-      try{const r=await api('POST','/api/chat',{tenant:TENANT,message:m,model:MODEL,history:chatHistory()});
+      try{const r=await api('POST','/api/chat',{conversation_id:CONV,tenant:TENANT,message:m,model:MODEL});
+        CONV=r.conversation_id||CONV;
         const turn={role:'assistant',answer:r.answer||'',tools:r.tool_events||[],citations:r.citations||[],meta:`${r.provider}/${r.model} · ${r.rounds} round(s)`};
-        chatLog().push(turn); chatSave(); updateMeter();
+        MSGS.push(turn); updateMeter();
         document.getElementById(id).innerHTML=aiHtml(turn);icons();
-      }catch(_){ chatLog().push({role:'assistant',error:true}); chatSave();
-        document.getElementById(id).innerHTML='<span class="text-rose-400">error</span>';}};icons();
+        refreshConvs();   // pick up the new conversation / auto-title / reorder
+      }catch(_){ MSGS.push({role:'assistant',error:true});
+        document.getElementById(id).innerHTML='<span class="text-rose-400">error</span>';}};
+    renderRail(); await loadMsgs(); renderChatLog(); showSuggest(); updateMeter(); icons();
   },
 
   async integrations(){

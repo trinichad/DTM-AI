@@ -121,6 +121,23 @@ class Api:
         if method == "POST" and path == "/api/chat/compact":
             return Resp(200, {"summary": self.agent.summarize(body.get("history"),
                                                               model_id=body.get("model"))})
+        # ── conversations (per-user persistent chat history) ──
+        if method == "GET" and path == "/api/conversations":
+            return Resp(200, {"conversations": self.agent.conversations.list(user)})
+        if method == "POST" and path == "/api/conversations":
+            return Resp(200, self.agent.conversations.create(
+                user, tenant_id=body.get("tenant") or "*", title=(body.get("title") or "").strip()))
+        if method == "POST" and path.startswith("/api/conversations/") and path.endswith("/rename"):
+            ok = self.agent.conversations.rename(user, path.split("/")[3], body.get("title") or "")
+            return Resp(200, {"ok": True}) if ok else Resp(404, {"error": "conversation not found"})
+        if method == "POST" and path.startswith("/api/conversations/") and path.endswith("/compact"):
+            return self._compact_conversation(path.split("/")[3], body, user)
+        if method == "GET" and path.startswith("/api/conversations/"):
+            conv = self.agent.conversations.get(user, path.split("/")[3])
+            return Resp(200, conv) if conv else Resp(404, {"error": "conversation not found"})
+        if method == "DELETE" and path.startswith("/api/conversations/"):
+            ok = self.agent.conversations.delete(user, path.split("/")[3])
+            return Resp(200, {"ok": True}) if ok else Resp(404, {"error": "conversation not found"})
         if method == "GET" and path == "/api/system/stats":
             from ..core import sysstats
             return Resp(200, sysstats.collect())
@@ -387,14 +404,43 @@ class Api:
         message = (body.get("message") or "").strip()
         if not message:
             return Resp(400, {"error": "message is required"})
-        tenant = body.get("tenant") or "*"
+        convs = self.agent.conversations
         model_id = body.get("model")
+        # Resolve the conversation: reuse the caller's (if they own it) or open a fresh one.
+        conv_id = body.get("conversation_id")
+        if conv_id and convs.owns(user, conv_id):
+            tenant = convs.tenant_of(user, conv_id) or "*"   # the conversation owns its tenant
+        else:
+            tenant = body.get("tenant") or "*"
+            conv_id = convs.create(user, tenant_id=tenant)["id"]
         ctx = ToolContext(tenant_id=tenant, actor=user,
                           allow_cloud=bool(model_id and not model_id.startswith("ollama:")),
                           client_factory=get_client_factory())
-        turn = self.agent.chat(ctx, message, model_id=model_id, history=body.get("history"))
+        # Server-side history is authoritative (the browser no longer holds the transcript).
+        history = convs.history(user, conv_id)
+        convs.add_message(user, conv_id, "user", message)
+        turn = self.agent.chat(ctx, message, model_id=model_id, history=history)
+        convs.add_message(user, conv_id, "assistant", turn.answer, meta={
+            "tools": turn.tool_events, "citations": turn.citations,
+            "label": f"{turn.provider}/{turn.model} · {turn.rounds} round(s)"})
+        title = next((c["title"] for c in convs.list(user) if c["id"] == conv_id), "")
         return Resp(200, {
             "answer": turn.answer, "citations": turn.citations,
             "tool_events": turn.tool_events, "provider": turn.provider,
             "model": turn.model, "rounds": turn.rounds, "tenant": tenant,
+            "conversation_id": conv_id, "title": title,
         })
+
+    def _compact_conversation(self, conv_id: str, body: dict, user: str) -> Resp:
+        convs = self.agent.conversations
+        conv = convs.get(user, conv_id)
+        if not conv:
+            return Resp(404, {"error": "conversation not found"})
+        msgs = conv.get("messages") or []
+        if len(msgs) < 4:
+            return Resp(400, {"error": "not enough conversation to compact yet"})
+        keep = 2
+        older = [{"role": m["role"], "content": m["content"]} for m in msgs[:-keep] if m["content"]]
+        summary = self.agent.summarize(older, model_id=body.get("model"))
+        convs.compact(user, conv_id, summary, keep=keep)
+        return Resp(200, convs.get(user, conv_id))

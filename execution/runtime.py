@@ -12,6 +12,7 @@ from .clients import ClientFactory
 from .core.approvals import ApprovalStore
 from .core.audit import AuditStore
 from .core.capabilities import CapabilityStore
+from .core.conversations import ConversationStore
 from .core.config import Config, get_config
 from .core.context import ToolContext
 from .core.gates import ConfigurableApprovalGate
@@ -35,6 +36,7 @@ def build_agent(cfg: Optional[Config] = None, db_path: Optional[Path] = None) ->
     audit = AuditStore(db_path)                  # sqlite dev / (porting target: postgres prod)
     caps = CapabilityStore(db_path)              # the Capability Console's policy store
     approvals = ApprovalStore(db_path)           # write-action approval workflow
+    conversations = ConversationStore(db_path)   # per-user persistent chat history (multi-chat)
     router = ModelRouter(cfg)
     # Read-only by DEFAULT (no capability rows -> allow_write False everywhere), but now
     # tunable per tool via the Capability Console as trust is earned. Safety floors live
@@ -50,6 +52,7 @@ def build_agent(cfg: Optional[Config] = None, db_path: Optional[Path] = None) ->
     agent = Agent(registry, audit, router, gate=gate)
     agent.caps = caps                            # expose for the console/CLI
     agent.approvals = approvals                  # expose for the approval API + agent dispatch
+    agent.conversations = conversations          # expose for the chat-history API
     return agent
 
 
