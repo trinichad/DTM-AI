@@ -72,6 +72,24 @@ def _make_handler(api: Api, signer: SessionSigner, secure_cookie: bool):
             self.end_headers()
             self.wfile.write(body)
 
+        def _send_stream(self, events) -> None:
+            """Stream Server-Sent Events. Connection: close + no Content-Length, so the browser's
+            fetch() reader consumes frames until EOF. Each event is a `data: {json}\\n\\n` frame."""
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Accel-Buffering", "no")   # tell nginx not to buffer the stream
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            try:
+                for ev in events:
+                    frame = f"data: {json.dumps(ev, default=str)}\n\n".encode()
+                    self.wfile.write(frame)
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass   # client navigated away mid-stream — fine
+
         def _send_html(self) -> None:
             try:
                 body = _DASHBOARD.read_bytes()
@@ -107,6 +125,13 @@ def _make_handler(api: Api, signer: SessionSigner, secure_cookie: bool):
             parsed = urlparse(self.path)
             if not parsed.path.startswith("/api/"):
                 self._send_json(Resp(404, {"error": "not found"}))
+                return
+            if parsed.path == "/api/chat/stream":          # streaming chat (SSE), auth-gated
+                user = self._user()
+                if not user:
+                    self._send_json(Resp(401, {"error": "authentication required"}))
+                    return
+                self._send_stream(api.stream_chat(self._body(), user))
                 return
             self._send_json(api.handle("POST", parsed.path, {}, self._body(), self._user()))
 

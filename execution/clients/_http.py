@@ -68,6 +68,46 @@ def http_json(
         raise HttpError(e.code, raw) from e
 
 
+def http_stream(
+    method: str,
+    url: str,
+    headers: Optional[dict[str, str]] = None,
+    params: Optional[dict[str, Any]] = None,
+    json_body: Optional[Any] = None,
+    *,
+    timeout: float = 120.0,
+    verify_tls: bool = True,
+):
+    """Stream a response line-by-line (yields decoded text lines, blanks dropped).
+
+    For incremental LLM responses: Ollama emits newline-delimited JSON, Anthropic/OpenAI emit
+    SSE (`data: {...}` lines). The caller parses each line per its provider. Like http_json, the
+    transport is injectable so providers can be unit-tested with a canned line iterator.
+    """
+    if params:
+        url = f"{url}?{urllib.parse.urlencode(params, doseq=True)}"
+    data = None
+    hdrs = dict(headers or {})
+    if json_body is not None:
+        data = json.dumps(json_body).encode("utf-8")
+        hdrs.setdefault("Content-Type", "application/json")
+    hdrs.setdefault("Accept", "text/event-stream, application/x-ndjson, application/json")
+    req = urllib.request.Request(url, data=data, headers=hdrs, method=method.upper())
+    ctx = ssl.create_default_context()
+    if not verify_tls:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:  # noqa: S310
+            for raw in resp:                       # urllib responses iterate by line
+                line = raw.decode("utf-8", "replace").rstrip("\r\n")
+                if line:
+                    yield line
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", "replace") if e.fp else ""
+        raise HttpError(e.code, raw) from e
+
+
 # ── JWT HS256 (replaces the hand-rolled signer; small + tested) ─────────────
 def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")

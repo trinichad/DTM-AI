@@ -6,10 +6,11 @@ session (fail-closed). All mutations are audited via dispatch()/the stores.
 """
 from __future__ import annotations
 
+import queue
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from ..agent import Agent
 from ..core import credentials
@@ -430,6 +431,63 @@ class Api:
             "model": turn.model, "rounds": turn.rounds, "tenant": tenant,
             "conversation_id": conv_id, "title": title,
         })
+
+    def stream_chat(self, body: dict, user: str) -> Iterator[dict]:
+        """SSE event generator for streaming chat. Yields dicts (the server frames them as
+        `data: {json}`). Mirrors _chat's persistence + tenant binding. The agent's push-callback
+        is bridged to this pull-generator via a queue + worker thread so events flow in real time.
+        Event types: start · tool_call · tool_result · delta · answer · error."""
+        message = (body.get("message") or "").strip()
+        if not message:
+            yield {"type": "error", "error": "message is required"}
+            return
+        convs = self.agent.conversations
+        model_id = body.get("model")
+        conv_id = body.get("conversation_id")
+        if conv_id and convs.owns(user, conv_id):
+            tenant = convs.tenant_of(user, conv_id) or "*"
+        else:
+            tenant = body.get("tenant") or "*"
+            conv_id = convs.create(user, tenant_id=tenant)["id"]
+        prior = convs.history(user, conv_id)
+        convs.add_message(user, conv_id, "user", message)
+        yield {"type": "start", "conversation_id": conv_id, "tenant": tenant}
+
+        q: "queue.Queue" = queue.Queue()
+        DONE = object()
+        result: dict = {}
+
+        def run():
+            try:
+                ctx = ToolContext(
+                    tenant_id=tenant, actor=user,
+                    allow_cloud=bool(model_id and not model_id.startswith("ollama:")),
+                    client_factory=get_client_factory())
+                result["turn"] = self.agent.chat_stream(
+                    ctx, message, lambda e: q.put(e), model_id=model_id, history=prior)
+            except Exception as e:                       # contained; surfaced as an SSE error frame
+                result["error"] = str(e)
+            finally:
+                q.put(DONE)
+
+        threading.Thread(target=run, daemon=True).start()
+        while True:
+            ev = q.get()
+            if ev is DONE:
+                break
+            yield ev
+
+        if "error" in result:
+            yield {"type": "error", "error": result["error"]}
+            return
+        turn = result["turn"]
+        convs.add_message(user, conv_id, "assistant", turn.answer, meta={
+            "tools": turn.tool_events, "citations": turn.citations,
+            "label": f"{turn.provider}/{turn.model} · {turn.rounds} round(s)"})
+        title = next((c["title"] for c in convs.list(user) if c["id"] == conv_id), "")
+        yield {"type": "answer", "answer": turn.answer, "citations": turn.citations,
+               "tool_events": turn.tool_events, "provider": turn.provider, "model": turn.model,
+               "rounds": turn.rounds, "tenant": tenant, "conversation_id": conv_id, "title": title}
 
     def _compact_conversation(self, conv_id: str, body: dict, user: str) -> Resp:
         convs = self.agent.conversations

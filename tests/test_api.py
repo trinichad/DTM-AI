@@ -94,6 +94,24 @@ class WebApi(unittest.TestCase):
         self.assertEqual(self.H("DELETE", f"/api/conversations/{cid}", user="admin").status, 200)
         self.assertEqual(self.H("GET", "/api/conversations", user="admin").payload["conversations"], [])
 
+    def test_stream_chat_emits_events_and_persists(self):
+        events = list(self.api.stream_chat({"tenant": "acme", "message": "status?"}, "admin"))
+        types = [e["type"] for e in events]
+        self.assertEqual(types[0], "start")              # first frame announces the conversation
+        self.assertEqual(types[-1], "answer")            # last frame carries the canonical answer
+        self.assertIn("delta", types)                    # streamed at least one token
+        final = events[-1]
+        cid = final["conversation_id"]
+        self.assertTrue(cid)
+        # the streamed turn was persisted just like the non-streaming path
+        msgs = self.H("GET", f"/api/conversations/{cid}", user="admin").payload["messages"]
+        self.assertEqual([m["role"] for m in msgs], ["user", "assistant"])
+        self.assertEqual(msgs[1]["content"], final["answer"])
+
+    def test_stream_chat_requires_message(self):
+        events = list(self.api.stream_chat({"tenant": "acme"}, "admin"))
+        self.assertEqual(events, [{"type": "error", "error": "message is required"}])
+
     def test_fleet_counts_structure(self):
         self.assertEqual(self.H("GET", "/api/fleet").status, 401)         # auth gated
         r = self.H("GET", "/api/fleet", user="admin")

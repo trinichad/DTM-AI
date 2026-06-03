@@ -134,3 +134,19 @@ owner says "deploy". We keep building the clean code in the meantime. (locked; d
   (locked)
 - **D-9 secret management** — defaulting to SOPS-encrypted env / OS keyring + 0600 + fingerprints for v1
   unless user names an existing vault. (assumed; flag if wrong)
+
+## Streaming chat (2026-06-03)
+
+**D-16 — Stream chat over Server-Sent Events (SSE), not raw WebSocket.**
+The constitution's stack table (§6) lists WebSocket for the chat stream. For streaming a chat answer
+the data flows only server→browser (the user sends the message via a normal POST; tokens + tool events
+stream back), which is exactly SSE. Implementing RFC-6455 WebSocket framing by hand in the stdlib
+`http.server` (no deps) is fragile and far more code; SSE is a few lines over the existing server and
+robust. Chosen for the same "no deps, hard to break, runs identically dev+prod" reason the whole web
+layer is stdlib. Implementation: `POST /api/chat/stream` returns `text/event-stream` with
+`Connection: close` + `X-Accel-Buffering: no` (so nginx doesn't buffer); the browser reads frames via
+`fetch().body.getReader()`. Provider token streaming for Ollama (NDJSON) and Claude (Anthropic SSE);
+OpenAI/Mock fall back to whole-answer (later refinement). The agent's push-callback is bridged to the
+SSE pull-generator via a queue + worker thread. **If true bidirectional WS is later needed for
+server-pushed alerts, SSE-for-chat does not preclude adding it.** (locked; supersedes the §6 "WebSocket"
+note for chat)

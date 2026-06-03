@@ -170,6 +170,84 @@ class Agent:
         turn.citations = citations
         return turn
 
+    def _stream_provider(self, provider, messages, tools, model, emit_delta) -> ChatResult:
+        try:
+            return provider.chat_stream(messages, tools, model, emit_delta)
+        except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
+            if getattr(self.router, "_allow_mock_fallback", False):
+                return self.router.mock().chat_stream(messages, tools, model, emit_delta)
+            raise RuntimeError(f"LLM provider '{provider.name}' unreachable: {e}") from e
+
+    def chat_stream(
+        self,
+        ctx: ToolContext,
+        message: str,
+        emit,
+        *,
+        provider=None,
+        model_id: Optional[str] = None,
+        approval_token: Optional[str] = None,
+        history: Optional[list] = None,
+    ) -> AgentTurn:
+        """Same bounded loop as chat(), but streams progress via emit(event: dict):
+          {"type":"tool_call","name","category"} · {"type":"tool_result","name","ok","source"}
+          {"type":"delta","text"}   ← incremental answer tokens
+        Returns the final AgentTurn (the caller persists it + emits the canonical 'answer')."""
+        if provider is None:
+            provider, model = self.router.resolve(model_id)
+        else:
+            model = (model_id.split(":", 1)[-1] if model_id and ":" in model_id
+                     else (model_id or getattr(provider, "name", "mock")))
+        tools = self._enabled_tool_specs()
+        budget = (self.router.budget_for(getattr(provider, "name", "ollama"))
+                  if hasattr(self.router, "budget_for")
+                  else getattr(self.router, "history_chars", MAX_HISTORY_CHARS))
+        messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages.extend(clean_history(history, getattr(self.router, "history_msgs", MAX_HISTORY_MSGS), budget))
+        messages.append({"role": "user", "content": message})
+        turn = AgentTurn(answer="", provider=getattr(provider, "name", "?"), model=model)
+        citations: list[str] = []
+        delta = lambda t: emit({"type": "delta", "text": t})  # noqa: E731
+
+        for rnd in range(self.max_rounds):
+            turn.rounds = rnd + 1
+            result = self._stream_provider(provider, messages, tools, model, delta)
+            if not result.tool_calls:
+                turn.answer = result.content or ""
+                turn.citations = citations
+                return turn
+            calls = []
+            for i, call in enumerate(result.tool_calls):
+                raw_args = call.get("arguments", {})
+                if isinstance(raw_args, str):
+                    try:
+                        raw_args = json.loads(raw_args)
+                    except json.JSONDecodeError:
+                        raw_args = {}
+                calls.append({"id": call.get("id") or f"call_{rnd}_{i}",
+                              "name": call.get("name", ""), "arguments": raw_args})
+            messages.append({"role": "assistant", "content": result.content or "", "tool_calls": calls})
+            for call in calls:
+                name = call["name"]
+                emit({"type": "tool_call", "name": name})
+                envelope = dispatch(
+                    registry=self.registry, audit=self.audit, ctx=ctx,
+                    name=name, args=call["arguments"], approval_token=approval_token, gate=self.gate,
+                    approvals=getattr(self, "approvals", None),
+                )
+                if envelope["ok"]:
+                    citations.append(f"{name}@{ctx.tenant_id}")
+                turn.tool_events.append({"name": name, "ok": envelope["ok"],
+                                         "category": envelope.get("source")})
+                emit({"type": "tool_result", "name": name, "ok": envelope["ok"],
+                      "source": envelope.get("source")})
+                payload = json.dumps(envelope, default=str)[:MAX_RESULT_CHARS]
+                messages.append({"role": "tool", "tool_call_id": call["id"], "name": name, "content": payload})
+
+        turn.answer = "Reached the tool-call limit without a final answer."
+        turn.citations = citations
+        return turn
+
     def summarize(self, history: Optional[list], *, model_id: Optional[str] = None) -> str:
         """Compact a conversation into a concise summary (no tools) so chat can continue with the
         key context preserved instead of oldest turns being dropped. Used by the UI 'Compact' button."""

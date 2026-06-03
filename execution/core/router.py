@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from .config import Config, get_config
-from ..clients._http import HttpError, http_json
+from ..clients._http import HttpError, http_json, http_stream
 
 
 @dataclass
@@ -55,18 +55,26 @@ class MockProvider:
         last = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
         return ChatResult(f"[mock:{model}] {last}", [], self.name, model, True)
 
+    def chat_stream(self, messages, tools, model, emit) -> ChatResult:
+        res = self.chat(messages, tools, model)
+        if res.content and not res.tool_calls:
+            emit(res.content)          # no real streaming; deliver the whole answer once
+        return res
+
 
 # ── Ollama (local) ──────────────────────────────────────────────────────────
 class OllamaProvider:
     name = "ollama"
     is_local = True
 
-    def __init__(self, base_url: str, transport: Callable = http_json, num_ctx: int = 0) -> None:
+    def __init__(self, base_url: str, transport: Callable = http_json, num_ctx: int = 0,
+                 stream_transport: Callable = http_stream) -> None:
         self.base_url = base_url.rstrip("/")
         self._t = transport
+        self._st = stream_transport
         self.num_ctx = num_ctx  # Ollama context window (tokens); 0 = use Ollama's own default
 
-    def chat(self, messages, tools, model) -> ChatResult:
+    def _wire(self, messages: list[dict]) -> list[dict]:
         wire = []
         for m in messages:
             r = m.get("role")
@@ -80,17 +88,43 @@ class OllamaProvider:
                 wire.append(msg)
             elif r == "tool":
                 wire.append({"role": "tool", "content": m.get("content", "")})
-        payload = {"model": model, "messages": wire, "stream": False}
+        return wire
+
+    def _payload(self, messages, tools, model, *, stream: bool) -> dict:
+        payload = {"model": model, "messages": self._wire(messages), "stream": stream}
         if self.num_ctx:
             payload["options"] = {"num_ctx": self.num_ctx}   # widen the model's context window
         if tools:
             payload["tools"] = tools
+        return payload
+
+    def chat(self, messages, tools, model) -> ChatResult:
+        payload = self._payload(messages, tools, model, stream=False)
         _s, data = self._t("POST", f"{self.base_url}/api/chat", json_body=payload, timeout=120)
         msg = (data or {}).get("message", {}) or {}
         calls = [{"name": tc.get("function", {}).get("name"),
                   "arguments": tc.get("function", {}).get("arguments", {})}
                  for tc in (msg.get("tool_calls") or [])]
         return ChatResult(msg.get("content", ""), calls, self.name, model, True)
+
+    def chat_stream(self, messages, tools, model, emit) -> ChatResult:
+        """Stream via Ollama's newline-delimited JSON: each line carries a message.content delta."""
+        payload = self._payload(messages, tools, model, stream=True)
+        content, calls = "", []
+        for line in self._st("POST", f"{self.base_url}/api/chat", json_body=payload, timeout=120):
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            msg = obj.get("message") or {}
+            piece = msg.get("content") or ""
+            if piece:
+                content += piece
+                emit(piece)
+            for tc in msg.get("tool_calls") or []:
+                fn = tc.get("function", {})
+                calls.append({"name": fn.get("name"), "arguments": fn.get("arguments", {})})
+        return ChatResult(content, calls, self.name, model, True)
 
 
 # ── OpenAI (+ OpenAI-compatible) ────────────────────────────────────────────
@@ -139,6 +173,13 @@ class OpenAIProvider:
             calls.append({"id": tc.get("id"), "name": fn.get("name"), "arguments": args})
         return ChatResult(choice.get("content") or "", calls, self.name, model, self.is_local)
 
+    def chat_stream(self, messages, tools, model, emit) -> ChatResult:
+        # OpenAI streaming (incl. tool-call deltas) is a later refinement; deliver whole answer for now.
+        res = self.chat(messages, tools, model)
+        if res.content and not res.tool_calls:
+            emit(res.content)
+        return res
+
 
 # ── Claude (Anthropic Messages API) ─────────────────────────────────────────
 class ClaudeProvider:
@@ -146,12 +187,14 @@ class ClaudeProvider:
     is_local = False
 
     def __init__(self, api_key: str, transport: Callable = http_json,
-                 base_url: str = "https://api.anthropic.com/v1") -> None:
+                 base_url: str = "https://api.anthropic.com/v1",
+                 stream_transport: Callable = http_stream) -> None:
         self._key = api_key
         self.base_url = base_url.rstrip("/")
         self._t = transport
+        self._st = stream_transport
 
-    def chat(self, messages, tools, model) -> ChatResult:
+    def _build_body(self, messages, tools, model, *, stream: bool) -> dict:
         sys_text = _system_text(messages)
         wire: list[dict[str, Any]] = []
         pending_tool_results: list[dict[str, Any]] = []
@@ -184,13 +227,23 @@ class ClaudeProvider:
         flush_tools()
 
         body: dict[str, Any] = {"model": model, "max_tokens": 1500, "messages": wire}
+        if stream:
+            body["stream"] = True
         if sys_text:
             body["system"] = sys_text
         if tools:
             body["tools"] = [{"name": t["function"]["name"], "description": t["function"]["description"],
                               "input_schema": t["function"]["parameters"]} for t in tools]
+        return body
+
+    @property
+    def _headers(self) -> dict[str, str]:
+        return {"x-api-key": self._key, "anthropic-version": "2023-06-01"}
+
+    def chat(self, messages, tools, model) -> ChatResult:
+        body = self._build_body(messages, tools, model, stream=False)
         _s, data = self._t("POST", f"{self.base_url}/messages", json_body=body, timeout=120,
-                           headers={"x-api-key": self._key, "anthropic-version": "2023-06-01"})
+                           headers=self._headers)
         content, calls = "", []
         for block in (data or {}).get("content", []) or []:
             if block.get("type") == "text":
@@ -198,6 +251,47 @@ class ClaudeProvider:
             elif block.get("type") == "tool_use":
                 calls.append({"id": block.get("id"), "name": block.get("name"),
                               "arguments": block.get("input", {})})
+        return ChatResult(content, calls, self.name, model, False)
+
+    def chat_stream(self, messages, tools, model, emit) -> ChatResult:
+        """Stream Anthropic SSE: text_delta chunks emit live; tool_use input_json_delta is
+        accumulated per content block and parsed at block stop."""
+        body = self._build_body(messages, tools, model, stream=True)
+        content = ""
+        calls: list[dict[str, Any]] = []
+        blocks: dict[int, dict[str, Any]] = {}   # index -> {type, id?, name?, json_buf}
+        for line in self._st("POST", f"{self.base_url}/messages", json_body=body, timeout=120,
+                             headers=self._headers):
+            if not line.startswith("data:"):
+                continue
+            try:
+                ev = json.loads(line[5:].strip())
+            except json.JSONDecodeError:
+                continue
+            etype = ev.get("type")
+            if etype == "content_block_start":
+                blk = ev.get("content_block") or {}
+                blocks[ev.get("index", 0)] = {"type": blk.get("type"), "id": blk.get("id"),
+                                              "name": blk.get("name"), "json": ""}
+            elif etype == "content_block_delta":
+                d = ev.get("delta") or {}
+                if d.get("type") == "text_delta":
+                    piece = d.get("text", "")
+                    if piece:
+                        content += piece
+                        emit(piece)
+                elif d.get("type") == "input_json_delta":
+                    b = blocks.get(ev.get("index", 0))
+                    if b is not None:
+                        b["json"] += d.get("partial_json", "")
+            elif etype == "content_block_stop":
+                b = blocks.get(ev.get("index", 0))
+                if b and b.get("type") == "tool_use":
+                    try:
+                        args = json.loads(b["json"]) if b["json"].strip() else {}
+                    except json.JSONDecodeError:
+                        args = {}
+                    calls.append({"id": b.get("id"), "name": b.get("name"), "arguments": args})
         return ChatResult(content, calls, self.name, model, False)
 
 

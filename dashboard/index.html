@@ -421,18 +421,43 @@ const VIEWS={
       if(!r||!r.messages){ toast('compact failed',false); return; }
       MSGS=r.messages.map(normMsg); renderChatLog(); showSuggest(); updateMeter(); toast('Conversation compacted'); };
     $('#msgs').addEventListener('click',e=>{ const b=e.target.closest('.open-table'); if(b) openTablePopup(decodeURIComponent(b.dataset.answer)); });
+    // live tool chips while streaming (pending = neutral, then green/red on result)
+    const toolChips=ts=>!ts.length?'':`<div class="mt-2 flex flex-wrap gap-1">`+ts.map(x=>{
+      const cls=x.ok===null?'bg-white/10 text-slate-300':x.ok?'bg-emerald-500/15 text-emerald-300':'bg-rose-500/15 text-rose-300';
+      const ic=x.ok===null?'loader-circle':x.ok?'check':'x';
+      return `<span class="pill ${cls} inline-flex items-center gap-1"><i data-lucide="${ic}" class="text-[11px] ${x.ok===null?'animate-spin':''}"></i>${esc(x.name)}</span>`;
+    }).join('')+`</div>`;
+    const DOTS='<span class="inline-flex gap-1"><span class="dot">●</span><span class="dot">●</span><span class="dot">●</span></span>';
     $('#chatForm').onsubmit=async e=>{e.preventDefault();const m=$('#msg').value.trim();if(!m)return;$('#msg').value='';
       MSGS.push({role:'user',text:m}); showSuggest(); updateMeter();
-      bubble('you',esc(m));const id=bubble('ai','<span class="inline-flex gap-1"><span class="dot">●</span><span class="dot">●</span><span class="dot">●</span></span>');
-      document.querySelectorAll('#'+id+' .dot').forEach((d,i)=>{d.style.animation=`blink 1.2s ${i*.2}s infinite`;});
-      try{const r=await api('POST','/api/chat',{conversation_id:CONV,tenant:TENANT,message:m,model:MODEL});
-        CONV=r.conversation_id||CONV;
-        const turn={role:'assistant',answer:r.answer||'',tools:r.tool_events||[],citations:r.citations||[],meta:`${r.provider}/${r.model} · ${r.rounds} round(s)`};
-        MSGS.push(turn); updateMeter();
-        document.getElementById(id).innerHTML=aiHtml(turn);icons();
-        refreshConvs();   // pick up the new conversation / auto-title / reorder
-      }catch(_){ MSGS.push({role:'assistant',error:true});
-        document.getElementById(id).innerHTML='<span class="text-rose-400">error</span>';}};
+      bubble('you',esc(m));const id=bubble('ai',DOTS);
+      const el=()=>document.getElementById(id);
+      let acc='', tools=[], finalTurn=null;
+      const renderLive=()=>{ const e=el(); if(!e)return;
+        e.innerHTML=(acc?md(acc):DOTS)+toolChips(tools); icons(); $('#msgs').scrollTop=1e9; };
+      try{
+        const resp=await fetch('/api/chat/stream',{method:'POST',credentials:'same-origin',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({conversation_id:CONV,tenant:TENANT,message:m,model:MODEL})});
+        if(resp.status===401){ showLogin(); throw new Error('auth'); }
+        if(!resp.body) throw new Error('no stream');
+        const reader=resp.body.getReader(), dec=new TextDecoder(); let buf='';
+        while(true){ const {value,done}=await reader.read(); if(done)break;
+          buf+=dec.decode(value,{stream:true}); let i;
+          while((i=buf.indexOf('\n\n'))>=0){ const line=buf.slice(0,i).replace(/^data: ?/,''); buf=buf.slice(i+2);
+            if(!line)continue; let ev; try{ev=JSON.parse(line);}catch(_){continue;}
+            if(ev.type==='start'){ CONV=ev.conversation_id||CONV; }
+            else if(ev.type==='delta'){ acc+=ev.text; renderLive(); }
+            else if(ev.type==='tool_call'){ tools.push({name:ev.name,ok:null}); renderLive(); }
+            else if(ev.type==='tool_result'){ const t=tools.find(x=>x.name===ev.name&&x.ok===null); if(t)t.ok=ev.ok; else tools.push({name:ev.name,ok:ev.ok}); renderLive(); }
+            else if(ev.type==='answer'){ finalTurn={role:'assistant',answer:ev.answer||acc,tools:ev.tool_events||[],citations:ev.citations||[],meta:`${ev.provider}/${ev.model} · ${ev.rounds} round(s)`}; }
+            else if(ev.type==='error'){ throw new Error(ev.error||'stream error'); }
+          }
+        }
+        const turn=finalTurn||{role:'assistant',answer:acc,tools:tools.map(t=>({name:t.name,ok:t.ok}))};
+        MSGS.push(turn); const e=el(); if(e){ e.innerHTML=aiHtml(turn); icons(); }
+        updateMeter(); refreshConvs();   // pick up new conversation / auto-title / reorder
+      }catch(_){ MSGS.push({role:'assistant',error:true}); const e=el(); if(e)e.innerHTML='<span class="text-rose-400">error</span>'; }};
     renderRail(); await loadMsgs(); renderChatLog(); showSuggest(); updateMeter(); icons();
   },
 

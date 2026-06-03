@@ -5,7 +5,8 @@ import unittest
 from pathlib import Path
 
 from execution.core.config import Config
-from execution.core.router import ClaudeProvider, ModelRouter, OpenAIProvider, OllamaProvider
+from execution.core.router import (ClaudeProvider, MockProvider, ModelRouter,
+                                    OpenAIProvider, OllamaProvider)
 
 NEUTRAL = [
     {"role": "system", "content": "be helpful"},
@@ -85,6 +86,53 @@ class Claude(unittest.TestCase):
         res = ClaudeProvider("k", transport=fake).chat(NEUTRAL, TOOLS, "claude-opus-4-8")
         self.assertEqual(res.tool_calls[0]["id"], "t1")
         self.assertFalse(res.is_local)
+
+
+class Streaming(unittest.TestCase):
+    def test_ollama_ndjson_stream(self):
+        def st(method, url, headers=None, params=None, json_body=None, timeout=120):
+            self.assertTrue(json_body["stream"])
+            for l in ['{"message":{"content":"Hel"}}', '{"message":{"content":"lo"}}',
+                      '{"message":{"content":""},"done":true}']:
+                yield l
+        deltas = []
+        res = OllamaProvider("http://x", stream_transport=st).chat_stream(
+            [{"role": "user", "content": "hi"}], [], "m", lambda t: deltas.append(t))
+        self.assertEqual(deltas, ["Hel", "lo"])
+        self.assertEqual(res.content, "Hello")
+
+    def test_ollama_stream_tool_calls(self):
+        def st(method, url, headers=None, params=None, json_body=None, timeout=120):
+            yield ('{"message":{"content":"","tool_calls":'
+                   '[{"function":{"name":"kaseya_list_assets","arguments":{}}}]},"done":true}')
+        res = OllamaProvider("http://x", stream_transport=st).chat_stream([], [], "m", lambda t: None)
+        self.assertEqual(res.tool_calls[0]["name"], "kaseya_list_assets")
+
+    def test_claude_sse_stream_text_and_tooluse(self):
+        lines = [
+            'data: {"type":"content_block_start","index":0,"content_block":{"type":"text"}}',
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"42 "}}',
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"assets"}}',
+            'data: {"type":"content_block_stop","index":0}',
+            'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"t1","name":"kaseya_list_assets"}}',
+            'data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"a\\":1}"}}',
+            'data: {"type":"content_block_stop","index":1}',
+            'data: {"type":"message_stop"}',
+        ]
+        def st(method, url, headers=None, params=None, json_body=None, timeout=120):
+            self.assertTrue(json_body["stream"])
+            yield from lines
+        deltas = []
+        res = ClaudeProvider("k", stream_transport=st).chat_stream(
+            [{"role": "user", "content": "hi"}], [], "claude-opus-4-8", lambda t: deltas.append(t))
+        self.assertEqual("".join(deltas), "42 assets")
+        self.assertEqual(res.tool_calls[0]["name"], "kaseya_list_assets")
+        self.assertEqual(res.tool_calls[0]["arguments"], {"a": 1})
+
+    def test_mock_stream_emits_whole(self):
+        got = []
+        res = MockProvider().chat_stream([{"role": "user", "content": "hey"}], [], "m", lambda t: got.append(t))
+        self.assertEqual(got, [res.content])
 
 
 class Routing(unittest.TestCase):
