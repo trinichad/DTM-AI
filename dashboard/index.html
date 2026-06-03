@@ -194,7 +194,8 @@ function openTablePopup(text){
   w.document.close();
 }
 function aiHtml(t){ let h=md(t.answer||'');
-  if(t.answer&&hasTable(t.answer)) h+=`<button class="open-table mt-2 text-[11px] text-accent hover:underline inline-flex items-center gap-1" data-answer="${encodeURIComponent(t.answer)}"><i data-lucide="external-link" class="text-[11px]"></i> Open / export table</button>`;
+  if(t.answer&&hasTable(t.answer)){ const _n=parseTables(t.answer).length;
+    h+=`<div class="mt-2.5"><button class="open-table inline-flex items-center gap-1.5 text-xs font-semibold grad text-white rounded-lg px-3.5 py-2 shadow-lg shadow-indigo-500/25 hover:brightness-110" data-answer="${encodeURIComponent(t.answer)}"><i data-lucide="table" class="text-[14px]"></i> Open formatted table${_n>1?`s (${_n})`:''}<span class="opacity-80 font-normal">· export CSV / Excel / PDF</span></button></div>`; }
   if(t.tools&&t.tools.length) h+=`<div class="mt-2 flex flex-wrap gap-1">`+t.tools.map(x=>
     `<span class="pill ${x.ok?'bg-emerald-500/15 text-emerald-300':'bg-rose-500/15 text-rose-300'} inline-flex items-center gap-1"><i data-lucide="${x.ok?'check':'x'}" class="text-[11px]"></i>${esc(x.name)}</span>`).join('')+`</div>`;
   if(t.citations&&t.citations.length) h+=`<div class="text-[11px] text-slate-500 mt-1.5 flex items-center gap-1"><i data-lucide="link"></i>${t.citations.map(esc).join(', ')}</div>`;
