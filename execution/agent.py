@@ -35,6 +35,31 @@ You help DTM technicians inspect client IT environments. Hard rules:
   tenant is explicitly "*" for a cross-client read.
 Use the provided tools to answer. Prefer calling a tool over guessing."""
 
+# Conversation-context guard ("compaction"): cap how much prior history re-enters the model so a
+# long chat never overflows the (often small) local context window. Keep the most recent turns and
+# trim the oldest past a char budget. Done in code so the user never has to manage it manually.
+MAX_HISTORY_MSGS = 20
+MAX_HISTORY_CHARS = 6000
+
+
+def clean_history(history: Optional[list]) -> list[dict[str, str]]:
+    """Validate + bound caller-supplied chat history to user/assistant text turns."""
+    if not history:
+        return []
+    out: list[dict[str, str]] = []
+    for h in history:
+        if not isinstance(h, dict):
+            continue
+        role, content = h.get("role"), h.get("content")
+        if role in ("user", "assistant") and isinstance(content, str) and content.strip():
+            out.append({"role": role, "content": content})
+    out = out[-MAX_HISTORY_MSGS:]
+    total = sum(len(m["content"]) for m in out)
+    while len(out) > 1 and total > MAX_HISTORY_CHARS:
+        total -= len(out[0]["content"])
+        out.pop(0)
+    return out
+
 
 @dataclass
 class AgentTurn:
@@ -87,6 +112,7 @@ class Agent:
         provider=None,
         model_id: Optional[str] = None,
         approval_token: Optional[str] = None,
+        history: Optional[list] = None,
     ) -> AgentTurn:
         if provider is None:
             provider, model = self.router.resolve(model_id)
@@ -95,10 +121,9 @@ class Agent:
                      else (model_id or getattr(provider, "name", "mock")))
 
         tools = self._enabled_tool_specs()
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": message},
-        ]
+        messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages.extend(clean_history(history))   # prior turns → real conversation context
+        messages.append({"role": "user", "content": message})
         turn = AgentTurn(answer="", provider=getattr(provider, "name", "?"), model=model)
         citations: list[str] = []
 

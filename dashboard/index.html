@@ -123,6 +123,23 @@ const SUB={overview:'Live health across your clients',chat:'Ask about a client �
   approvals:'Write actions awaiting your sign-off',build:'Draft new tools — sandboxed, you approve',
   audit:'Every action, logged',settings:'Account & users'};
 let ME=null, MODEL='';
+// Chat transcripts persist in the browser (per client) until explicitly cleared — never on the server.
+let CHAT={}; try{ CHAT=JSON.parse(localStorage.getItem('dtm_chat')||'{}')||{}; }catch(_){ CHAT={}; }
+const chatKey=()=>TENANT||'*';
+const chatLog=()=>(CHAT[chatKey()]=CHAT[chatKey()]||[]);
+function chatSave(){ try{ localStorage.setItem('dtm_chat',JSON.stringify(CHAT)); }catch(_){} }
+// Recent prior turns sent as context so the assistant remembers the conversation (capped; backend re-caps).
+function chatHistory(){ return chatLog().slice(0,-1).filter(t=>t.role==='user'||(t.role==='assistant'&&!t.error&&t.answer))
+  .map(t=>({role:t.role,content:t.role==='user'?t.text:t.answer})).slice(-20); }
+function aiHtml(t){ let h=esc(t.answer||'');
+  if(t.tools&&t.tools.length) h+=`<div class="mt-2 flex flex-wrap gap-1">`+t.tools.map(x=>
+    `<span class="pill ${x.ok?'bg-emerald-500/15 text-emerald-300':'bg-rose-500/15 text-rose-300'} inline-flex items-center gap-1"><i data-lucide="${x.ok?'check':'x'}" class="text-[11px]"></i>${esc(x.name)}</span>`).join('')+`</div>`;
+  if(t.citations&&t.citations.length) h+=`<div class="text-[11px] text-slate-500 mt-1.5 flex items-center gap-1"><i data-lucide="link"></i>${t.citations.map(esc).join(', ')}</div>`;
+  if(t.meta) h+=`<div class="text-[11px] text-slate-600 mt-1">${esc(t.meta)}</div>`;
+  return h; }
+function renderChatLog(){ const box=$('#msgs'); if(!box)return; box.innerHTML='';
+  for(const t of chatLog()) bubble(t.role==='user'?'you':'ai', t.role==='user'?esc(t.text):(t.error?'<span class="text-rose-400">error</span>':aiHtml(t)));
+  box.scrollTop=1e9; icons(); }
 
 function icons(){ if(window.lucide) lucide.createIcons(); }
 async function api(m,p,b){const r=await fetch(p,{method:m,credentials:'same-origin',
@@ -218,6 +235,7 @@ const VIEWS={
           ${models.map(m=>`<option value="${esc(m.id)}" ${m.id===MODEL?'selected':''}>${esc(m.label)}${m.local?'':' ☁'}</option>`).join('')}
         </select>
         ${models.length<2?`<a class="text-[11px] text-slate-500 hover:text-slate-300 cursor-pointer" id="addModel">+ add a cloud model</a>`:''}
+        <button id="clearChat" class="ml-auto text-[11px] text-slate-500 hover:text-rose-300 inline-flex items-center gap-1" title="Clear this client's chat history"><i data-lucide="trash-2" class="text-[12px]"></i> Clear</button>
       </div>
       <div id="msgs" class="flex-1 space-y-4 mb-3 overflow-auto"></div>
       <div id="suggest" class="flex flex-wrap gap-2 mb-3"></div>
@@ -230,18 +248,20 @@ const VIEWS={
     $('#model').onchange=e=>{MODEL=e.target.value;};
     if($('#addModel'))$('#addModel').onclick=()=>route('integrations');
     const sg=['How many assets does this client have?','Any open Huntress incidents?','Summarise this client’s security posture'];
-    $('#suggest').innerHTML=sg.map(s=>`<button class="pill bg-white/5 hover:bg-white/10 text-slate-300 border border-edge">${esc(s)}</button>`).join('');
-    $('#suggest').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('#msg').value=b.textContent;$('#msg').focus();});
+    const showSuggest=()=>{ $('#suggest').innerHTML=chatLog().length?'':sg.map(s=>`<button class="pill bg-white/5 hover:bg-white/10 text-slate-300 border border-edge">${esc(s)}</button>`).join('');
+      $('#suggest').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('#msg').value=b.textContent;$('#msg').focus();}); };
+    renderChatLog(); showSuggest();   // restore this client's saved transcript
+    $('#clearChat').onclick=()=>{ CHAT[chatKey()]=[]; chatSave(); renderChatLog(); showSuggest(); };
     $('#chatForm').onsubmit=async e=>{e.preventDefault();const m=$('#msg').value.trim();if(!m)return;$('#msg').value='';
+      chatLog().push({role:'user',text:m}); chatSave(); showSuggest();
       bubble('you',esc(m));const id=bubble('ai','<span class="inline-flex gap-1"><span class="dot">●</span><span class="dot">●</span><span class="dot">●</span></span>');
       document.querySelectorAll('#'+id+' .dot').forEach((d,i)=>{d.style.animation=`blink 1.2s ${i*.2}s infinite`;});
-      try{const r=await api('POST','/api/chat',{tenant:TENANT,message:m,model:MODEL});let h=esc(r.answer);
-        if(r.tool_events?.length)h+=`<div class="mt-2 flex flex-wrap gap-1">`+r.tool_events.map(t=>
-          `<span class="pill ${t.ok?'bg-emerald-500/15 text-emerald-300':'bg-rose-500/15 text-rose-300'} inline-flex items-center gap-1"><i data-lucide="${t.ok?'check':'x'}" class="text-[11px]"></i>${esc(t.name)}</span>`).join('')+`</div>`;
-        if(r.citations?.length)h+=`<div class="text-[11px] text-slate-500 mt-1.5 flex items-center gap-1"><i data-lucide="link"></i>${r.citations.map(esc).join(', ')}</div>`;
-        h+=`<div class="text-[11px] text-slate-600 mt-1">${esc(r.provider)}/${esc(r.model)} · ${r.rounds} round(s)</div>`;
-        document.getElementById(id).innerHTML=h;icons();
-      }catch(_){document.getElementById(id).innerHTML='<span class="text-rose-400">error</span>';}};icons();
+      try{const r=await api('POST','/api/chat',{tenant:TENANT,message:m,model:MODEL,history:chatHistory()});
+        const turn={role:'assistant',answer:r.answer||'',tools:r.tool_events||[],citations:r.citations||[],meta:`${r.provider}/${r.model} · ${r.rounds} round(s)`};
+        chatLog().push(turn); chatSave();
+        document.getElementById(id).innerHTML=aiHtml(turn);icons();
+      }catch(_){ chatLog().push({role:'assistant',error:true}); chatSave();
+        document.getElementById(id).innerHTML='<span class="text-rose-400">error</span>';}};icons();
   },
 
   async integrations(){

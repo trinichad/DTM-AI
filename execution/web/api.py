@@ -318,7 +318,7 @@ class Api:
         ctx = ToolContext(tenant_id=tenant, actor=user,
                           allow_cloud=bool(model_id and not model_id.startswith("ollama:")),
                           client_factory=get_client_factory())
-        turn = self.agent.chat(ctx, message, model_id=model_id)
+        turn = self.agent.chat(ctx, message, model_id=model_id, history=body.get("history"))
         return Resp(200, {
             "answer": turn.answer, "citations": turn.citations,
             "tool_events": turn.tool_events, "provider": turn.provider,
