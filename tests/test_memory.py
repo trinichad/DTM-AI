@@ -32,6 +32,12 @@ class Vault(unittest.TestCase):
     def test_kb_search_requires_all_terms(self):
         self.assertEqual(self.v.search_kb("reset zebrafish"), [])
 
+    def test_kb_search_includes_bundled_reference(self):
+        # the repo-bundled reference/ ships with the app and is searchable alongside the vault kb/
+        hits = self.v.search_kb("kaseya executePowershell command")
+        self.assertTrue(any("reference/" in h["doc"] for h in hits),
+                        "bundled Kaseya command reference should be searchable via kb_search")
+
     def test_memory_roundtrip(self):
         self.assertEqual(self.v.read_memory("acme"), "")
         res = self.v.append_memory("acme", "prefers maintenance windows on Sundays", "tech1")

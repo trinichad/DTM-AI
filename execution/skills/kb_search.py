@@ -6,8 +6,10 @@ from typing import Any
 from execution.core.memory import VaultStore
 
 NAME = "kb_search"
-DESCRIPTION = ("Search DTM internal knowledge base / runbooks / SOPs for this question. "
-               "Returns matching doc paths + snippets. Use for 'how do we…' procedure questions.")
+DESCRIPTION = ("Search the DTM knowledge base: internal runbooks/SOPs PLUS bundled vendor references "
+               "(e.g. the full list of Kaseya VSA agent-procedure/STEP commands). Returns matching doc "
+               "paths + snippets. Use for 'how do we…' procedures or 'what can Kaseya do / which command "
+               "does X' capability questions.")
 SOURCE = "dtm_ai"
 CATEGORY = "read"
 RISK_LEVEL = "none"

@@ -38,18 +38,30 @@ class VaultStore:
         self.root = Path(path or cfg.get("DTM_VAULT_PATH") or (_PROJECT_ROOT / "vault"))
         self.kb_dir = self.root / "kb"
         self.clients_dir = self.root / "clients"
+        # Bundled, version-controlled reference docs that ship WITH the app (vendor API/command
+        # references etc.). Searched alongside the vault's kb/ so the assistant always has them,
+        # no per-server file copying. The vault's kb/ remains for the owner's own runbooks/notes.
+        self.reference_dir = _PROJECT_ROOT / "reference"
 
     # ── knowledge base (read) ──
+    def _kb_files(self) -> list[tuple[Path, Path]]:
+        """All searchable docs as (file, base) pairs (base used to compute the display doc id).
+        Covers the vault kb/ (owner runbooks) AND the bundled reference/ (vendor references)."""
+        out: list[tuple[Path, Path]] = []
+        for base, root in ((self.kb_dir, self.root), (self.reference_dir, _PROJECT_ROOT)):
+            try:
+                if base.exists():
+                    out.extend((p, root) for p in sorted(base.rglob("*.md")))
+            except OSError:
+                continue
+        return out
+
     def search_kb(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
         terms = [t for t in re.split(r"\s+", query.lower().strip()) if t]
-        try:
-            if not terms or not self.kb_dir.exists():
-                return []
-            kb_files = sorted(self.kb_dir.rglob("*.md"))
-        except OSError:
+        if not terms:
             return []
         hits: list[dict[str, Any]] = []
-        for md in kb_files:
+        for md, base in self._kb_files():
             try:
                 text = md.read_text(encoding="utf-8")
             except OSError:
@@ -59,7 +71,7 @@ class VaultStore:
                 continue
             score = sum(low.count(t) for t in terms)
             snippet = self._snippet(text, terms)
-            hits.append({"doc": str(md.relative_to(self.root)), "score": score, "snippet": snippet})
+            hits.append({"doc": str(md.relative_to(base)), "score": score, "snippet": snippet})
         hits.sort(key=lambda h: h["score"], reverse=True)
         return hits[:limit]
 
@@ -83,12 +95,7 @@ class VaultStore:
             return ""
 
     def list_kb(self) -> list[str]:
-        try:
-            if not self.kb_dir.exists():
-                return []
-            return [str(p.relative_to(self.root)) for p in sorted(self.kb_dir.rglob("*.md"))]
-        except OSError:
-            return []
+        return [str(p.relative_to(base)) for p, base in self._kb_files()]
 
     def list_client_memories(self) -> list[str]:
         try:

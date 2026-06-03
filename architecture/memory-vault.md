@@ -33,8 +33,19 @@ vault/                          # path = DTM_VAULT_PATH (default <project>/vault
 - **Tenant isolation:** memory is per `<tenant>`; `memory_read`/`memory_note` use the bound tenant only.
 - Every call is still audited via dispatch().
 
+## Two KB sources (both searched by `kb_search`)
+- **`vault/kb/`** — the owner's own runbooks/SOPs (under `DTM_VAULT_PATH`, gitignored, per-deployment,
+  editable as an Obsidian vault).
+- **`reference/`** (repo root, **git-tracked**) — bundled vendor references that ship WITH the app and
+  deploy via `git pull`, no per-server copying. First entry:
+  `reference/kaseya-vsa9-agent-procedure-commands.md` (the 77 Kaseya VSA9 STEP/agent-procedure commands
+  from help.vsa9.kaseya.com — REFERENCE ONLY, not executable; DTM AI v1 is read-only).
+  `VaultStore._kb_files()` scans both; doc ids are relative to their base (`kb/…` vs `reference/…`). To add
+  a vendor reference, drop a `.md` in `reference/` and commit — instantly searchable. Use `reference/` for
+  public/vendor docs (shared, version-controlled); use `vault/kb/` for client-specific or owner-private notes.
+
 ## Edge cases / lessons
 - `memory_note` on tenant `*` returns `{"error": ...}` (cross-client memory is meaningless) → error envelope.
-- `kb/` missing or empty → `kb_search` returns `[]` (never raises).
+- `kb/` missing or empty → `kb_search` returns `[]` (never raises); the bundled `reference/` is still searched.
 - Future: swap the simple term-match for embeddings/FTS5, and add a guarded connector to a real doc
   system (IT Glue/Hudu/SharePoint) feeding the same `kb_search` contract.
