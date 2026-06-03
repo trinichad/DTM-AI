@@ -131,7 +131,70 @@ function chatSave(){ try{ localStorage.setItem('dtm_chat',JSON.stringify(CHAT));
 // Recent prior turns sent as context so the assistant remembers the conversation (capped; backend re-caps).
 function chatHistory(){ return chatLog().slice(0,-1).filter(t=>t.role==='user'||(t.role==='assistant'&&!t.error&&t.answer))
   .map(t=>({role:t.role,content:t.role==='user'?t.text:t.answer})).slice(-20); }
-function aiHtml(t){ let h=esc(t.answer||'');
+// ── markdown rendering (safe, dependency-free subset: tables, bold/italic/code, headings, lists, links) ──
+const _mdesc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const _mdsep=l=>/^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l);
+const _mdcells=l=>l.replace(/^\s*\|/,'').replace(/\|\s*$/,'').split('|').map(c=>c.trim());
+function _mdinline(s){ return s
+  .replace(/`([^`]+)`/g,'<code class="bg-white/10 rounded px-1 text-[12px]">$1</code>')
+  .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
+  .replace(/(^|[^*])\*([^*\s][^*]*)\*/g,'$1<em>$2</em>')
+  .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener" class="text-accent underline">$1</a>'); }
+function md(src){ const lines=_mdesc(src).split(/\r?\n/); let html='',i=0;
+  while(i<lines.length){ const l=lines[i];
+    if(l.includes('|')&&i+1<lines.length&&_mdsep(lines[i+1])){           // GitHub table
+      const head=_mdcells(l); i+=2; const rows=[];
+      while(i<lines.length&&lines[i].includes('|')&&lines[i].trim()){ rows.push(_mdcells(lines[i])); i++; }
+      html+=`<div class="overflow-auto my-2 rounded-lg border border-edge"><table class="w-full text-xs">
+        <thead class="bg-white/5"><tr>${head.map(h=>`<th class="text-left px-2.5 py-1.5 border-b border-edge font-semibold whitespace-nowrap">${_mdinline(h)}</th>`).join('')}</tr></thead>
+        <tbody>${rows.map(r=>`<tr class="border-b border-edge/30">${r.map(c=>`<td class="px-2.5 py-1 align-top">${_mdinline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`; continue; }
+    let m; if(m=l.match(/^(#{1,4})\s+(.*)$/)){ html+=`<div class="font-semibold mt-2 ${m[1].length<=2?'text-base':'text-sm'}">${_mdinline(m[2])}</div>`; i++; continue; }
+    if(/^\s*[-*]\s+/.test(l)){ const it=[]; while(i<lines.length&&/^\s*[-*]\s+/.test(lines[i])){ it.push(_mdinline(lines[i].replace(/^\s*[-*]\s+/,''))); i++; } html+=`<ul class="list-disc ml-5 my-1 space-y-0.5">${it.map(x=>`<li>${x}</li>`).join('')}</ul>`; continue; }
+    if(/^\s*\d+\.\s+/.test(l)){ const it=[]; while(i<lines.length&&/^\s*\d+\.\s+/.test(lines[i])){ it.push(_mdinline(lines[i].replace(/^\s*\d+\.\s+/,''))); i++; } html+=`<ol class="list-decimal ml-5 my-1 space-y-0.5">${it.map(x=>`<li>${x}</li>`).join('')}</ol>`; continue; }
+    if(!l.trim()){ i++; continue; }
+    html+=`<div>${_mdinline(l)}</div>`; i++; }
+  return html; }
+// ── extract markdown tables for export ──
+function parseTables(text){ const lines=String(text??'').split(/\r?\n/),out=[]; let i=0;
+  while(i<lines.length){ if(lines[i].includes('|')&&i+1<lines.length&&_mdsep(lines[i+1])){
+      const headers=_mdcells(lines[i]); i+=2; const rows=[];
+      while(i<lines.length&&lines[i].includes('|')&&lines[i].trim()){ rows.push(_mdcells(lines[i])); i++; }
+      out.push({headers,rows}); } else i++; }
+  return out; }
+const hasTable=text=>parseTables(text).length>0;
+function openTablePopup(text){
+  const tables=parseTables(text); if(!tables.length){ toast('No table found in this message',false); return; }
+  const w=window.open('','_blank'); if(!w){ toast('Popup blocked — allow popups for this site',false); return; }
+  const e=_mdesc, body=tables.map((t,ti)=>`${tables.length>1?`<h2>Table ${ti+1}</h2>`:''}<table><thead><tr>${t.headers.map(h=>`<th>${e(h)}</th>`).join('')}</tr></thead><tbody>${t.rows.map(r=>`<tr>${r.map(c=>`<td>${e(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`).join('');
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>DTM AI — Table export</title><style>
+    body{font-family:Inter,system-ui,sans-serif;background:#0b1220;color:#e2e8f0;margin:0;padding:24px}
+    h2{font-size:13px;color:#94a3b8;margin:20px 0 6px}
+    table{border-collapse:collapse;width:100%;font-size:13px;margin-bottom:10px}
+    th,td{border:1px solid #1e293b;padding:6px 10px;text-align:left}
+    thead th{background:#111c33} tr:nth-child(even) td{background:#0e1830}
+    .bar{display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap}
+    button{background:#6366f1;color:#fff;border:0;border-radius:8px;padding:8px 14px;font-size:13px;cursor:pointer}
+    button.sec{background:#1e293b;color:#cbd5e1}
+    @media print{.bar{display:none}body{background:#fff;color:#000}th,td{border-color:#999}thead th{background:#eee}tr:nth-child(even) td{background:#f3f4f6}}
+  </style></head><body>
+    <div class="bar"><button onclick="dl('csv')">⬇ CSV</button><button onclick="dl('xls')">⬇ Excel</button>
+      <button class="sec" onclick="window.print()">🖨 Print / Save PDF</button><button class="sec" onclick="cp()">⧉ Copy</button></div>
+    ${body}
+    <script>
+      var T=${JSON.stringify(tables)};
+      function cc(s){s=String(s==null?'':s);return /[",\\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}
+      function toCSV(){return T.map(function(t){return [t.headers].concat(t.rows).map(function(r){return r.map(cc).join(',');}).join('\\n');}).join('\\n\\n');}
+      function save(n,m,c){var b=new Blob([c],{type:m}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=n;a.click();}
+      function dl(k){ if(k==='csv'){ save('dtm-export.csv','text/csv;charset=utf-8',toCSV()); }
+        else { var h='<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset=utf-8></head><body>';
+          document.querySelectorAll('table').forEach(function(t){h+=t.outerHTML+'<br>';}); h+='</body></html>';
+          save('dtm-export.xls','application/vnd.ms-excel',h); } }
+      function cp(){ navigator.clipboard.writeText(toCSV()).then(function(){alert('Copied (CSV) to clipboard');}); }
+    <\/script></body></html>`);
+  w.document.close();
+}
+function aiHtml(t){ let h=md(t.answer||'');
+  if(t.answer&&hasTable(t.answer)) h+=`<button class="open-table mt-2 text-[11px] text-accent hover:underline inline-flex items-center gap-1" data-answer="${encodeURIComponent(t.answer)}"><i data-lucide="external-link" class="text-[11px]"></i> Open / export table</button>`;
   if(t.tools&&t.tools.length) h+=`<div class="mt-2 flex flex-wrap gap-1">`+t.tools.map(x=>
     `<span class="pill ${x.ok?'bg-emerald-500/15 text-emerald-300':'bg-rose-500/15 text-rose-300'} inline-flex items-center gap-1"><i data-lucide="${x.ok?'check':'x'}" class="text-[11px]"></i>${esc(x.name)}</span>`).join('')+`</div>`;
   if(t.citations&&t.citations.length) h+=`<div class="text-[11px] text-slate-500 mt-1.5 flex items-center gap-1"><i data-lucide="link"></i>${t.citations.map(esc).join(', ')}</div>`;
@@ -252,6 +315,7 @@ const VIEWS={
       $('#suggest').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('#msg').value=b.textContent;$('#msg').focus();}); };
     renderChatLog(); showSuggest();   // restore this client's saved transcript
     $('#clearChat').onclick=()=>{ CHAT[chatKey()]=[]; chatSave(); renderChatLog(); showSuggest(); };
+    $('#msgs').addEventListener('click',e=>{ const b=e.target.closest('.open-table'); if(b) openTablePopup(decodeURIComponent(b.dataset.answer)); });
     $('#chatForm').onsubmit=async e=>{e.preventDefault();const m=$('#msg').value.trim();if(!m)return;$('#msg').value='';
       chatLog().push({role:'user',text:m}); chatSave(); showSuggest();
       bubble('you',esc(m));const id=bubble('ai','<span class="inline-flex gap-1"><span class="dot">●</span><span class="dot">●</span><span class="dot">●</span></span>');
