@@ -115,6 +115,8 @@ class Api:
         if method == "GET" and path == "/api/system/stats":
             from ..core import sysstats
             return Resp(200, sysstats.collect())
+        if method == "GET" and path == "/api/fleet":
+            return Resp(200, self._fleet(query.get("tenant") or "*", user))
 
         return Resp(404, {"error": f"no route {method} {path}"})
 
@@ -267,6 +269,28 @@ class Api:
         from ..clients import probe
         targets = [integration] if integration else ["kaseya", "cylance", "huntress"]
         return {t: probe(t) for t in targets}
+
+    # live fleet counts (assets / agents / devices) for the dashboard — re-pulled on demand, so a
+    # newly onboarded endpoint shows up the next time it's loaded/refreshed.
+    _FLEET = [("kaseya_list_assets", "Kaseya assets", "monitor-dot"),
+              ("huntress_list_agents", "Huntress agents", "radar"),
+              ("cylance_list_devices", "Cylance devices", "shield")]
+
+    def _fleet(self, tenant: str, user: str) -> dict:
+        from ..core.context import ToolContext
+        from ..core.dispatch import dispatch
+        from ..runtime import get_client_factory
+        ctx = ToolContext(tenant_id=tenant, actor=user, client_factory=get_client_factory())
+        out = []
+        for name, label, icon in self._FLEET:
+            if self.agent.registry.get(name) is None or not self.agent.audit.is_enabled(name, True):
+                continue
+            env = dispatch(registry=self.agent.registry, audit=self.agent.audit, ctx=ctx, name=name)
+            data = env.get("data")
+            count = len(data) if isinstance(data, list) else None
+            out.append({"name": name, "label": label, "icon": icon, "ok": bool(env.get("ok")),
+                        "count": count, "error": env.get("error")})
+        return {"tenant": tenant, "fleet": out}
 
     def _skills(self) -> dict:
         """Hermes' learned skills (read-only). Empty + available=false until Hermes runs."""

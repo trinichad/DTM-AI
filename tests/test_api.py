@@ -61,6 +61,22 @@ class WebApi(unittest.TestCase):
     def test_chat_requires_message(self):
         self.assertEqual(self.H("POST", "/api/chat", {"tenant": "acme"}, user="admin").status, 400)
 
+    def test_fleet_counts_structure(self):
+        self.assertEqual(self.H("GET", "/api/fleet").status, 401)         # auth gated
+        r = self.H("GET", "/api/fleet", user="admin")
+        self.assertEqual(r.status, 200)
+        self.assertEqual(r.payload["tenant"], "*")
+        names = {f["name"] for f in r.payload["fleet"]}
+        self.assertIn("kaseya_list_assets", names)                        # fleet tool present
+        for f in r.payload["fleet"]:
+            self.assertIn("count", f)
+            self.assertIn("ok", f)        # no creds in test -> ok False, count None (fail-closed, no network)
+
+    def test_models_exposes_context_cap(self):
+        r = self.H("GET", "/api/models", user="admin")
+        self.assertIn("context", r.payload)
+        self.assertGreater(r.payload["context"]["history_chars"], 0)
+
     def test_session_expiry(self):
         token = self.signer.make("admin", ttl_minutes=-1)  # already expired
         self.assertIsNone(self.signer.verify(token))

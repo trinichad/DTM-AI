@@ -221,10 +221,10 @@ class ModelRouter:
         self.cfg = cfg or get_config()
         self.local_model = self.cfg.get("DTM_LOCAL_MODEL", "llama3.1")
         self.ollama_url = self.cfg.get("DTM_OLLAMA_URL", "http://localhost:11434")
-        self.ollama_num_ctx = self.cfg.int("DTM_OLLAMA_NUM_CTX", 8192)   # local model context window (tokens)
+        self.ollama_num_ctx = self.cfg.int("DTM_OLLAMA_NUM_CTX", 16384)  # local model context window (tokens)
         # how much prior conversation re-enters the model each turn (chars / messages) — tunable
-        self.history_chars = self.cfg.int("DTM_MAX_HISTORY_CHARS", 16000)
-        self.history_msgs = self.cfg.int("DTM_MAX_HISTORY_MSGS", 30)
+        self.history_chars = self.cfg.int("DTM_MAX_HISTORY_CHARS", 32000)
+        self.history_msgs = self.cfg.int("DTM_MAX_HISTORY_MSGS", 40)
         self._allow_mock_fallback = self.cfg.get("DTM_ENV", "dev") != "prod"
 
     def cloud_allowed(self) -> bool:

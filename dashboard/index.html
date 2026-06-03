@@ -220,6 +220,17 @@ async function loadHostStats(){ const el=$('#hoststats'); if(!el) return;
       [g.temp_c!=null?`${g.temp_c}°C`:'', vram!=null?`${Math.round(vram)}% vram`:''].filter(Boolean).join(' · ')); });
   else h+=`<div class="text-[11px] text-slate-500 self-center">No NVIDIA GPU detected (or nvidia-smi unavailable).</div>`;
   el.innerHTML=h; }
+// ── live fleet counts (assets / agents / devices), re-pulled on demand ──
+async function loadFleet(){ const el=$('#fleet'); if(!el) return;
+  el.innerHTML='<div class="text-slate-500 text-sm">loading live counts…</div>';
+  let r; try{ r=await api('GET','/api/fleet'+(TENANT!=='*'?'?tenant='+encodeURIComponent(TENANT):'')); }catch(_){ el.innerHTML='<div class="text-rose-400 text-sm">failed to load fleet counts</div>'; return; }
+  if(!r.fleet||!r.fleet.length){ el.innerHTML='<div class="text-slate-500 text-sm">No fleet tools enabled — configure Kaseya/Huntress/Cylance.</div>'; return; }
+  el.innerHTML=r.fleet.map(f=>`<div class="rounded-xl border border-edge bg-ink/40 p-4 flex items-center gap-3">
+      <div class="h-10 w-10 rounded-xl grid place-items-center ${f.ok?'bg-accent/15 text-accent':'bg-rose-500/15 text-rose-300'}"><i data-lucide="${esc(f.icon||'box')}"></i></div>
+      <div><div class="text-2xl font-bold">${f.ok&&f.count!=null?f.count:'—'}</div>
+        <div class="text-xs text-slate-400">${esc(f.label)}</div>
+        ${!f.ok?`<div class="text-[10px] text-rose-400 mt-0.5">${esc((f.error||'unavailable').slice(0,40))}</div>`:''}</div>
+    </div>`).join(''); icons(); }
 
 function icons(){ if(window.lucide) lucide.createIcons(); }
 async function api(m,p,b){const r=await fetch(p,{method:m,credentials:'same-origin',
@@ -283,6 +294,12 @@ const VIEWS={
         ${stat('shield-check','linear-gradient(135deg,#34d399,#10b981)',T.length-writes,'Read-only tools','safe by default')}
         ${stat('pencil','linear-gradient(135deg,#fb923c,#f43f5e)',writes,'Write-enabled','via console')}
       </div>
+      <div class="card p-5 mb-4">
+        <div class="flex items-center gap-2 mb-4 font-semibold"><i data-lucide="server" class="text-accent"></i> Fleet
+          <span class="text-[11px] text-slate-500 font-normal">— live counts for ${esc(TENANT==='*'?'all clients':TENANT)}</span>
+          <button id="fleetRefresh" class="ml-auto text-[11px] text-slate-500 hover:text-accent inline-flex items-center gap-1"><i data-lucide="refresh-cw" class="text-[12px]"></i> Refresh</button></div>
+        <div id="fleet" class="grid gap-4 sm:grid-cols-3"><div class="text-slate-500 text-sm">loading live counts…</div></div>
+      </div>
       <div class="grid gap-4 lg:grid-cols-3">
         <div class="card p-5 lg:col-span-2">
           <div class="flex items-center gap-2 mb-4 font-semibold"><i data-lucide="activity" class="text-accent"></i> Recent activity</div>
@@ -309,6 +326,7 @@ const VIEWS={
         </div>
       </div>`;icons();
     loadHostStats(); clearInterval(window._statPoll); window._statPoll=setInterval(loadHostStats,4000);
+    loadFleet(); if($('#fleetRefresh')) $('#fleetRefresh').onclick=()=>loadFleet();
   },
 
   async chat(){

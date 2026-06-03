@@ -38,8 +38,8 @@ Use the provided tools to answer. Prefer calling a tool over guessing."""
 # Conversation-context guard ("compaction"): cap how much prior history re-enters the model so a
 # long chat never overflows the (often small) local context window. Keep the most recent turns and
 # trim the oldest past a char budget. Done in code so the user never has to manage it manually.
-MAX_HISTORY_MSGS = 30
-MAX_HISTORY_CHARS = 16000
+MAX_HISTORY_MSGS = 40
+MAX_HISTORY_CHARS = 32000
 
 
 def clean_history(history: Optional[list], max_msgs: int = MAX_HISTORY_MSGS,
