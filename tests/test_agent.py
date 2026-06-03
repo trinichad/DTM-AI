@@ -3,17 +3,37 @@
 Proves the full Navigation path: model requests a tool -> dispatch runs it (guarded) ->
 result re-enters context -> model returns a final, cited answer.
 """
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from execution.agent import Agent, clean_history
+from execution.agent import Agent, clean_history, tool_payload
 from execution.core.audit import AuditStore
 from execution.core.context import ToolContext
 from execution.core.dispatch import DenyAllApprovals
 from execution.core.registry import Registry
 from execution.core.router import ChatResult, ModelRouter
 from execution.core.config import Config
+
+
+class ToolPayload(unittest.TestCase):
+    def test_small_result_passes_through(self):
+        env = {"ok": True, "data": [1, 2, 3]}
+        self.assertEqual(json.loads(tool_payload(env)), env)
+
+    def test_large_list_is_capped_and_flagged_not_silently_cut(self):
+        # Regression: a blind cut made the model think it saw the whole fleet -> false 'not found'.
+        env = {"ok": True, "source": "kaseya",
+               "data": [{"AssetName": f"m{i}.inwood.rho", "AgentId": i, "pad": "x" * 60}
+                        for i in range(2000)]}
+        out = tool_payload(env)
+        self.assertLessEqual(len(out), 20_000)
+        obj = json.loads(out)                                  # still valid JSON
+        self.assertIn("_truncated", obj)                       # model is TOLD it's partial
+        self.assertEqual(obj["_truncated"]["total"], 2000)
+        self.assertLess(obj["_truncated"]["shown"], 2000)
+        self.assertIn("name_contains", obj["_truncated"]["note"])
 
 
 class _Recorder:

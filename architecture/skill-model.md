@@ -92,3 +92,17 @@ Hermes persists/curates its own learned skills (its memory + skills system). DTM
   not the one that merely loads. Canonical client: `execution/clients/kaseya.py`; spec keys
   `KASEYA_URL`/`KASEYA_USER`/`KASEYA_PASS`/`KASEYA_TOKEN` in `core/credentials.py` (the Manage-keys form
   derives its fields from the spec, so it tracks this automatically).
+- **Kaseya: agents ≠ assets, and large lists must not truncate silently.** The agent reported
+  machines (iwr-02/lt05/lt06) as nonexistent though they were in the Kaseya machine group. Two causes,
+  both fixed: (1) we only exposed `/assetmgmt/assets` (asset-management records); the machine-group
+  view is `/assetmgmt/agents` (a machine can be a managed *agent* with no asset record). Added
+  `KaseyaClient.get_agents()` + the `kaseya_list_agents` skill (the proven Kaseya Link client always
+  had `get_agents`). (2) After the owner widened the API account's scope, Kaseya jumped ~28→225 assets,
+  past the ~20k-char tool-result cap — and a **blind string-cut made the model believe it saw the whole
+  list**, so it falsely concluded items were absent. Fix: `agent.tool_payload()` caps a long `data`
+  list by *rows* and attaches an explicit `_truncated` note ("PARTIAL RESULT… re-call with a
+  name_contains filter"), and both list skills gained a `name_contains` substring filter so focused
+  queries return complete results. Lesson: never let a size cap silently hide rows from a model that's
+  about to assert completeness (Behavioral Rule #2); give it a filter and tell it when it's seeing a
+  partial view. Regression: `tests/test_agent.py::ToolPayload`,
+  `tests/test_skills_integration.py::test_kaseya_list_agents_and_filter`.

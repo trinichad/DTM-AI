@@ -42,6 +42,33 @@ MAX_HISTORY_MSGS = 40
 MAX_HISTORY_CHARS = 32000
 
 
+def tool_payload(envelope: dict[str, Any], max_chars: int = MAX_RESULT_CHARS) -> str:
+    """Serialize a tool result for the model, capping size WITHOUT silently hiding rows.
+
+    A blind string-cut makes the model believe it saw the whole list — so on a large fleet it
+    confidently reports machines as 'not found' when they were just past the cutoff. Instead, when
+    the result is a long list we keep as many rows as fit and attach an explicit `_truncated` note
+    telling the model the list is partial and to use a name/group filter. (Behavioral Rule #2.)"""
+    blob = json.dumps(envelope, default=str)
+    if len(blob) <= max_chars:
+        return blob
+    data = envelope.get("data")
+    if isinstance(data, list) and len(data) > 1:
+        keep = len(data)
+        while keep > 0:
+            trial = dict(envelope)
+            trial["data"] = data[:keep]
+            trial["_truncated"] = {
+                "shown": keep, "total": len(data),
+                "note": "PARTIAL RESULT — this is NOT the full list. Do not conclude an item is "
+                        "absent from this. Re-call with a name_contains filter to get complete results."}
+            blob = json.dumps(trial, default=str)
+            if len(blob) <= max_chars:
+                return blob
+            keep = int(keep * 0.8) if keep > 5 else keep - 1
+    return blob[:max_chars]   # single oversized item — last-resort hard cut
+
+
 def clean_history(history: Optional[list], max_msgs: int = MAX_HISTORY_MSGS,
                   max_chars: int = MAX_HISTORY_CHARS) -> list[dict[str, str]]:
     """Validate + bound caller-supplied chat history to user/assistant text turns.
@@ -163,7 +190,7 @@ class Agent:
                     citations.append(f"{name}@{ctx.tenant_id}")
                 turn.tool_events.append({"name": name, "ok": envelope["ok"],
                                          "category": envelope.get("source")})
-                payload = json.dumps(envelope, default=str)[:MAX_RESULT_CHARS]
+                payload = tool_payload(envelope)
                 messages.append({"role": "tool", "tool_call_id": call["id"], "name": name, "content": payload})
 
         turn.answer = "Reached the tool-call limit without a final answer."
@@ -245,7 +272,7 @@ class Agent:
                                          "category": envelope.get("source")})
                 emit({"type": "tool_result", "name": name, "ok": envelope["ok"],
                       "source": envelope.get("source")})
-                payload = json.dumps(envelope, default=str)[:MAX_RESULT_CHARS]
+                payload = tool_payload(envelope)
                 messages.append({"role": "tool", "tool_call_id": call["id"], "name": name, "content": payload})
 
         turn.answer = "Reached the tool-call limit without a final answer."
