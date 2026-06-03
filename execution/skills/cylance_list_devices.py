@@ -26,4 +26,17 @@ def _slim(d: dict) -> dict:
 
 
 def run(ctx, **_: Any):
-    return [_slim(d) for d in ctx.client("cylance").get_paginated("/devices/v2")]
+    # Dedup by device id: Cylance pagination drifts (the live device list shifts while we page),
+    # so records near page boundaries get returned on two pages. Counting raw yields a bogus
+    # over-count (e.g. 1800 = 9 full pages, vs 1708 real). Unique id is the authoritative count.
+    seen: set = set()
+    out: list[dict] = []
+    for d in ctx.client("cylance").get_paginated("/devices/v2"):
+        slim = _slim(d)
+        key = slim.get("id")
+        if key is not None and key in seen:
+            continue
+        if key is not None:
+            seen.add(key)
+        out.append(slim)
+    return out

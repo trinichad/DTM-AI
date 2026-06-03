@@ -61,6 +61,15 @@ Hermes persists/curates its own learned skills (its memory + skills system). DTM
   Regression: `tests/test_clients.py::test_paginate_stops_on_total_pages_not_short_page`. Corollary: the
   *chat* can UNDER-count the same data because tool results are truncated (`MAX_RESULT_CHARS`) before the
   model counts them — the dashboard's server-side `len(list)` is the authoritative count.
+- **Dedup paginated lists by their unique id — pagination DRIFTS.** After the total_pages fix, the Fleet
+  card showed 1800 Cylance devices (= 9 full pages × 200) when the real count was 1708. Cause: Cylance's
+  device list shifts while you page it, so records near page boundaries get returned on two consecutive
+  pages — a raw count over-reports by the overlap. Fix: the list skills dedup by the record's unique key
+  (`cylance_list_devices` by `id`, `cylance_list_threats` by `sha256`) keeping first-seen order. This is
+  the authoritative count even with overlap or a padded last page. Regression:
+  `tests/test_skills_integration.py::test_cylance_devices_dedup_pagination_drift`. General rule: any
+  paginated vendor list whose underlying set mutates during the read must be deduped by stable id, not
+  trusted to be disjoint across pages.
 - **Verify a reference build actually WORKS before porting its auth — a module that imports cleanly
   is not a module that authenticated.** The live DTM Kaseya tenant (`ks2.dtmconsulting.com`) is
   **VSA 9.5**: REST API at `/api/v1.0/`, auth = plain Basic `base64(KASEYA_USER:KASEYA_PASS)` →

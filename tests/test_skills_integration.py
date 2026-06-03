@@ -68,6 +68,20 @@ class IntegrationSkills(unittest.TestCase):
         self.assertTrue(env["ok"])
         self.assertNotIn("secret", env["data"][0])
 
+    def test_cylance_devices_dedup_pagination_drift(self):
+        # Regression for the bogus 1800 count (real 1708): Cylance pagination drifts and repeats
+        # boundary records across pages. The skill must dedup by id, not count raw yields.
+        class DriftingCylance:
+            def get_paginated(self, path, params=None, **kw):
+                for did in ["1", "2", "3", "2", "1"]:   # 5 yields, only 3 unique
+                    yield {"id": did, "name": f"d{did}", "state": "Online"}
+        ctx = ToolContext(tenant_id="acme", actor="t",
+                          client_factory=lambda integ, tenant: DriftingCylance())
+        env = dispatch(registry=self.reg, audit=self.audit, ctx=ctx, name="cylance_list_devices")
+        self.assertTrue(env["ok"])
+        self.assertEqual(len(env["data"]), 3)           # 1708-style dedup, not 1800-style raw count
+        self.assertEqual([d["id"] for d in env["data"]], ["1", "2", "3"])  # first-seen order kept
+
     def test_huntress_incidents_enum_validation(self):
         self.assertFalse(self._d("huntress_list_incidents", {"status": "bogus"})["ok"])
         self.assertTrue(self._d("huntress_list_incidents", {"status": "sent"})["ok"])
