@@ -217,3 +217,61 @@ Built + verified the security-critical core, stdlib-only (runs with NO Postgres/
 
 ### Errors / tests
 - All green (122 tests). ResourceWarning (unclosed sqlite) fixed by adding AuditStore.close().
+
+---
+
+## 2026-06-03 — DEPLOYED & LIVE on the Ubuntu box (ross@192.168.5.60:/opt/dtm-ai, svc on :8090)
+Deploy cutover happened (D-14 done): repo `github.com/trinichad/DTM-AI`, systemd `dtm-ai` as user
+`dtm-ai`. Maintainer access: SSH key + scoped `/etc/sudoers.d/dtm-ai-ross` (ross→dtm-ai + manage the
+service, no broad root). Update flow = `sudo -u dtm-ai git -C /opt/dtm-ai pull && sudo systemctl restart
+dtm-ai`. (NOTE: server reachable only when the maintainer Mac is on the 192.168.5.x LAN.)
+
+### Real vendor data verified live + integration fixes  ✅
+- **Kaseya** auth corrected to the proven **VSA 9.5** scheme (Basic user/pass → /api/v1.0/auth → Bearer);
+  the VSA-X token-id/secret path never authenticated. Probe uses `/assetmgmt/assets?$top=1` (read-only
+  account lacks `/system/orgs`). Stale `KASEYA_TOKEN` in SecretStore had to be force-cleared.
+- **Cylance device count saga** (10000→1800→200→**1707 correct**), proven against the live API:
+  (1) pagination ran to the 50-page cap → stop on `total_pages`; (2) full-but-identical pages →
+  the real bug: **Cylance's request param is `page`, not `page_number`** (it only *echoes* page_number),
+  so every page returned page 1; (3) dedup by `id` as a safety net. `total_number_of_items=1707` matches
+  full enumeration. Lessons in `architecture/skill-model.md`. **Huntress 1920 / Kaseya counts NOT yet
+  re-verified the same way — still open.**
+- `core/sysstats.py`: host CPU/mem/disk/GPU on Overview (`/api/system/stats`). Model-aware + tunable
+  context window; fleet counts cached stale-while-revalidate (`/api/fleet`, TTL 300s).
+
+### Server-side persistent chat history (multi-conversation)  ✅
+- `core/conversations.py` (ConversationStore, SQLite, owner-scoped fail-closed): create/list/get/rename/
+  delete/compact + auto-title. Chat is now server-authoritative (browser no longer holds transcripts),
+  per-user-private, tenant-bound. API: `/api/conversations` CRUD + `/compact`; `/api/chat` persists turns.
+  UI: two-column chat (conversation rail: new/switch/rename/delete) — delete icons always visible + header
+  Delete. Old browser `localStorage` chats NOT migrated (by design). SOP `architecture/conversations.md`.
+
+### AuthStore concurrency fix  ✅
+- `AuthStore` shared one sqlite connection across the threaded server with NO lock → intermittent
+  `sqlite3.InterfaceError: bad parameter or other API misuse` on the auth path (caught in live logs).
+  Added a `threading.Lock` (mirrors AuditStore/ConversationStore); update_user uses locked-internal
+  helpers to avoid re-entrancy. Verified with a 12-thread×400 stress (0 errors).
+
+### Streaming chat (SSE) — PUSHED, NOT YET DEPLOYED  ⏳ (commit 09c67e8)
+- Token-by-token answers + live tool-event chips. Transport = **SSE** over the stdlib server
+  (`POST /api/chat/stream`), chosen over WebSocket — **D-16** in decisions.md. `clients/_http.http_stream`
+  (urllib line iterator); provider `chat_stream` real streaming for **Ollama (NDJSON)** + **Claude
+  (Anthropic SSE)**, OpenAI/Mock emit whole (later refinement). `agent.chat_stream` emits
+  tool_call/tool_result/delta; `Api.stream_chat` bridges push→pull via queue+thread, same persistence.
+  Frontend reads frames via `fetch().body.getReader()`, settles to the formatted answer.
+- **PENDING:** deploy (`git pull && restart`) + live verify that Ollama actually streams tokens through
+  nginx (the `X-Accel-Buffering: no` header should prevent buffering). Lost SSH mid-session (Mac left the
+  LAN); owner has no SSH today. Do this first next session.
+
+### Tests
+- **157 green** (was 122): added test_conversations, streaming tests in test_providers/test_agent/
+  test_api, Cylance pagination regressions, sysstats, context/fleet, dedup.
+
+### Open / next (refreshed)
+1. **Deploy + verify streaming** (09c67e8) — FIRST next session when the box is reachable.
+2. Verify Huntress (1920) & Kaseya counts via live probe like Cylance; confirm Cylance/Huntress green.
+3. **Microsoft 365 / Entra** read-only (next integration): users, MFA audit, inactive, Intune.
+4. Encrypt secrets at rest (`secrets.local` is plaintext 0600 today) — keyring/age-SOPS.
+5. Refine OpenAI streaming (token + tool-call deltas); optional: stream over true WS for alerts.
+6. Scheduled audits/reports (cron installer); on-demand report framework.
+7. Later vendors (Google/Proofpoint/Datto-Veeam/SonicWall/…); Postgres+RLS for prod scale; stand up Hermes.

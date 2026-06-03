@@ -5,7 +5,13 @@ across all client environments (devices, users, security posture, alerts) and ge
 answers — no write actions in v1.
 **Phase-L green credentials (verifiable today):** Kaseya VSA, Cylance, Huntress. All others = read-only
 stubs, wired in Phase 3 as creds become available (M365/Entra next).
-**Status:** Blueprint phase. HALT on `/execution/` logic until this plan is signed off.
+**Status (2026-06-03):** BUILT & DEPLOYED — live on the Ubuntu box (`/opt/dtm-ai`, svc `:8090`), 157 tests
+green. Phases 0–3 (core, agent toolkit, dashboard, web API, capability console, approvals, build agent,
+memory/Hermes kit, 3 green vendors) done; vendor data verified live (Kaseya VSA9.5, Cylance=1707,
+Huntress). Recent: server-side multi-conversation chat, AuthStore concurrency fix, **streaming chat
+(SSE) pushed but NOT yet deployed (commit 09c67e8 — deploy first next session)**. See `progress.md`
+(2026-06-03) for the authoritative current state + open list. Next big feature: Microsoft 365 / Entra.
+_(This phased list below is the original blueprint; many items are now ✅ — progress.md is the live log.)_
 
 ## Phase 0 — Initialization  ✅ in progress
 - [x] Recon of `Kaseya Link` + `ClaudeOS [Hermes] V2` (reuse/replace matrix → findings.md)
