@@ -64,7 +64,7 @@ class HuntressClient:
             raise
 
     def get_paginated(self, path: str, params: Optional[dict] = None, *, limit: int = 100,
-                      max_pages: int = 20) -> Iterator[dict]:
+                      max_pages: int = 100) -> Iterator[dict]:
         keys = ("agents", "organizations", "incident_reports", "summary_reports",
                 "billing_reports", "items", "data", "results")
         params = dict(params or {})

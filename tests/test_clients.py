@@ -72,6 +72,18 @@ class Cylance(unittest.TestCase):
         with self.assertRaises(ValueError):
             CylanceClient("MARS", "t", "a", "s")
 
+    def test_paginate_stops_on_total_pages_not_short_page(self):
+        # Regression for the bogus 10,000 count: simulate an API that ALWAYS returns a full page
+        # (never a short one). Termination must come from total_pages, else it runs to max_pages.
+        def transport(method, url, headers=None, params=None, json_body=None):
+            if url.endswith("/auth/v2/token"):
+                return 200, {"access_token": "t"}
+            return 200, {"page_items": [{"id": "a"}, {"id": "b"}],  # always "full" for page_size=2
+                         "total_pages": 2, "total_number_of_items": 4}
+        c = CylanceClient("NA", "t", "a", "s", transport=transport)
+        devices = list(c.get_paginated("/devices/v2", page_size=2))
+        self.assertEqual(len(devices), 4)   # 2 pages x 2 — stopped by total_pages, not 2*max_pages
+
 
 class Huntress(unittest.TestCase):
     def _transport(self, method, url, headers=None, params=None, json_body=None):

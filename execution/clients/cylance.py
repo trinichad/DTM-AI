@@ -71,15 +71,23 @@ class CylanceClient:
             raise
 
     def get_paginated(self, path: str, params: Optional[dict] = None,
-                      *, page_size: int = 200, max_pages: int = 50) -> Iterator[dict]:
+                      *, page_size: int = 200, max_pages: int = 200) -> Iterator[dict]:
+        # Terminate on the API's own total_pages (like the proven Kaseya Link client). Relying only
+        # on "a short page" over-reads to max_pages when the API keeps returning full pages (which
+        # produced the bogus 10,000 = 50 pages x 200 count). max_pages stays as a hard safety stop.
         params = dict(params or {})
         params.setdefault("page_size", page_size)
-        for page in range(1, max_pages + 1):
-            params["page_number"] = page
+        for page_number in range(1, max_pages + 1):
+            params["page_number"] = page_number
             payload = self.get(path, params) or {}
             items = payload.get("page_items") or []
             yield from items
-            if len(items) < page_size:
+            total_pages = int(payload.get("total_pages") or 0)
+            if not items:
+                return
+            if total_pages and page_number >= total_pages:
+                return
+            if not total_pages and len(items) < page_size:
                 return
 
     def probe(self) -> dict[str, Any]:

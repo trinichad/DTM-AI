@@ -53,6 +53,14 @@ Hermes persists/curates its own learned skills (its memory + skills system). DTM
   If a vendor read returns large PII blobs, prefer a curated slimmed primitive for that path.
 - New vendor onboarding = creds (config) + a scoped connector + its allowlist (one-time code), then
   unlimited learned reads on top.
+- **Paginate by the API's own page-count, not just "a short page."** The Fleet card once showed a bogus
+  10,000 Cylance devices = exactly `page_size 200 × max_pages 50`. Cylance's `/devices/v2` kept returning
+  *full* pages, so terminating only on `len(items) < page_size` never tripped and the loop ran to the cap.
+  Fix (mirrors the proven Kaseya Link client): stop when `page_number >= total_pages` (fall back to the
+  short-page rule only when the API gives no `total_pages`), with `max_pages` as a hard safety stop.
+  Regression: `tests/test_clients.py::test_paginate_stops_on_total_pages_not_short_page`. Corollary: the
+  *chat* can UNDER-count the same data because tool results are truncated (`MAX_RESULT_CHARS`) before the
+  model counts them — the dashboard's server-side `len(list)` is the authoritative count.
 - **Verify a reference build actually WORKS before porting its auth — a module that imports cleanly
   is not a module that authenticated.** The live DTM Kaseya tenant (`ks2.dtmconsulting.com`) is
   **VSA 9.5**: REST API at `/api/v1.0/`, auth = plain Basic `base64(KASEYA_USER:KASEYA_PASS)` →
