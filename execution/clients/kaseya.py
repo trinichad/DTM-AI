@@ -91,5 +91,9 @@ class KaseyaClient:
         return (self.get("/system/orgs") or {}).get("Result", [])
 
     def probe(self) -> dict[str, Any]:
-        orgs = self.get_orgs()
-        return {"ok": True, "detail": f"auth ok; {len(orgs)} orgs visible"}
+        # Validate against assets (read-only bridge accounts can read these but are often
+        # denied /system/orgs — a 403 there is a scope limit, not an auth failure). Mirrors
+        # the proven Kaseya Link probe.
+        data = self.get("/assetmgmt/assets", {"$top": 1}) or {}
+        rows = data.get("Result") or []
+        return {"ok": True, "detail": f"auth ok; /assetmgmt/assets returned {len(rows)} row(s)"}
