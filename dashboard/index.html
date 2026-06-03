@@ -532,10 +532,14 @@ async function toggleCreds(integration, box){
   const credUrl='/api/integrations/'+encodeURIComponent(integration)+'/credentials';
   const {fields,label}=await api('GET','/api/integrations/'+encodeURIComponent(integration)+'/fields');
   const anySet=fields.some(f=>f.set);
+  const shadowed=fields.filter(f=>f.shadowed).map(f=>f.key);
   box.innerHTML=`<div class="border-t border-edge pt-3 space-y-2">
     <div class="text-[11px] text-slate-500 flex items-center gap-1"><i data-lucide="shield-check"></i> Stored 0600, shown only as a fingerprint. Type a new value to replace it; leave blank to keep current.</div>
+    ${shadowed.length?`<div class="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-2.5 py-1.5 flex items-start gap-1.5">
+      <i data-lucide="alert-triangle" class="text-[12px] mt-0.5"></i><span>${shadowed.map(esc).join(', ')} ${shadowed.length>1?'are':'is'} set in the server <code>.env</code> and override${shadowed.length>1?'':'s'} anything entered here. Edit <code>/opt/dtm-ai/.env</code> (and restart) to change ${shadowed.length>1?'them':'it'}.</span></div>`:''}
     ${fields.map(f=>`<div>
       <label class="text-xs text-slate-400 flex items-center gap-1">${esc(f.key)}${f.required?'<span class="text-rose-400">*</span>':''}
+        ${f.shadowed?'<span class="text-[10px] text-amber-400">(.env)</span>':''}
         ${f.set?`<span class="ml-auto text-[10px] text-slate-600 font-mono">${esc(f.fingerprint)}</span>
           <button data-clearkey="${esc(f.key)}" class="cred-clear text-slate-500 hover:text-rose-300" title="Clear this value"><i data-lucide="x" class="text-[12px]"></i></button>`:''}</label>
       <input data-key="${esc(f.key)}" type="password" autocomplete="new-password"

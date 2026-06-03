@@ -270,10 +270,15 @@ class Api:
         spec = credentials.SPECS.get(name)
         if spec is None:
             return Resp(404, {"error": f"unknown integration '{name}'"})
+        import os
         from ..core.config import fingerprint, get_config
         cfg = get_config()
+        # A non-empty value in the process env (e.g. systemd EnvironmentFile / .env) OUTRANKS the
+        # SecretStore, so editing the key in the UI has no effect until that env value is removed.
+        # Flag it so the dashboard can warn instead of silently ignoring the edit.
         fields = [{"key": k, "required": k in spec.required,
-                   "set": cfg.present(k), "fingerprint": fingerprint(cfg.get(k)) if cfg.present(k) else None}
+                   "set": cfg.present(k), "fingerprint": fingerprint(cfg.get(k)) if cfg.present(k) else None,
+                   "shadowed": bool(os.environ.get(k))}
                   for k in (*spec.required, *spec.optional)]
         return Resp(200, {"integration": name, "label": spec.display, "fields": fields})
 
