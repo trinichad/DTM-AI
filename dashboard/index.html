@@ -529,24 +529,42 @@ async function editUser(username, role, email){
 async function toggleCreds(integration, box){
   if(box.dataset.open==='1'){ box.innerHTML=''; box.dataset.open=''; return; }
   box.dataset.open='1';
+  const credUrl='/api/integrations/'+encodeURIComponent(integration)+'/credentials';
   const {fields,label}=await api('GET','/api/integrations/'+encodeURIComponent(integration)+'/fields');
+  const anySet=fields.some(f=>f.set);
   box.innerHTML=`<div class="border-t border-edge pt-3 space-y-2">
-    <div class="text-[11px] text-slate-500 flex items-center gap-1"><i data-lucide="shield-check"></i> Stored 0600, shown only as a fingerprint. Leave blank to keep current.</div>
+    <div class="text-[11px] text-slate-500 flex items-center gap-1"><i data-lucide="shield-check"></i> Stored 0600, shown only as a fingerprint. Type a new value to replace it; leave blank to keep current.</div>
     ${fields.map(f=>`<div>
       <label class="text-xs text-slate-400 flex items-center gap-1">${esc(f.key)}${f.required?'<span class="text-rose-400">*</span>':''}
-        ${f.set?`<span class="ml-auto text-[10px] text-slate-600 font-mono">${esc(f.fingerprint)}</span>`:''}</label>
+        ${f.set?`<span class="ml-auto text-[10px] text-slate-600 font-mono">${esc(f.fingerprint)}</span>
+          <button data-clearkey="${esc(f.key)}" class="cred-clear text-slate-500 hover:text-rose-300" title="Clear this value"><i data-lucide="x" class="text-[12px]"></i></button>`:''}</label>
       <input data-key="${esc(f.key)}" type="password" autocomplete="new-password"
-        placeholder="${f.set?'•••••• (set)':'not set'}"
+        placeholder="${f.set?'•••••• (set) — type to replace':'not set'}"
         class="cred-in w-full bg-ink/80 border border-edge rounded-lg px-3 py-1.5 text-sm mt-1 focus:border-accent focus:outline-none"/></div>`).join('')}
     <div class="flex gap-2 pt-1">
       <button class="cred-save grad text-white rounded-lg px-3 py-1.5 text-xs font-semibold flex-1 flex items-center justify-center gap-1"><i data-lucide="save"></i> Save</button>
       <button class="cred-cancel bg-white/5 border border-edge rounded-lg px-3 py-1.5 text-xs">Cancel</button>
+      ${anySet?`<button class="cred-clearall bg-rose-500/10 text-rose-300 border border-rose-500/30 rounded-lg px-3 py-1.5 text-xs flex items-center gap-1"><i data-lucide="trash-2" class="text-[12px]"></i> Clear all</button>`:''}
     </div></div>`;
+  const reopen=()=>{ box.dataset.open=''; toggleCreds(integration, box); };
   box.querySelector('.cred-cancel').onclick=()=>{box.innerHTML='';box.dataset.open='';};
+  box.querySelectorAll('.cred-clear').forEach(b=>b.onclick=async()=>{
+    const r=await api('POST',credUrl,{[b.dataset.clearkey]:''});
+    if(r&&r.error){ toast(esc(r.error),false); return; }
+    toast(`${b.dataset.clearkey} cleared`); reopen();
+  });
+  const ca=box.querySelector('.cred-clearall');
+  if(ca) ca.onclick=async()=>{
+    if(!confirm(`Clear ALL ${label} credentials? This removes every stored value for this integration.`)) return;
+    const all={}; fields.forEach(f=>{ all[f.key]=''; });
+    const r=await api('POST',credUrl,all);
+    if(r&&r.error){ toast(esc(r.error),false); return; }
+    toast(`${label} credentials cleared`); box.innerHTML=''; box.dataset.open=''; VIEWS.integrations();
+  };
   box.querySelector('.cred-save').onclick=async()=>{
     const vals={}; box.querySelectorAll('.cred-in').forEach(inp=>{ if(inp.value!=='') vals[inp.dataset.key]=inp.value; });
-    if(!Object.keys(vals).length){ toast('nothing to save',false); return; }
-    const r=await api('POST','/api/integrations/'+encodeURIComponent(integration)+'/credentials',vals);
+    if(!Object.keys(vals).length){ toast('nothing to save — type a value to replace, or use Clear all',false); return; }
+    const r=await api('POST',credUrl,vals);
     if(r.error){ toast(esc(r.error),false); return; }
     toast(`${label} credentials saved`); box.innerHTML=''; box.dataset.open=''; VIEWS.integrations();
   };
