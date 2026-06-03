@@ -6,6 +6,8 @@ session (fail-closed). All mutations are audited via dispatch()/the stores.
 """
 from __future__ import annotations
 
+import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -34,6 +36,13 @@ class Api:
         self.auth = auth
         self.signer = signer
         self.ttl = session_ttl_min
+        # fleet-count cache (stale-while-revalidate): serve instantly, refresh in the background only
+        # when viewed and stale — so no constant polling of the vendor APIs.
+        from ..core.config import get_config
+        self._fleet_cache: dict[str, dict] = {}
+        self._fleet_inflight: set[str] = set()
+        self._fleet_lock = threading.Lock()
+        self._fleet_ttl = get_config().int("DTM_FLEET_TTL_SEC", 300)
 
     def handle(self, method: str, path: str, query: dict, body: dict,
                user: Optional[str]) -> Resp:
@@ -116,7 +125,8 @@ class Api:
             from ..core import sysstats
             return Resp(200, sysstats.collect())
         if method == "GET" and path == "/api/fleet":
-            return Resp(200, self._fleet(query.get("tenant") or "*", user))
+            return Resp(200, self._fleet(query.get("tenant") or "*", user,
+                                         force=query.get("refresh") == "1"))
 
         return Resp(404, {"error": f"no route {method} {path}"})
 
@@ -276,10 +286,7 @@ class Api:
               ("huntress_list_agents", "Huntress agents", "radar"),
               ("cylance_list_devices", "Cylance devices", "shield")]
 
-    def _fleet(self, tenant: str, user: str) -> dict:
-        from ..core.context import ToolContext
-        from ..core.dispatch import dispatch
-        from ..runtime import get_client_factory
+    def _fleet_compute(self, tenant: str, user: str) -> dict:
         ctx = ToolContext(tenant_id=tenant, actor=user, client_factory=get_client_factory())
         out = []
         for name, label, icon in self._FLEET:
@@ -291,6 +298,35 @@ class Api:
             out.append({"name": name, "label": label, "icon": icon, "ok": bool(env.get("ok")),
                         "count": count, "error": env.get("error")})
         return {"tenant": tenant, "fleet": out}
+
+    def _fleet_refresh_async(self, tenant: str, user: str) -> None:
+        with self._fleet_lock:
+            if tenant in self._fleet_inflight:
+                return                      # a refresh is already running for this tenant
+            self._fleet_inflight.add(tenant)
+        def _work():
+            try:
+                data = self._fleet_compute(tenant, user)
+                with self._fleet_lock:
+                    self._fleet_cache[tenant] = {"data": data, "ts": time.monotonic()}
+            finally:
+                with self._fleet_lock:
+                    self._fleet_inflight.discard(tenant)
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _fleet(self, tenant: str, user: str, force: bool = False) -> dict:
+        now = time.monotonic()
+        with self._fleet_lock:
+            ent = self._fleet_cache.get(tenant)
+        if force or not ent:                                # forced, or nothing cached yet → compute now
+            data = self._fleet_compute(tenant, user)
+            with self._fleet_lock:
+                self._fleet_cache[tenant] = {"data": data, "ts": time.monotonic()}
+            return {**data, "cached": False, "age_sec": 0, "ttl_sec": self._fleet_ttl}
+        age = now - ent["ts"]
+        if age >= self._fleet_ttl:                          # stale → serve stale now, refresh behind the scenes
+            self._fleet_refresh_async(tenant, user)
+        return {**ent["data"], "cached": True, "age_sec": int(age), "ttl_sec": self._fleet_ttl}
 
     def _skills(self) -> dict:
         """Hermes' learned skills (read-only). Empty + available=false until Hermes runs."""

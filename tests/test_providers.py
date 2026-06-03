@@ -131,6 +131,21 @@ class Routing(unittest.TestCase):
         self.assertEqual(r.history_chars, 40000)
         self.assertEqual(r.history_msgs, 50)
 
+    def test_budget_is_model_aware(self):
+        r = ModelRouter(_cfg(DTM_OLLAMA_NUM_CTX="16384"))
+        self.assertEqual(r.budget_for("ollama"), 32768)        # bounded by num_ctx (*2 chars/token)
+        self.assertEqual(r.budget_for("anthropic"), 80000)     # cloud window is much larger
+        # cloud models advertise the bigger budget in the catalog
+        r2 = ModelRouter(_cfg(ANTHROPIC_API_KEY="sk-ant", DTM_OLLAMA_NUM_CTX="16384"))
+        by_id = {m["id"]: m for m in r2.available_models()}
+        self.assertEqual(by_id[f"ollama:{r2.local_model}"]["context_chars"], 32768)
+        self.assertEqual(by_id["anthropic:claude-opus-4-8"]["context_chars"], 80000)
+
+    def test_history_override_applies_to_all_models(self):
+        r = ModelRouter(_cfg(DTM_MAX_HISTORY_CHARS="5000", DTM_OLLAMA_NUM_CTX="16384"))
+        self.assertEqual(r.budget_for("ollama"), 5000)
+        self.assertEqual(r.budget_for("anthropic"), 5000)
+
 
 if __name__ == "__main__":
     unittest.main()

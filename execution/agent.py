@@ -123,9 +123,11 @@ class Agent:
                      else (model_id or getattr(provider, "name", "mock")))
 
         tools = self._enabled_tool_specs()
+        budget = (self.router.budget_for(getattr(provider, "name", "ollama"))
+                  if hasattr(self.router, "budget_for")
+                  else getattr(self.router, "history_chars", MAX_HISTORY_CHARS))
         messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
-        messages.extend(clean_history(history, getattr(self.router, "history_msgs", MAX_HISTORY_MSGS),
-                                      getattr(self.router, "history_chars", MAX_HISTORY_CHARS)))
+        messages.extend(clean_history(history, getattr(self.router, "history_msgs", MAX_HISTORY_MSGS), budget))
         messages.append({"role": "user", "content": message})
         turn = AgentTurn(answer="", provider=getattr(provider, "name", "?"), model=model)
         citations: list[str] = []

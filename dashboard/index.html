@@ -221,9 +221,11 @@ async function loadHostStats(){ const el=$('#hoststats'); if(!el) return;
   else h+=`<div class="text-[11px] text-slate-500 self-center">No NVIDIA GPU detected (or nvidia-smi unavailable).</div>`;
   el.innerHTML=h; }
 // ── live fleet counts (assets / agents / devices), re-pulled on demand ──
-async function loadFleet(){ const el=$('#fleet'); if(!el) return;
-  el.innerHTML='<div class="text-slate-500 text-sm">loading live counts…</div>';
-  let r; try{ r=await api('GET','/api/fleet'+(TENANT!=='*'?'?tenant='+encodeURIComponent(TENANT):'')); }catch(_){ el.innerHTML='<div class="text-rose-400 text-sm">failed to load fleet counts</div>'; return; }
+async function loadFleet(force){ const el=$('#fleet'); if(!el) return;
+  if(force) el.innerHTML='<div class="text-slate-500 text-sm">refreshing live counts…</div>';
+  const q=[]; if(TENANT!=='*') q.push('tenant='+encodeURIComponent(TENANT)); if(force) q.push('refresh=1');
+  let r; try{ r=await api('GET','/api/fleet'+(q.length?'?'+q.join('&'):'')); }catch(_){ el.innerHTML='<div class="text-rose-400 text-sm">failed to load fleet counts</div>'; return; }
+  if($('#fleetMeta')) $('#fleetMeta').textContent = r.cached ? (r.age_sec<5?'updated just now':`updated ${r.age_sec<60?r.age_sec+'s':Math.round(r.age_sec/60)+'m'} ago`) : 'updated just now';
   if(!r.fleet||!r.fleet.length){ el.innerHTML='<div class="text-slate-500 text-sm">No fleet tools enabled — configure Kaseya/Huntress/Cylance.</div>'; return; }
   el.innerHTML=r.fleet.map(f=>`<div class="rounded-xl border border-edge bg-ink/40 p-4 flex items-center gap-3">
       <div class="h-10 w-10 rounded-xl grid place-items-center ${f.ok?'bg-accent/15 text-accent':'bg-rose-500/15 text-rose-300'}"><i data-lucide="${esc(f.icon||'box')}"></i></div>
@@ -297,7 +299,8 @@ const VIEWS={
       <div class="card p-5 mb-4">
         <div class="flex items-center gap-2 mb-4 font-semibold"><i data-lucide="server" class="text-accent"></i> Fleet
           <span class="text-[11px] text-slate-500 font-normal">— live counts for ${esc(TENANT==='*'?'all clients':TENANT)}</span>
-          <button id="fleetRefresh" class="ml-auto text-[11px] text-slate-500 hover:text-accent inline-flex items-center gap-1"><i data-lucide="refresh-cw" class="text-[12px]"></i> Refresh</button></div>
+          <span id="fleetMeta" class="ml-auto text-[11px] text-slate-500 font-normal"></span>
+          <button id="fleetRefresh" class="ml-2 text-[11px] text-slate-500 hover:text-accent inline-flex items-center gap-1"><i data-lucide="refresh-cw" class="text-[12px]"></i> Refresh</button></div>
         <div id="fleet" class="grid gap-4 sm:grid-cols-3"><div class="text-slate-500 text-sm">loading live counts…</div></div>
       </div>
       <div class="grid gap-4 lg:grid-cols-3">
@@ -326,7 +329,7 @@ const VIEWS={
         </div>
       </div>`;icons();
     loadHostStats(); clearInterval(window._statPoll); window._statPoll=setInterval(loadHostStats,4000);
-    loadFleet(); if($('#fleetRefresh')) $('#fleetRefresh').onclick=()=>loadFleet();
+    loadFleet(); if($('#fleetRefresh')) $('#fleetRefresh').onclick=()=>loadFleet(true);
   },
 
   async chat(){
@@ -351,16 +354,16 @@ const VIEWS={
         <button class="grad text-white rounded-xl px-4 text-sm font-semibold flex items-center gap-1"><i data-lucide="send"></i></button>
       </form>
       <div class="text-[11px] text-slate-500 mt-2 flex items-center gap-1.5"><i data-lucide="shield-check"></i> Analysing only — DTM AI never changes client systems in this mode. ☁ = cloud model.</div></div>`;
-    $('#model').onchange=e=>{MODEL=e.target.value;};
+    $('#model').onchange=e=>{MODEL=e.target.value; updateMeter();};
     if($('#addModel'))$('#addModel').onclick=()=>route('integrations');
     const sg=['How many assets does this client have?','Any open Huntress incidents?','Summarise this client’s security posture'];
     const showSuggest=()=>{ $('#suggest').innerHTML=chatLog().length?'':sg.map(s=>`<button class="pill bg-white/5 hover:bg-white/10 text-slate-300 border border-edge">${esc(s)}</button>`).join('');
       $('#suggest').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('#msg').value=b.textContent;$('#msg').focus();}); };
-    const CTX_CAP=(mm.context&&mm.context.history_chars)||16000;   // actual backend char budget
-    const updateMeter=()=>{ const el=$('#ctxMeter'); if(!el)return; const h=chatHistory();
-      const chars=h.reduce((a,m)=>a+m.content.length,0); const over=chars>CTX_CAP;
+    const ctxCap=()=>{ const m=models.find(x=>x.id===MODEL); return (m&&m.context_chars)||(mm.context&&mm.context.history_chars)||32000; };
+    const updateMeter=()=>{ const el=$('#ctxMeter'); if(!el)return; const cap=ctxCap(); const h=chatHistory();
+      const chars=h.reduce((a,m)=>a+m.content.length,0); const over=chars>cap;
       el.className='ml-auto text-[11px] '+(over?'text-amber-400':'text-slate-500');
-      el.textContent=`ctx ${h.length} msg${h.length===1?'':'s'} · ~${(chars/1000).toFixed(1)}k/${Math.round(CTX_CAP/1000)}k`; };
+      el.textContent=`ctx ${h.length} msg${h.length===1?'':'s'} · ~${(chars/1000).toFixed(1)}k/${Math.round(cap/1000)}k`; };
     renderChatLog(); showSuggest(); updateMeter();   // restore this client's saved transcript
     $('#clearChat').onclick=()=>{ CHAT[chatKey()]=[]; chatSave(); renderChatLog(); showSuggest(); updateMeter(); };
     $('#compactChat').onclick=async()=>{ const log=chatLog();

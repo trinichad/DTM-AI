@@ -222,10 +222,24 @@ class ModelRouter:
         self.local_model = self.cfg.get("DTM_LOCAL_MODEL", "llama3.1")
         self.ollama_url = self.cfg.get("DTM_OLLAMA_URL", "http://localhost:11434")
         self.ollama_num_ctx = self.cfg.int("DTM_OLLAMA_NUM_CTX", 16384)  # local model context window (tokens)
-        # how much prior conversation re-enters the model each turn (chars / messages) — tunable
-        self.history_chars = self.cfg.int("DTM_MAX_HISTORY_CHARS", 32000)
         self.history_msgs = self.cfg.int("DTM_MAX_HISTORY_MSGS", 40)
+        # history char budget is MODEL-AWARE: a local model is bounded by its num_ctx, while a cloud
+        # model has a much larger window. DTM_MAX_HISTORY_CHARS (>0) forces one value for all models.
+        self._history_override = self.cfg.int("DTM_MAX_HISTORY_CHARS", 0)
+        self._cloud_history = self.cfg.int("DTM_CLOUD_HISTORY_CHARS", 80000)
         self._allow_mock_fallback = self.cfg.get("DTM_ENV", "dev") != "prod"
+
+    def budget_for(self, provider_name: str) -> int:
+        """Chars of prior conversation to send for a given provider's model."""
+        if self._history_override > 0:
+            return self._history_override
+        if provider_name == "ollama":
+            return max(4000, self.ollama_num_ctx * 2)   # ~4 chars/token, reserve ~half the window
+        return self._cloud_history
+
+    @property
+    def history_chars(self) -> int:
+        return self.budget_for("ollama")
 
     def cloud_allowed(self) -> bool:
         # allowed unless explicitly disabled; adding a key is the per-provider opt-in
@@ -233,13 +247,15 @@ class ModelRouter:
 
     def available_models(self) -> list[dict[str, Any]]:
         out = [{"id": f"ollama:{self.local_model}", "provider": "ollama", "model": self.local_model,
-                "label": f"{self.local_model} (local)", "local": True, "default": True}]
+                "label": f"{self.local_model} (local)", "local": True, "default": True,
+                "context_chars": self.budget_for("ollama")}]
         if self.cloud_allowed():
             for prov, (key, label, models) in CLOUD_CATALOG.items():
                 if self.cfg.present(key):
                     for mid, mlabel in models:
                         out.append({"id": f"{prov}:{mid}", "provider": prov, "model": mid,
-                                    "label": mlabel, "local": False, "default": False})
+                                    "label": mlabel, "local": False, "default": False,
+                                    "context_chars": self.budget_for(prov)})
         return out
 
     def resolve(self, model_id: Optional[str] = None):
