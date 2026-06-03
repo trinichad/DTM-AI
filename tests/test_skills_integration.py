@@ -21,6 +21,12 @@ class FakeKaseya:
     def get_asset(self, asset_id):
         return {"AgentId": asset_id, "AssetName": "PC1", "LastLoggedInUser": "jdoe"}
 
+    def get_agents(self):
+        # agents present in the machine group but NOT necessarily as asset records
+        return [{"AgentId": 11, "AgentName": "iwr-01.inwood.rho", "MachineGroup": "inwood.rho"},
+                {"AgentId": 12, "AgentName": "iwr-02.inwood.rho", "MachineGroup": "inwood.rho"},
+                {"AgentId": 99, "AgentName": "abc-01.other.rho", "MachineGroup": "other.rho"}]
+
 
 class FakeCylance:
     def get_paginated(self, path, params=None, **kw):
@@ -56,6 +62,16 @@ class IntegrationSkills(unittest.TestCase):
         self.assertEqual(env["source"], "kaseya")
         self.assertNotIn("extra", env["data"][0])      # payload slimmed
         self.assertEqual(env["data"][0]["AssetName"], "PC1")
+
+    def test_kaseya_list_agents_and_filter(self):
+        env = self._d("kaseya_list_agents")
+        self.assertTrue(env["ok"])
+        self.assertEqual(env["source"], "kaseya")
+        self.assertEqual(len(env["data"]), 3)                       # all agents (machine-group view)
+        # name_contains gives a complete focused result (the fix for the 'missing iwr-02' bug)
+        env = self._d("kaseya_list_agents", {"name_contains": "inwood"})
+        names = sorted(a["AgentName"] for a in env["data"])
+        self.assertEqual(names, ["iwr-01.inwood.rho", "iwr-02.inwood.rho"])
 
     def test_kaseya_get_asset_requires_id(self):
         self.assertFalse(self._d("kaseya_get_asset", {})["ok"])         # missing required arg

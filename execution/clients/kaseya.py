@@ -87,6 +87,16 @@ class KaseyaClient:
                 return a
         return {}
 
+    def get_agents(self, filters: Optional[str] = None) -> list[dict]:
+        """All managed AGENTS (machines with the Kaseya agent installed) — the machine-group
+        view. Distinct from /assetmgmt/assets (asset-management records): a machine can be a
+        managed agent here without having an asset record, so this is the authoritative list for
+        'which machines are in group X'. Mirrors the proven Kaseya Link client."""
+        return self.get_all("/assetmgmt/agents", {"$filter": filters} if filters else {})
+
+    def get_agent(self, agent_id: str) -> dict:
+        return (self.get(f"/assetmgmt/agents/{agent_id}") or {}).get("Result", {})
+
     def get_orgs(self) -> list[dict]:
         return (self.get("/system/orgs") or {}).get("Result", [])
 
