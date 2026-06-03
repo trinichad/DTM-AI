@@ -97,9 +97,25 @@ class Streaming(unittest.TestCase):
                 yield l
         deltas = []
         res = OllamaProvider("http://x", stream_transport=st).chat_stream(
-            [{"role": "user", "content": "hi"}], [], "m", lambda t: deltas.append(t))
+            [{"role": "user", "content": "hi"}], [], "m", lambda t, k="content": deltas.append(t))
         self.assertEqual(deltas, ["Hel", "lo"])
         self.assertEqual(res.content, "Hello")
+
+    def test_ollama_reasoning_thinking_channel(self):
+        # reasoning models (qwen3.5) stream chain-of-thought in `thinking` BEFORE the answer.
+        # thinking is emitted on its own channel and kept OUT of the persisted content.
+        def st(method, url, headers=None, params=None, json_body=None, timeout=120):
+            for l in ['{"message":{"content":"","thinking":"Let me "}}',
+                      '{"message":{"content":"","thinking":"count."}}',
+                      '{"message":{"content":"1 2 3"}}',
+                      '{"message":{"content":""},"done":true}']:
+                yield l
+        ch = {"content": [], "thinking": []}
+        res = OllamaProvider("http://x", stream_transport=st).chat_stream(
+            [], [], "qwen3.5:27b", lambda t, k="content": ch[k].append(t))
+        self.assertEqual(ch["thinking"], ["Let me ", "count."])   # reasoning surfaced live
+        self.assertEqual(ch["content"], ["1 2 3"])
+        self.assertEqual(res.content, "1 2 3")                    # only the answer is returned/persisted
 
     def test_ollama_stream_tool_calls(self):
         def st(method, url, headers=None, params=None, json_body=None, timeout=120):
@@ -124,14 +140,15 @@ class Streaming(unittest.TestCase):
             yield from lines
         deltas = []
         res = ClaudeProvider("k", stream_transport=st).chat_stream(
-            [{"role": "user", "content": "hi"}], [], "claude-opus-4-8", lambda t: deltas.append(t))
+            [{"role": "user", "content": "hi"}], [], "claude-opus-4-8", lambda t, k="content": deltas.append(t))
         self.assertEqual("".join(deltas), "42 assets")
         self.assertEqual(res.tool_calls[0]["name"], "kaseya_list_assets")
         self.assertEqual(res.tool_calls[0]["arguments"], {"a": 1})
 
     def test_mock_stream_emits_whole(self):
         got = []
-        res = MockProvider().chat_stream([{"role": "user", "content": "hey"}], [], "m", lambda t: got.append(t))
+        res = MockProvider().chat_stream([{"role": "user", "content": "hey"}], [], "m",
+                                         lambda t, k="content": got.append(t))
         self.assertEqual(got, [res.content])
 
 

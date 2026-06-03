@@ -207,11 +207,15 @@ class Agent:
         messages.append({"role": "user", "content": message})
         turn = AgentTurn(answer="", provider=getattr(provider, "name", "?"), model=model)
         citations: list[str] = []
-        delta = lambda t: emit({"type": "delta", "text": t})  # noqa: E731
+
+        def piece(text, kind="content"):
+            # reasoning models stream a separate "thinking" channel before the answer; surface it
+            # live as its own event so the UI shows the model working instead of a frozen spinner.
+            emit({"type": "thinking" if kind == "thinking" else "delta", "text": text})
 
         for rnd in range(self.max_rounds):
             turn.rounds = rnd + 1
-            result = self._stream_provider(provider, messages, tools, model, delta)
+            result = self._stream_provider(provider, messages, tools, model, piece)
             if not result.tool_calls:
                 turn.answer = result.content or ""
                 turn.citations = citations

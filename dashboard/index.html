@@ -432,9 +432,13 @@ const VIEWS={
       MSGS.push({role:'user',text:m}); showSuggest(); updateMeter();
       bubble('you',esc(m));const id=bubble('ai',DOTS);
       const el=()=>document.getElementById(id);
-      let acc='', tools=[], finalTurn=null;
+      let acc='', think='', tools=[], finalTurn=null;
+      const thinkBlock=()=>{ if(!think) return '';
+        if(acc) return `<div class="text-[11px] text-slate-500 mb-1.5 flex items-center gap-1.5"><i data-lucide="brain" class="text-[11px]"></i><span class="italic opacity-70">Thought for a moment</span></div>`;
+        const tail=esc(think).replace(/\s+/g,' ').slice(-280);
+        return `<div class="text-[11px] text-slate-500 mb-1.5 flex items-start gap-1.5"><i data-lucide="brain" class="text-[12px] mt-0.5 shrink-0 animate-pulse"></i><span class="italic opacity-70">${tail}…</span></div>`; };
       const renderLive=()=>{ const e=el(); if(!e)return;
-        e.innerHTML=(acc?md(acc):DOTS)+toolChips(tools); icons(); $('#msgs').scrollTop=1e9; };
+        e.innerHTML=thinkBlock()+(acc?md(acc):(think?'':DOTS))+toolChips(tools); icons(); $('#msgs').scrollTop=1e9; };
       try{
         const resp=await fetch('/api/chat/stream',{method:'POST',credentials:'same-origin',
           headers:{'Content-Type':'application/json'},
@@ -447,6 +451,7 @@ const VIEWS={
           while((i=buf.indexOf('\n\n'))>=0){ const line=buf.slice(0,i).replace(/^data: ?/,''); buf=buf.slice(i+2);
             if(!line)continue; let ev; try{ev=JSON.parse(line);}catch(_){continue;}
             if(ev.type==='start'){ CONV=ev.conversation_id||CONV; }
+            else if(ev.type==='thinking'){ think+=ev.text; renderLive(); }
             else if(ev.type==='delta'){ acc+=ev.text; renderLive(); }
             else if(ev.type==='tool_call'){ tools.push({name:ev.name,ok:null}); renderLive(); }
             else if(ev.type==='tool_result'){ const t=tools.find(x=>x.name===ev.name&&x.ok===null); if(t)t.ok=ev.ok; else tools.push({name:ev.name,ok:ev.ok}); renderLive(); }

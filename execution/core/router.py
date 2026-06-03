@@ -108,7 +108,10 @@ class OllamaProvider:
         return ChatResult(msg.get("content", ""), calls, self.name, model, True)
 
     def chat_stream(self, messages, tools, model, emit) -> ChatResult:
-        """Stream via Ollama's newline-delimited JSON: each line carries a message.content delta."""
+        """Stream via Ollama's newline-delimited JSON. Each line carries a message.content delta;
+        REASONING models (e.g. qwen3.5) stream their chain-of-thought in a separate `thinking`
+        field first — emit that on the 'thinking' channel so the UI shows live progress, but keep it
+        OUT of the returned content (only the real answer is persisted)."""
         payload = self._payload(messages, tools, model, stream=True)
         content, calls = "", []
         for line in self._st("POST", f"{self.base_url}/api/chat", json_body=payload, timeout=120):
@@ -117,10 +120,13 @@ class OllamaProvider:
             except json.JSONDecodeError:
                 continue
             msg = obj.get("message") or {}
+            think = msg.get("thinking")
+            if think:
+                emit(think, "thinking")
             piece = msg.get("content") or ""
             if piece:
                 content += piece
-                emit(piece)
+                emit(piece, "content")
             for tc in msg.get("tool_calls") or []:
                 fn = tc.get("function", {})
                 calls.append({"name": fn.get("name"), "arguments": fn.get("arguments", {})})
