@@ -85,7 +85,10 @@ class Api:
         if method == "GET" and path == "/api/tools":
             return Resp(200, {"tools": self._tools()})
         if method == "GET" and path == "/api/models":
-            return Resp(200, {"models": self.agent.router.available_models()})
+            r = self.agent.router
+            return Resp(200, {"models": r.available_models(),
+                              "context": {"history_chars": getattr(r, "history_chars", 16000),
+                                          "history_msgs": getattr(r, "history_msgs", 30)}})
         if method == "GET" and path == "/api/integrations":
             return Resp(200, {"integrations": self._integrations()})
         if method == "GET" and path == "/api/integrations/probe":

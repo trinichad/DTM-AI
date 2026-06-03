@@ -108,8 +108,8 @@ class HistoryGuard(unittest.TestCase):
     def test_drops_bad_entries_and_caps_count(self):
         h = [{"role": "user", "content": str(i)} for i in range(40)]
         h += [{"role": "tool", "content": "x"}, {"not": "a dict"}, 7]
-        cleaned = clean_history(h)
-        self.assertEqual(len(cleaned), 20)                      # capped to MAX_HISTORY_MSGS
+        cleaned = clean_history(h, max_msgs=20, max_chars=10**9)
+        self.assertEqual(len(cleaned), 20)                      # capped to max_msgs
         self.assertTrue(all(m["role"] in ("user", "assistant") for m in cleaned))
         self.assertEqual(cleaned[-1]["content"], "39")          # keeps the most recent
 
@@ -119,7 +119,7 @@ class HistoryGuard(unittest.TestCase):
             {"role": "user", "content": big},
             {"role": "assistant", "content": big},
             {"role": "user", "content": "latest"},
-        ])
+        ], max_chars=6000)
         self.assertEqual(cleaned[-1]["content"], "latest")      # newest always survives
         self.assertLess(sum(len(m["content"]) for m in cleaned), 5000 * 3)
 

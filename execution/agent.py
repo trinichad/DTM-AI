@@ -38,12 +38,14 @@ Use the provided tools to answer. Prefer calling a tool over guessing."""
 # Conversation-context guard ("compaction"): cap how much prior history re-enters the model so a
 # long chat never overflows the (often small) local context window. Keep the most recent turns and
 # trim the oldest past a char budget. Done in code so the user never has to manage it manually.
-MAX_HISTORY_MSGS = 20
-MAX_HISTORY_CHARS = 6000
+MAX_HISTORY_MSGS = 30
+MAX_HISTORY_CHARS = 16000
 
 
-def clean_history(history: Optional[list]) -> list[dict[str, str]]:
-    """Validate + bound caller-supplied chat history to user/assistant text turns."""
+def clean_history(history: Optional[list], max_msgs: int = MAX_HISTORY_MSGS,
+                  max_chars: int = MAX_HISTORY_CHARS) -> list[dict[str, str]]:
+    """Validate + bound caller-supplied chat history to user/assistant text turns.
+    Limits are tunable (router reads DTM_MAX_HISTORY_MSGS / DTM_MAX_HISTORY_CHARS)."""
     if not history:
         return []
     out: list[dict[str, str]] = []
@@ -53,9 +55,9 @@ def clean_history(history: Optional[list]) -> list[dict[str, str]]:
         role, content = h.get("role"), h.get("content")
         if role in ("user", "assistant") and isinstance(content, str) and content.strip():
             out.append({"role": role, "content": content})
-    out = out[-MAX_HISTORY_MSGS:]
+    out = out[-max_msgs:]
     total = sum(len(m["content"]) for m in out)
-    while len(out) > 1 and total > MAX_HISTORY_CHARS:
+    while len(out) > 1 and total > max_chars:
         total -= len(out[0]["content"])
         out.pop(0)
     return out
@@ -122,7 +124,8 @@ class Agent:
 
         tools = self._enabled_tool_specs()
         messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
-        messages.extend(clean_history(history))   # prior turns → real conversation context
+        messages.extend(clean_history(history, getattr(self.router, "history_msgs", MAX_HISTORY_MSGS),
+                                      getattr(self.router, "history_chars", MAX_HISTORY_CHARS)))
         messages.append({"role": "user", "content": message})
         turn = AgentTurn(answer="", provider=getattr(provider, "name", "?"), model=model)
         citations: list[str] = []
@@ -168,7 +171,7 @@ class Agent:
     def summarize(self, history: Optional[list], *, model_id: Optional[str] = None) -> str:
         """Compact a conversation into a concise summary (no tools) so chat can continue with the
         key context preserved instead of oldest turns being dropped. Used by the UI 'Compact' button."""
-        msgs = clean_history(history)
+        msgs = clean_history(history, max_msgs=200, max_chars=20000)
         if not msgs:
             return ""
         convo = "\n".join(f"{m['role']}: {m['content']}" for m in msgs)[:12000]

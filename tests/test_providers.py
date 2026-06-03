@@ -114,6 +114,23 @@ class Routing(unittest.TestCase):
         self.assertIsInstance(prov, ClaudeProvider)
         self.assertEqual(model, "claude-opus-4-8")
 
+    def test_ollama_sends_configured_num_ctx(self):
+        cap = {}
+        def fake(method, url, headers=None, params=None, json_body=None, **kw):
+            cap["body"] = json_body
+            return 200, {"message": {"content": "ok"}}
+        r = ModelRouter(_cfg(DTM_LOCAL_MODEL="qwen3.5:27b", DTM_OLLAMA_NUM_CTX="16384"))
+        self.assertEqual(r.ollama_num_ctx, 16384)
+        prov, model = r.resolve(None)              # local fallback
+        prov._t = fake
+        prov.chat([{"role": "user", "content": "hi"}], [], model)
+        self.assertEqual(cap["body"]["options"]["num_ctx"], 16384)
+
+    def test_history_limits_configurable(self):
+        r = ModelRouter(_cfg(DTM_MAX_HISTORY_CHARS="40000", DTM_MAX_HISTORY_MSGS="50"))
+        self.assertEqual(r.history_chars, 40000)
+        self.assertEqual(r.history_msgs, 50)
+
 
 if __name__ == "__main__":
     unittest.main()

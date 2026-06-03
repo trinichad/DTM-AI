@@ -61,9 +61,10 @@ class OllamaProvider:
     name = "ollama"
     is_local = True
 
-    def __init__(self, base_url: str, transport: Callable = http_json) -> None:
+    def __init__(self, base_url: str, transport: Callable = http_json, num_ctx: int = 0) -> None:
         self.base_url = base_url.rstrip("/")
         self._t = transport
+        self.num_ctx = num_ctx  # Ollama context window (tokens); 0 = use Ollama's own default
 
     def chat(self, messages, tools, model) -> ChatResult:
         wire = []
@@ -80,6 +81,8 @@ class OllamaProvider:
             elif r == "tool":
                 wire.append({"role": "tool", "content": m.get("content", "")})
         payload = {"model": model, "messages": wire, "stream": False}
+        if self.num_ctx:
+            payload["options"] = {"num_ctx": self.num_ctx}   # widen the model's context window
         if tools:
             payload["tools"] = tools
         _s, data = self._t("POST", f"{self.base_url}/api/chat", json_body=payload, timeout=120)
@@ -218,6 +221,10 @@ class ModelRouter:
         self.cfg = cfg or get_config()
         self.local_model = self.cfg.get("DTM_LOCAL_MODEL", "llama3.1")
         self.ollama_url = self.cfg.get("DTM_OLLAMA_URL", "http://localhost:11434")
+        self.ollama_num_ctx = self.cfg.int("DTM_OLLAMA_NUM_CTX", 8192)   # local model context window (tokens)
+        # how much prior conversation re-enters the model each turn (chars / messages) — tunable
+        self.history_chars = self.cfg.int("DTM_MAX_HISTORY_CHARS", 16000)
+        self.history_msgs = self.cfg.int("DTM_MAX_HISTORY_MSGS", 30)
         self._allow_mock_fallback = self.cfg.get("DTM_ENV", "dev") != "prod"
 
     def cloud_allowed(self) -> bool:
@@ -240,12 +247,12 @@ class ModelRouter:
         if model_id and ":" in model_id:
             prov, model = model_id.split(":", 1)
             if prov == "ollama":
-                return OllamaProvider(self.ollama_url), model
+                return OllamaProvider(self.ollama_url, num_ctx=self.ollama_num_ctx), model
             if prov == "anthropic" and self.cloud_allowed() and self.cfg.present("ANTHROPIC_API_KEY"):
                 return ClaudeProvider(self.cfg.require("ANTHROPIC_API_KEY")), model
             if prov == "openai" and self.cloud_allowed() and self.cfg.present("OPENAI_API_KEY"):
                 return OpenAIProvider(self.cfg.require("OPENAI_API_KEY")), model
-        return OllamaProvider(self.ollama_url), self.local_model
+        return OllamaProvider(self.ollama_url, num_ctx=self.ollama_num_ctx), self.local_model
 
     # back-compat: agent calls choose() when no explicit provider
     def choose(self, *, allow_cloud: bool = False, model_hint: Optional[str] = None):
