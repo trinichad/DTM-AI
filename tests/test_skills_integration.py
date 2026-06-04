@@ -119,6 +119,37 @@ class IntegrationSkills(unittest.TestCase):
                        name="huntress_list_agents", args={"name_contains": "rho"})
         self.assertEqual(sorted(a["hostname"] for a in env["data"]), ["RHO-9SN4XD3", "rho-lt32"])
 
+    def test_endpoint_coverage_joins_three_vendors(self):
+        class K:
+            def get_agents(self):
+                return [{"AgentName": "rho-01.root.rho", "ComputerName": "RHO-01", "Online": True},
+                        {"AgentName": "rho-02.root.rho", "ComputerName": "RHO-02", "Online": False}]
+        class C:
+            def get_paginated(self, path, params=None, **kw):
+                yield {"id": "1", "name": "RHO-01", "agent_version": "3.1.0"}   # only RHO-01 has Cylance
+        class H:
+            def get_paginated(self, path, params=None, **kw):
+                yield {"id": "a", "hostname": "RHO-02", "version": "0.14.168"}  # only RHO-02 has Huntress
+        clients = {"kaseya": K(), "cylance": C(), "huntress": H()}
+        ctx = ToolContext(tenant_id="*", actor="t", client_factory=lambda i, t: clients[i])
+        env = dispatch(registry=self.reg, audit=self.audit, ctx=ctx,
+                       name="endpoint_coverage", args={"name_contains": "rho"})
+        self.assertTrue(env["ok"])
+        by = {r["hostname"]: r for r in env["data"]["machines"]}
+        self.assertEqual(set(by), {"RHO-01", "RHO-02"})
+        self.assertTrue(by["RHO-01"]["cylance"])
+        self.assertEqual(by["RHO-01"]["cylance_version"], "3.1.0")
+        self.assertFalse(by["RHO-01"]["huntress"])
+        self.assertTrue(by["RHO-02"]["huntress"])
+        self.assertEqual(by["RHO-02"]["huntress_version"], "0.14.168")
+        self.assertTrue(by["RHO-01"]["kaseya_online"])
+        self.assertFalse(by["RHO-02"]["kaseya_online"])
+        self.assertEqual(env["data"]["summary"]["missing_huntress"], ["RHO-01"])
+        self.assertEqual(env["data"]["summary"]["missing_cylance"], ["RHO-02"])
+
+    def test_endpoint_coverage_requires_name(self):
+        self.assertFalse(self._d("endpoint_coverage", {})["ok"])   # name_contains required by schema
+
     def test_huntress_incidents_enum_validation(self):
         self.assertFalse(self._d("huntress_list_incidents", {"status": "bogus"})["ok"])
         self.assertTrue(self._d("huntress_list_incidents", {"status": "sent"})["ok"])
