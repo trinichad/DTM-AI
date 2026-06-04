@@ -1,11 +1,15 @@
-# Kaseya VSA 9 — Agent Procedure STEP Commands (reference)
+# Kaseya VSA 9 — Agent Procedure Commands: IF-ELSE-STEP (reference)
 
-> **Source:** Kaseya VSA 9 help — <https://help.vsa9.kaseya.com/help/Content/VSA/4896.htm>
-> (each command links to its own page: `https://help.vsa9.kaseya.com/help/Content/VSA/<id>.htm`)
+> **Sources:** Kaseya VSA 9 help (each command links to `https://help.vsa9.kaseya.com/help/Content/VSA/<id>.htm`)
+> - STEP (action) commands index — <https://help.vsa9.kaseya.com/help/Content/VSA/4896.htm>
+> - IF (conditional) commands index — <https://help.vsa9.kaseya.com/help/Content/VSA/7883.htm>
+> - Combined IF-ELSE-STEP reference — <https://help.vsa9.kaseya.com/help/Content/VSA/674.htm>
+> - Agent Procedures feature chapter — <https://help.vsa9.kaseya.com/help/Content/VSA/4549.htm>
 >
-> **What these are:** the building-block *STEP commands* used inside Kaseya **Agent Procedures**
-> (scripts that run ON a managed machine). They are how Kaseya performs actions like reboot, run a
-> script, install software, edit the registry, manage users/services, move files, etc.
+> **What these are:** the building-block commands of Kaseya **Agent Procedures** (scripts that run ON a
+> managed machine). An agent procedure is built from two kinds of steps: **IF** commands (conditional
+> tests that branch the procedure) and **STEP** commands (the actions — reboot, run a script, install
+> software, edit the registry, manage users/services, move files, etc.).
 >
 > ⚠️ **STATUS IN DTM AI: REFERENCE ONLY — NOT EXECUTABLE.** DTM AI v1 is read-only; none of these are
 > wired as tools/capabilities and the agent CANNOT run them. This doc exists so the assistant *knows
@@ -17,6 +21,33 @@
 > registry service user file install msi remote action runbook.
 
 ---
+
+## IF — conditional commands (branch the procedure)
+These are the *tests* used in an `IF … ELSE …` step. They evaluate to true/false and decide which
+branch runs; they don't change the machine themselves. (`ELSE` is the else-branch, `true` is the
+unconditional/always-run condition.)
+
+| Command | Tests / does | Doc |
+|---|---|---|
+| `checkVar()` | Test the value of a procedure variable | [4887](https://help.vsa9.kaseya.com/help/Content/VSA/4887.htm) |
+| `eval()` | Evaluate an expression / numeric or string comparison | [4888](https://help.vsa9.kaseya.com/help/Content/VSA/4888.htm) |
+| `getOS()` | Branch on the machine's operating system | [7877](https://help.vsa9.kaseya.com/help/Content/VSA/7877.htm) |
+| `getRAM()` | Branch on the amount of installed RAM | [7868](https://help.vsa9.kaseya.com/help/Content/VSA/7868.htm) |
+| `getRegistryValue()` / `get64BitRegistryValue()` | Read a registry value and test it (32/64-bit) | [4886](https://help.vsa9.kaseya.com/help/Content/VSA/4886.htm) |
+| `hasRegistryKey()` / `has64BitRegistryKey()` | Test whether a registry key exists (32/64-bit) | [4892](https://help.vsa9.kaseya.com/help/Content/VSA/4892.htm) |
+| `isAppRunning()` | Test whether an application/process is running | [4885](https://help.vsa9.kaseya.com/help/Content/VSA/4885.htm) |
+| `isServiceRunning()` | Test whether a Windows service is running | [4889](https://help.vsa9.kaseya.com/help/Content/VSA/4889.htm) |
+| `isUserActive()` | Test whether the logged-in user is active (not idle) | [7876](https://help.vsa9.kaseya.com/help/Content/VSA/7876.htm) |
+| `isUserLoggedin()` | Test whether a user is logged in | [4894](https://help.vsa9.kaseya.com/help/Content/VSA/4894.htm) |
+| `isYesFromUser()` | Prompt the user and branch on their Yes/No answer | [4895](https://help.vsa9.kaseya.com/help/Content/VSA/4895.htm) |
+| `testFile()` | Test whether a file exists | [4890](https://help.vsa9.kaseya.com/help/Content/VSA/4890.htm) |
+| `testFileInDirectoryPath()` | Test for a file at a resolved directory path | [4891](https://help.vsa9.kaseya.com/help/Content/VSA/4891.htm) |
+| `else` | The ELSE branch of an IF step | [10548](https://help.vsa9.kaseya.com/help/Content/VSA/10548.htm) |
+| `true` | Always-true condition (run the step unconditionally) | [4893](https://help.vsa9.kaseya.com/help/Content/VSA/4893.htm) |
+
+---
+
+# STEP — action commands (do something on the machine)
 
 ## Power & session control
 | Command | Does | Doc |
@@ -145,5 +176,21 @@
 
 ---
 
-*77 commands total. List captured from the VSA 9 help "In This Section" index on 2026-06-03. If Kaseya
-adds/renames commands, re-fetch the source URL above and update this file.*
+## Agent Procedures — feature docs (concepts, not commands)
+The broader Agent Procedures chapter (how procedures are authored/managed, not the command verbs):
+- [Agent Procedures Overview](https://help.vsa9.kaseya.com/help/Content/VSA/4551.htm)
+- [Manage Procedures](https://help.vsa9.kaseya.com/help/Content/VSA/41467.htm)
+- [Installer Wizard](https://help.vsa9.kaseya.com/help/Content/VSA/41469.htm) — build software-install procedures
+- [File Transfer](https://help.vsa9.kaseya.com/help/Content/VSA/41470.htm)
+- [Administration](https://help.vsa9.kaseya.com/help/Content/VSA/41471.htm)
+
+> Agent procedures are authored/scheduled in Kaseya, then run on machines. The REST API can *list, run,
+> schedule, and delete* them — see `AgentProcedure` in
+> [the REST API catalog](kaseya-vsa9-rest-api-endpoints.md) (`/automation/agentprocs...`). A future DTM AI
+> "run an approved procedure" capability would combine those (a 🔴 write, gated by approval).
+
+---
+
+*92 commands total: 15 IF (conditional) + 77 STEP (action). Captured from the VSA 9 help "In This
+Section" indexes (4896, 7883, 674) on 2026-06-03. If Kaseya adds/renames commands, re-fetch the source
+URLs above and update this file.*
