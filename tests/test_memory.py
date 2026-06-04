@@ -16,6 +16,8 @@ class Vault(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.v = VaultStore(path=Path(self.tmp.name))
+        # isolate from the repo-bundled reference/ so these per-vault assertions are deterministic
+        self.v.reference_dir = Path(self.tmp.name) / "_noref"
         (self.v.kb_dir / "net").mkdir(parents=True)
         (self.v.kb_dir / "net" / "firewall.md").write_text(
             "# SonicWall\nTo reset the admin password, hold reset 15s then use mgmt port.", encoding="utf-8")
@@ -34,7 +36,8 @@ class Vault(unittest.TestCase):
 
     def test_kb_search_includes_bundled_reference(self):
         # the repo-bundled reference/ ships with the app and is searchable alongside the vault kb/
-        hits = self.v.search_kb("kaseya executePowershell command")
+        v = VaultStore(path=Path(self.tmp.name))   # default reference_dir = the real repo reference/
+        hits = v.search_kb("kaseya executePowershell command")
         self.assertTrue(any("reference/" in h["doc"] for h in hits),
                         "bundled Kaseya command reference should be searchable via kb_search")
 
