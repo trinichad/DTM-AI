@@ -57,5 +57,40 @@ disk, system info, software licenses) — all GET, all read-only.
 
 ---
 
-*Add more modules here as referenced (Monitoring, Patch Management, Remote Control, Info Center,
-Service Desk, etc.). Captured 2026-06-03; re-fetch the source pages if Kaseya updates them.*
+## Monitor  (chapter: [2180](https://help.vsa9.kaseya.com/help/Content/VSA/2180.htm))
+**What it does:** real-time health monitoring of managed machines *and* non-agent devices, with
+immediate notifications. When a condition matches, it can fire **ATSE** actions: **A**=create alarm,
+**T**=create ticket, **S**=run an agent procedure, **E**=email recipients.
+
+**Six monitoring methods** (Monitor Overview, [2181](https://help.vsa9.kaseya.com/help/Content/VSA/2181.htm)):
+1. **Alerts** — typed events on agent machines (offline, RC disabled, software install/removal, hardware
+   change, low disk, policy violation, failed procedure, unauthorized access, new device, …)
+2. **Event Log Alerts** — watch Windows event logs on agent machines
+3. **Monitor Sets** — performance state on agent machines (counters/objects, thresholds)
+4. **SNMP Sets** — performance on non-agent devices via SNMP
+5. **System Check** — events on non-agent machines (e.g. reachability/port checks)
+6. **Log Monitoring** — watch external log files
+
+**Key terms** (Terms & Concepts, [4069](https://help.vsa9.kaseya.com/help/Content/VSA/4069.htm)):
+- **Alert** — condition match on a machine/device. **Alarm** — the red/green notification raised by an
+  alert. **Alarm Log** — record of alarms; **Monitor Action Log** — record of *all* alerts (alarm or not).
+- **Event-based alerts** (discrete occurrences): Alerts, Event Log Alerts, System Checks, Log Monitoring.
+  **State-based alerts** (in/out of range): Monitor Sets, SNMP Sets.
+- **Counter / Counter Object** — perf metric a Monitor Set watches. **Event Set** — set of event-log
+  criteria. **Dashboard / Dashlet** — configurable monitoring views/panes. **Group Alarm** — related
+  alarms grouped by category. **Suspend Alarms** — pause alarming for a window without stopping collection.
+
+**REST endpoints that expose Monitor data** (see catalog `Alarm`/`Alert`/`EventLog`/`VSALog`/`MonitorSetEvent`):
+- 🟢 `GET /assetmgmt/alarms/{returnAllRecords}` · `/alarms/{alarmId}` — open alarms · 🔴 `PUT /alarms/{alarmId}/close`
+- 🟢 `GET /automation/alertdefinitions` — configured alert definitions (🔴 POST/PUT/DELETE to change)
+- 🟢 `GET /assetmgmt/logs/{agentId}/eventlog/{application|system|security|directoryservice|dnsserver|internetexplorer}` — event logs
+- 🟢 `GET /assetmgmt/logs/{agentguid}/{alarms|monitoractions|configurationchanges|logmonitoring}` — monitoring/alarm history
+- 🔴 `POST /system/monitorSetEvent/...` — author/manage monitor sets (write)
+
+**DTM AI mapping:** "any open alarms / recent alerts on this client?" and "show this machine's
+security event log" are natural **read** tools (alarms + event logs are all GET) — high value, read-only.
+
+---
+
+*Add more modules here as referenced (Patch Management, Remote Control, Info Center, Service Desk,
+Policy Management, etc.). Captured 2026-06-03; re-fetch the source pages if Kaseya updates them.*
