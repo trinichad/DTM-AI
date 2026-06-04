@@ -98,6 +98,27 @@ class IntegrationSkills(unittest.TestCase):
         self.assertEqual(len(env["data"]), 3)           # 1708-style dedup, not 1800-style raw count
         self.assertEqual([d["id"] for d in env["data"]], ["1", "2", "3"])  # first-seen order kept
 
+    def test_cylance_devices_name_filter(self):
+        # the name_contains filter is what makes cross-vendor joins possible on huge fleets
+        class C:
+            def get_paginated(self, path, params=None, **kw):
+                for n in ["RHO-9SN4XD3", "ABC-01", "rho-lt32"]:
+                    yield {"id": n, "name": n, "agent_version": "3.1"}
+        ctx = ToolContext(tenant_id="acme", actor="t", client_factory=lambda i, t: C())
+        env = dispatch(registry=self.reg, audit=self.audit, ctx=ctx,
+                       name="cylance_list_devices", args={"name_contains": "rho"})
+        self.assertEqual(sorted(d["name"] for d in env["data"]), ["RHO-9SN4XD3", "rho-lt32"])
+
+    def test_huntress_agents_name_filter(self):
+        class H:
+            def get_paginated(self, path, params=None, **kw):
+                for h in ["RHO-9SN4XD3", "abc", "rho-lt32"]:
+                    yield {"id": h, "hostname": h, "version": "0.14"}
+        ctx = ToolContext(tenant_id="acme", actor="t", client_factory=lambda i, t: H())
+        env = dispatch(registry=self.reg, audit=self.audit, ctx=ctx,
+                       name="huntress_list_agents", args={"name_contains": "rho"})
+        self.assertEqual(sorted(a["hostname"] for a in env["data"]), ["RHO-9SN4XD3", "rho-lt32"])
+
     def test_huntress_incidents_enum_validation(self):
         self.assertFalse(self._d("huntress_list_incidents", {"status": "bogus"})["ok"])
         self.assertTrue(self._d("huntress_list_incidents", {"status": "sent"})["ok"])

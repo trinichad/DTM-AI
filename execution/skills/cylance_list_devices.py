@@ -4,13 +4,22 @@ from __future__ import annotations
 from typing import Any
 
 NAME = "cylance_list_devices"
-DESCRIPTION = ("List endpoints protected by Cylance for this client. "
-               "Returns id, name, state, agent_version, os_version, last_logged_in_user.")
+DESCRIPTION = ("List endpoints protected by Cylance for this client. Returns id, name (hostname), "
+               "state, agent_version (Cylance agent version), os_version, last_logged_in_user. There "
+               "can be THOUSANDS of devices — pass name_contains (case-insensitive hostname substring, "
+               "e.g. 'rho') to get a complete focused result you can cross-reference, not a truncated list.")
 SOURCE = "cylance"
 CATEGORY = "read"
 RISK_LEVEL = "low"
 ENABLED_BY_DEFAULT = True
-PARAMETERS: dict[str, Any] = {"type": "object", "properties": {}, "additionalProperties": False}
+PARAMETERS: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "name_contains": {"type": "string",
+                          "description": "case-insensitive substring filter on the device name (hostname)"}
+    },
+    "additionalProperties": False,
+}
 
 _FIELDS = ("id", "name", "state", "agent_version", "os_version", "last_logged_in_user", "policy")
 
@@ -25,10 +34,11 @@ def _slim(d: dict) -> dict:
     return out
 
 
-def run(ctx, **_: Any):
+def run(ctx, name_contains: str = "", **_: Any):
     # Dedup by device id: Cylance pagination drifts (the live device list shifts while we page),
     # so records near page boundaries get returned on two pages. Counting raw yields a bogus
     # over-count (e.g. 1800 = 9 full pages, vs 1708 real). Unique id is the authoritative count.
+    needle = (name_contains or "").strip().lower()
     seen: set = set()
     out: list[dict] = []
     for d in ctx.client("cylance").get_paginated("/devices/v2"):
@@ -38,5 +48,7 @@ def run(ctx, **_: Any):
             continue
         if key is not None:
             seen.add(key)
+        if needle and needle not in str(slim.get("name", "")).lower():
+            continue
         out.append(slim)
     return out
