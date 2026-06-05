@@ -59,6 +59,13 @@ class McpFence(unittest.TestCase):
         env = json.loads(r["result"]["content"][0]["text"])
         self.assertEqual(env["tenant_id"], "acme")
 
+    def test_tool_call_caches_result_for_transcript(self):
+        # the MCP path caches a result preview so the DTM AI transcript can show what Hermes saw
+        self.srv.handle({"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                         "params": {"name": "system_health", "arguments": {}}})
+        rows = self.srv.agent.audit.recent_results("hermes", 0)
+        self.assertTrue(any(r["tool"] == "system_health" and r["data"] for r in rows))
+
     def test_handle_tenant_override_routes_per_request(self):
         # the same server instance answers for different tenants when the transport supplies one
         r = self.srv.handle({"jsonrpc": "2.0", "id": 6, "method": "tools/call",

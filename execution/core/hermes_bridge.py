@@ -52,8 +52,11 @@ class HermesBridge:
         here — availability is a config fact; reachability surfaces as a clear error frame.)"""
         return bool(self.key)
 
-    def _request(self, message: str, session_id: str, *, stream: bool) -> urllib.request.Request:
-        body = {"model": MODEL, "stream": stream,
+    def _request(self, message: str, session_id: str, *, stream: bool,
+                 model: Optional[str] = None) -> urllib.request.Request:
+        # model override routes the brain's underlying LLM per request (e.g. a local Ollama model
+        # for privacy); omitted → Hermes' configured default (cloud). The api_server honors body.model.
+        body = {"model": model or MODEL, "stream": stream,
                 "messages": [{"role": "user", "content": message}]}
         headers = {"Content-Type": "application/json",
                    "Authorization": f"Bearer {self.key}",
@@ -65,10 +68,10 @@ class HermesBridge:
 
     # ── streaming: yields normalized frames, returns the full answer text ──
     def stream(self, message: str, session_id: str, emit: Callable[[dict], None],
-               timeout: int = 300) -> str:
+               timeout: int = 300, model: Optional[str] = None) -> str:
         """POST a streaming completion; call emit() for each delta/tool frame; return the
         accumulated answer. Raises on transport/HTTP error (caller frames it as an SSE error)."""
-        req = self._request(message, session_id, stream=True)
+        req = self._request(message, session_id, stream=True, model=model)
         answer_parts: list[str] = []
         try:
             resp = urllib.request.urlopen(req, timeout=timeout)
@@ -102,8 +105,9 @@ class HermesBridge:
         return "".join(answer_parts)
 
     # ── non-streaming: returns the full answer text ──
-    def complete(self, message: str, session_id: str, timeout: int = 300) -> str:
-        req = self._request(message, session_id, stream=False)
+    def complete(self, message: str, session_id: str, timeout: int = 300,
+                 model: Optional[str] = None) -> str:
+        req = self._request(message, session_id, stream=False, model=model)
         try:
             resp = urllib.request.urlopen(req, timeout=timeout)
             obj = json.loads(resp.read())

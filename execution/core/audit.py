@@ -40,7 +40,23 @@ CREATE TABLE IF NOT EXISTS tool_config (
     name        TEXT PRIMARY KEY,
     enabled     INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS tool_result_cache (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts_ms     INTEGER NOT NULL,
+    tenant_id TEXT,
+    actor     TEXT,
+    tool      TEXT,
+    ok        INTEGER,
+    data      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_trc_actor_ts ON tool_result_cache(actor, ts_ms);
 """
+
+# Ephemeral viewer cache (NOT the append-only audit log): a short, capped preview of a tool's
+# result so the chat transcript can show what a tool returned. The full result still flows only
+# to the model; this is short-TTL + size-capped so we don't durably accumulate client data.
+_RESULT_CAP = 6000
+_RESULT_TTL_MS = 30 * 60 * 1000
 
 
 def _now() -> str:
@@ -106,6 +122,34 @@ class AuditStore:
                 cur = self._conn.execute(
                     "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)
                 )
+            return [dict(r) for r in cur.fetchall()]
+
+    # ── tool-result viewer cache (ephemeral; for the transcript, not the audit) ──
+    def cache_result(self, *, tenant_id: str, actor: str, tool: str,
+                     ok: bool, data: Any) -> None:
+        import time
+        try:
+            blob = json.dumps(data, default=str)
+        except Exception:
+            blob = str(data)
+        if len(blob) > _RESULT_CAP:
+            blob = blob[:_RESULT_CAP] + "…"        # ellipsis marks a truncated preview
+        now_ms = int(time.time() * 1000)
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO tool_result_cache(ts_ms, tenant_id, actor, tool, ok, data) "
+                "VALUES (?,?,?,?,?,?)",
+                (now_ms, tenant_id, actor, tool, int(bool(ok)), blob))
+            self._conn.execute("DELETE FROM tool_result_cache WHERE ts_ms < ?",
+                               (now_ms - _RESULT_TTL_MS,))     # prune old previews
+            self._conn.commit()
+
+    def recent_results(self, actor: str, since_ms: int, limit: int = 50) -> list[dict[str, Any]]:
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT ts_ms, tool, ok, data FROM tool_result_cache "
+                "WHERE actor=? AND ts_ms>=? ORDER BY ts_ms ASC LIMIT ?",
+                (actor, since_ms, limit))
             return [dict(r) for r in cur.fetchall()]
 
     # ── tool enable/disable (Invariant I-4: config, not code) ─────────────────

@@ -78,6 +78,13 @@ class DtmMcpServer:
         env = dispatch(registry=self.agent.registry, audit=self.agent.audit, ctx=ctx,
                        name=name, args=args, approval_token=approval, gate=self.agent.gate,
                        approvals=getattr(self.agent, "approvals", None))
+        # Cache a short preview of the result so the DTM AI transcript can show what Hermes' tool
+        # call returned (the brain's stream only reports tool name/status, not the data).
+        try:
+            self.agent.audit.cache_result(tenant_id=tenant, actor=self.actor, tool=name,
+                                          ok=bool(env.get("ok")), data=env.get("data"))
+        except Exception:
+            pass   # viewer cache is best-effort; never break a tool call over it
         return self._ok(mid, {
             "content": [{"type": "text", "text": json.dumps(env, default=str)}],
             "isError": not env["ok"],

@@ -69,6 +69,17 @@ def tool_payload(envelope: dict[str, Any], max_chars: int = MAX_RESULT_CHARS) ->
     return blob[:max_chars]   # single oversized item — last-resort hard cut
 
 
+def _data_preview(data: Any, cap: int = 6000) -> Optional[str]:
+    """A short JSON preview of a tool's returned data, for showing inline in the transcript."""
+    if data is None:
+        return None
+    try:
+        blob = json.dumps(data, default=str)
+    except Exception:
+        blob = str(data)
+    return blob[:cap] + "…" if len(blob) > cap else blob
+
+
 def clean_history(history: Optional[list], max_msgs: int = MAX_HISTORY_MSGS,
                   max_chars: int = MAX_HISTORY_CHARS) -> list[dict[str, str]]:
     """Validate + bound caller-supplied chat history to user/assistant text turns.
@@ -189,7 +200,8 @@ class Agent:
                 if envelope["ok"]:
                     citations.append(f"{name}@{ctx.tenant_id}")
                 turn.tool_events.append({"name": name, "ok": envelope["ok"],
-                                         "category": envelope.get("source")})
+                                         "category": envelope.get("source"),
+                                         "data": _data_preview(envelope.get("data"))})
                 payload = tool_payload(envelope)
                 messages.append({"role": "tool", "tool_call_id": call["id"], "name": name, "content": payload})
 
@@ -269,7 +281,8 @@ class Agent:
                 if envelope["ok"]:
                     citations.append(f"{name}@{ctx.tenant_id}")
                 turn.tool_events.append({"name": name, "ok": envelope["ok"],
-                                         "category": envelope.get("source")})
+                                         "category": envelope.get("source"),
+                                         "data": _data_preview(envelope.get("data"))})
                 emit({"type": "tool_result", "name": name, "ok": envelope["ok"],
                       "source": envelope.get("source")})
                 payload = tool_payload(envelope)

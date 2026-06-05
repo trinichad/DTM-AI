@@ -196,11 +196,13 @@ class Api:
             detail = f"{n_skills} learned skills" + (f" · brain: {brain}" if brain else "")
         else:
             detail = "not connected"
+        local_model = get_config().get("HERMES_LOCAL_MODEL") or "qwen3.5:27b"
         out.append({"integration": "hermes", "label": "Hermes Agent", "kind": "local",
                     "configured": h.available,
                     "detail": detail,
                     "brain": brain,                       # e.g. "gpt-5.5 · OpenAI Codex" or null
                     "chat_engine": bridge.available,      # can the dashboard chat THROUGH Hermes?
+                    "local_model": local_model,           # private on-box option for the chat engine
                     "path": str(h.root)})
         return out
 
@@ -440,7 +442,7 @@ class Api:
             if not bridge.available:
                 return Resp(400, {"error": "Hermes engine not configured (HERMES_API_KEY missing)"})
             try:
-                answer = bridge.complete(message, conv_id)
+                answer = bridge.complete(message, conv_id, model=body.get("hermes_model"))
             except Exception as e:                       # unreachable / API error → fail closed
                 return Resp(502, {"error": str(e)})
             model = (bridge.model_info() or {}).get("model") or "hermes-agent"
@@ -484,7 +486,7 @@ class Api:
 
         engine = (body.get("engine") or "dtm").lower()
         if engine == "hermes":
-            yield from self._stream_hermes(message, conv_id, tenant, user)
+            yield from self._stream_hermes(message, conv_id, tenant, user, body.get("hermes_model"))
             return
 
         q: "queue.Queue" = queue.Queue()
@@ -523,14 +525,18 @@ class Api:
                "tool_events": turn.tool_events, "provider": turn.provider, "model": turn.model,
                "rounds": turn.rounds, "tenant": tenant, "conversation_id": conv_id, "title": title}
 
-    def _stream_hermes(self, message: str, conv_id: str, tenant: str, user: str) -> Iterator[dict]:
+    def _stream_hermes(self, message: str, conv_id: str, tenant: str, user: str,
+                       hermes_model: Optional[str] = None) -> Iterator[dict]:
         """Stream a turn through the Hermes brain (IN channel). Bridges the bridge's blocking
         SSE read to this generator via a queue + worker thread, mirroring stream_chat's pattern.
         Hermes' own tool calls are audited separately (actor=hermes) via the MCP fence.
 
-        Surfaces, for the transcript: deduped tool pills, citations (tool@tenant), and a
-        new-skills badge when the turn caused Hermes to author a skill (the skills folder is
-        read live, so we diff the names before/after)."""
+        Surfaces, for the transcript: deduped tool pills with the returned data (pulled from the
+        MCP result cache for this turn's window), citations (tool@tenant), and a new-skills badge
+        when the turn caused Hermes to author a skill (the skills folder is read live, diffed).
+
+        hermes_model overrides the brain's underlying LLM (e.g. a local Ollama model for privacy)."""
+        import time
         from ..core.hermes_skills import HermesSkillsReader
         bridge = HermesBridge(get_config())
         if not bridge.available:
@@ -538,6 +544,7 @@ class Api:
             return
         convs = self.agent.conversations
         skills_before = {s["name"] for s in HermesSkillsReader().list_skills()}
+        turn_start_ms = int(time.time() * 1000)
         q: "queue.Queue" = queue.Queue()
         DONE = object()
         result: dict = {}
@@ -545,7 +552,8 @@ class Api:
 
         def run():
             try:
-                result["answer"] = bridge.stream(message, conv_id, lambda e: q.put(e))
+                result["answer"] = bridge.stream(message, conv_id, lambda e: q.put(e),
+                                                 model=hermes_model)
             except Exception as e:                        # contained → surfaced as an error frame
                 result["error"] = str(e)
             finally:
@@ -569,8 +577,16 @@ class Api:
             yield {"type": "error", "error": result["error"]}
             return
         answer = result.get("answer", "")
-        model = (bridge.model_info() or {}).get("model") or "hermes-agent"
+        model = hermes_model or (bridge.model_info() or {}).get("model") or "hermes-agent"
         tool_list = list(tools.values())
+        # Attach the returned data each tool produced this turn, from the MCP result cache
+        # (actor=hermes, since the turn began). Match by tool name, consuming in arrival order.
+        cached = self.agent.audit.recent_results("hermes", turn_start_ms)
+        for tp in tool_list:
+            hit = next((c for c in cached if c["tool"] == tp["name"] and not c.get("_used")), None)
+            if hit:
+                hit["_used"] = True
+                tp["data"] = hit.get("data")
         citations = [f"{t['name']}@{tenant}" for t in tool_list]   # sourced-answer trail
         new_skills = sorted({s["name"] for s in HermesSkillsReader().list_skills()} - skills_before)
         convs.add_message(user, conv_id, "assistant", answer,

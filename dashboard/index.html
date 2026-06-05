@@ -199,11 +199,14 @@ function openTablePopup(text){
     <\/script></body></html>`);
   w.document.close();
 }
+function prettyJson(s){ if(s==null)return''; try{ return JSON.stringify(JSON.parse(s),null,2); }catch(_){ return String(s); } }
 function aiHtml(t){ let h=md(t.answer||'');
   if(t.answer&&hasTable(t.answer)){ const _n=parseTables(t.answer).length;
     h+=`<div class="mt-2.5"><button class="open-table inline-flex items-center gap-1.5 text-xs font-semibold grad text-white rounded-lg px-3.5 py-2 shadow-lg shadow-indigo-500/25 hover:brightness-110" data-answer="${encodeURIComponent(t.answer)}"><i data-lucide="table" class="text-[14px]"></i> Open formatted table${_n>1?`s (${_n})`:''}<span class="opacity-80 font-normal">· export CSV / Excel / PDF</span></button></div>`; }
   if(t.tools&&t.tools.length) h+=`<div class="mt-2 flex flex-wrap gap-1">`+t.tools.map(x=>
     `<span class="pill ${x.ok?'bg-emerald-500/15 text-emerald-300':'bg-rose-500/15 text-rose-300'} inline-flex items-center gap-1"><i data-lucide="${x.ok?'check':'x'}" class="text-[11px]"></i>${esc(x.name)}</span>`).join('')+`</div>`;
+  if(t.tools) h+=t.tools.filter(x=>x.data).map(x=>
+    `<details class="mt-1"><summary class="cursor-pointer text-[11px] text-slate-400 hover:text-slate-200 select-none inline-flex items-center gap-1"><i data-lucide="braces" class="text-[11px]"></i>${esc(x.name)} — returned data</summary><pre class="text-[11px] text-slate-300 bg-ink/60 border border-edge rounded-lg p-2 mt-1 overflow-auto max-h-72 whitespace-pre-wrap">${esc(prettyJson(x.data))}</pre></details>`).join('');
   if(t.citations&&t.citations.length) h+=`<div class="text-[11px] text-slate-500 mt-1.5 flex items-center gap-1"><i data-lucide="link"></i>${t.citations.map(esc).join(', ')}</div>`;
   if(t.new_skills&&t.new_skills.length) h+=`<div class="text-[11px] text-emerald-300 mt-1.5 inline-flex items-center gap-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-2 py-1"><i data-lucide="sparkles" class="text-[12px]"></i>Hermes saved a new skill: <span class="font-semibold">${t.new_skills.map(esc).join(', ')}</span> — see the Skills tab</div>`;
   if(t.meta) h+=`<div class="text-[11px] text-slate-600 mt-1">${esc(t.meta)}</div>`;
@@ -362,11 +365,11 @@ const VIEWS={
     const mm=await api('GET','/api/models'); const models=mm.models||[];
     if(!MODEL||!models.find(m=>m.id===MODEL)) MODEL=(models.find(m=>m.default)||models[0]||{}).id||'';
     // Discover whether we can chat THROUGH Hermes (the brain) + which model it's driving.
-    let HBRAIN=null, HCHAT=false;
+    let HBRAIN=null, HCHAT=false, HLOCAL=null;
     try{ const ig=(await api('GET','/api/integrations')).integrations||[];
-         const h=ig.find(x=>x.integration==='hermes'); if(h){ HCHAT=!!h.chat_engine; HBRAIN=h.brain||null; } }catch(_){}
+         const h=ig.find(x=>x.integration==='hermes'); if(h){ HCHAT=!!h.chat_engine; HBRAIN=h.brain||null; HLOCAL=h.local_model||null; } }catch(_){}
     if(ENGINE===null) ENGINE = HCHAT ? 'hermes' : 'dtm';   // default to the brain when available
-    if(ENGINE==='hermes' && !HCHAT) ENGINE='dtm';          // can't use a brain that isn't wired
+    if(ENGINE!=='dtm' && !HCHAT) ENGINE='dtm';             // can't use a brain that isn't wired
     try{ CONVS=(await api('GET','/api/conversations')).conversations||[]; }catch(_){ CONVS=[]; }
     // Choose which conversation to open: keep the current one if still valid; else the newest for
     // this client; else start a fresh (unsaved) chat.
@@ -380,15 +383,16 @@ const VIEWS={
       <div class="flex-1 flex flex-col min-w-0 max-w-3xl mx-auto w-full">
         <div class="flex items-center gap-2 mb-3">
           ${HCHAT?`<i data-lucide="bot" class="text-slate-500 text-sm" title="Who you're chatting with"></i>
-          <select id="engine" class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none" title="Hermes = the brain (memory, skills, delegation). DTM AI = the built-in router.">
-            <option value="hermes" ${ENGINE==='hermes'?'selected':''}>Hermes${HBRAIN?' · '+esc(HBRAIN):''}</option>
+          <select id="engine" class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none" title="Hermes = the brain (memory, skills, delegation). Local = same brain on the on-box model — nothing leaves. DTM AI = the built-in router.">
+            <option value="hermes" ${ENGINE==='hermes'?'selected':''}>Hermes${HBRAIN?' · '+esc(HBRAIN)+' ☁':''}</option>
+            ${HLOCAL?`<option value="hermes-local" ${ENGINE==='hermes-local'?'selected':''}>Hermes · ${esc(HLOCAL)} (local 🔒)</option>`:''}
             <option value="dtm" ${ENGINE==='dtm'?'selected':''}>DTM AI (direct)</option>
           </select>`:''}
           <i data-lucide="cpu" class="text-slate-500 text-sm"></i>
-          <select id="model" ${ENGINE==='hermes'?'disabled':''} class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none ${ENGINE==='hermes'?'opacity-40':''}" title="${ENGINE==='hermes'?'Hermes uses its own configured brain':'Model for the DTM AI direct engine'}">
+          <select id="model" ${ENGINE!=='dtm'?'disabled':''} class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none ${ENGINE!=='dtm'?'opacity-40':''}" title="${ENGINE!=='dtm'?'Hermes uses its own brain (pick it in the engine dropdown)':'Model for the DTM AI direct engine'}">
             ${models.map(m=>`<option value="${esc(m.id)}" ${m.id===MODEL?'selected':''}>${esc(m.label)}${m.local?'':' ☁'}</option>`).join('')}
           </select>
-          ${models.length<2&&ENGINE!=='hermes'?`<a class="text-[11px] text-slate-500 hover:text-slate-300 cursor-pointer" id="addModel">+ add a cloud model</a>`:''}
+          ${models.length<2&&ENGINE==='dtm'?`<a class="text-[11px] text-slate-500 hover:text-slate-300 cursor-pointer" id="addModel">+ add a cloud model</a>`:''}
           <span id="ctxMeter" class="ml-auto text-[11px] text-slate-500" title="Conversation context sent to the model"></span>
           <button id="compactChat" class="text-[11px] text-slate-500 hover:text-accent inline-flex items-center gap-1" title="Summarise older turns to shrink context, keeping the recent ones"><i data-lucide="archive-restore" class="text-[12px]"></i> Compact</button>
           <button id="delChat" class="text-[11px] text-slate-500 hover:text-rose-300 inline-flex items-center gap-1" title="Delete this conversation"><i data-lucide="trash-2" class="text-[12px]"></i> Delete</button>
@@ -444,7 +448,7 @@ const VIEWS={
     const refreshConvs=async()=>{ try{ CONVS=(await api('GET','/api/conversations')).conversations||[]; }catch(_){} renderRail(); };
     $('#model').onchange=e=>{MODEL=e.target.value; updateMeter();};
     if($('#engine'))$('#engine').onchange=e=>{ENGINE=e.target.value; const ms=$('#model');
-      if(ms){ms.disabled=ENGINE==='hermes'; ms.classList.toggle('opacity-40',ENGINE==='hermes');}};
+      if(ms){ms.disabled=ENGINE!=='dtm'; ms.classList.toggle('opacity-40',ENGINE!=='dtm');}};
     if($('#addModel'))$('#addModel').onclick=()=>route('integrations');
     if($('#newChat'))$('#newChat').onclick=newChat;
     if($('#newChatTop'))$('#newChatTop').onclick=newChat;
@@ -465,7 +469,8 @@ const VIEWS={
       try{
         const resp=await fetch('/api/chat/stream',{method:'POST',credentials:'same-origin',
           headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({conversation_id:CONV,tenant:TENANT,message:m,model:MODEL,engine:ENGINE})});
+          body:JSON.stringify({conversation_id:CONV,tenant:TENANT,message:m,model:MODEL,
+            engine:(ENGINE==='dtm'?'dtm':'hermes'), hermes_model:(ENGINE==='hermes-local'?HLOCAL:null)})});
         if(resp.status===401){ showLogin(); throw new Error('auth'); }
         if(!resp.body) throw new Error('no stream');
         const reader=resp.body.getReader(), dec=new TextDecoder(); let buf='';

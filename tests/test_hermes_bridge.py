@@ -97,6 +97,16 @@ class StreamFlow(unittest.TestCase):
         self.assertEqual(captured["auth"], "Bearer secret")
 
 
+class ModelOverride(unittest.TestCase):
+    def test_request_body_model(self):
+        import json
+        b = HermesBridge(StubCfg({"HERMES_API_KEY": "k"}))
+        body = json.loads(b._request("hi", "s", stream=True, model="qwen3.5:27b").data)
+        self.assertEqual(body["model"], "qwen3.5:27b")        # local override carried
+        default = json.loads(b._request("hi", "s", stream=True).data)
+        self.assertEqual(default["model"], "hermes-agent")    # omitted → agent default (cloud)
+
+
 class ModelInfo(unittest.TestCase):
     def test_reads_config_yaml(self):
         with tempfile.TemporaryDirectory() as d:
