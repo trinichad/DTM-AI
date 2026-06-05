@@ -122,7 +122,7 @@ const SUB={overview:'Live health across your clients',chat:'Ask about a client �
   skills:'What Hermes has learned',memory:'Knowledge base & per-client notes',
   approvals:'Write actions awaiting your sign-off',build:'Draft new tools — sandboxed, you approve',
   audit:'Every action, logged',settings:'Account & users'};
-let ME=null, MODEL='';
+let ME=null, MODEL='', ENGINE=null;   // ENGINE: null=auto, 'hermes'=brain, 'dtm'=direct
 // Chat history lives on the SERVER now (per-user, multi-conversation) — it persists across
 // devices/browsers until a conversation is explicitly deleted, like ChatGPT/Claude.
 let CONV=null;   // current conversation id (null = unsaved new chat)
@@ -340,6 +340,12 @@ const VIEWS={
   async chat(){
     const mm=await api('GET','/api/models'); const models=mm.models||[];
     if(!MODEL||!models.find(m=>m.id===MODEL)) MODEL=(models.find(m=>m.default)||models[0]||{}).id||'';
+    // Discover whether we can chat THROUGH Hermes (the brain) + which model it's driving.
+    let HBRAIN=null, HCHAT=false;
+    try{ const ig=(await api('GET','/api/integrations')).integrations||[];
+         const h=ig.find(x=>x.integration==='hermes'); if(h){ HCHAT=!!h.chat_engine; HBRAIN=h.brain||null; } }catch(_){}
+    if(ENGINE===null) ENGINE = HCHAT ? 'hermes' : 'dtm';   // default to the brain when available
+    if(ENGINE==='hermes' && !HCHAT) ENGINE='dtm';          // can't use a brain that isn't wired
     try{ CONVS=(await api('GET','/api/conversations')).conversations||[]; }catch(_){ CONVS=[]; }
     // Choose which conversation to open: keep the current one if still valid; else the newest for
     // this client; else start a fresh (unsaved) chat.
@@ -352,11 +358,16 @@ const VIEWS={
       </aside>
       <div class="flex-1 flex flex-col min-w-0 max-w-3xl mx-auto w-full">
         <div class="flex items-center gap-2 mb-3">
+          ${HCHAT?`<i data-lucide="bot" class="text-slate-500 text-sm" title="Who you're chatting with"></i>
+          <select id="engine" class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none" title="Hermes = the brain (memory, skills, delegation). DTM AI = the built-in router.">
+            <option value="hermes" ${ENGINE==='hermes'?'selected':''}>Hermes${HBRAIN?' · '+esc(HBRAIN):''}</option>
+            <option value="dtm" ${ENGINE==='dtm'?'selected':''}>DTM AI (direct)</option>
+          </select>`:''}
           <i data-lucide="cpu" class="text-slate-500 text-sm"></i>
-          <select id="model" class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none">
+          <select id="model" ${ENGINE==='hermes'?'disabled':''} class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none ${ENGINE==='hermes'?'opacity-40':''}" title="${ENGINE==='hermes'?'Hermes uses its own configured brain':'Model for the DTM AI direct engine'}">
             ${models.map(m=>`<option value="${esc(m.id)}" ${m.id===MODEL?'selected':''}>${esc(m.label)}${m.local?'':' ☁'}</option>`).join('')}
           </select>
-          ${models.length<2?`<a class="text-[11px] text-slate-500 hover:text-slate-300 cursor-pointer" id="addModel">+ add a cloud model</a>`:''}
+          ${models.length<2&&ENGINE!=='hermes'?`<a class="text-[11px] text-slate-500 hover:text-slate-300 cursor-pointer" id="addModel">+ add a cloud model</a>`:''}
           <span id="ctxMeter" class="ml-auto text-[11px] text-slate-500" title="Conversation context sent to the model"></span>
           <button id="compactChat" class="text-[11px] text-slate-500 hover:text-accent inline-flex items-center gap-1" title="Summarise older turns to shrink context, keeping the recent ones"><i data-lucide="archive-restore" class="text-[12px]"></i> Compact</button>
           <button id="delChat" class="text-[11px] text-slate-500 hover:text-rose-300 inline-flex items-center gap-1" title="Delete this conversation"><i data-lucide="trash-2" class="text-[12px]"></i> Delete</button>
@@ -411,6 +422,8 @@ const VIEWS={
       if(c)c.title=(t.trim()||'New chat'); renderRail(); };
     const refreshConvs=async()=>{ try{ CONVS=(await api('GET','/api/conversations')).conversations||[]; }catch(_){} renderRail(); };
     $('#model').onchange=e=>{MODEL=e.target.value; updateMeter();};
+    if($('#engine'))$('#engine').onchange=e=>{ENGINE=e.target.value; const ms=$('#model');
+      if(ms){ms.disabled=ENGINE==='hermes'; ms.classList.toggle('opacity-40',ENGINE==='hermes');}};
     if($('#addModel'))$('#addModel').onclick=()=>route('integrations');
     if($('#newChat'))$('#newChat').onclick=newChat;
     if($('#newChatTop'))$('#newChatTop').onclick=newChat;
@@ -442,7 +455,7 @@ const VIEWS={
       try{
         const resp=await fetch('/api/chat/stream',{method:'POST',credentials:'same-origin',
           headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({conversation_id:CONV,tenant:TENANT,message:m,model:MODEL})});
+          body:JSON.stringify({conversation_id:CONV,tenant:TENANT,message:m,model:MODEL,engine:ENGINE})});
         if(resp.status===401){ showLogin(); throw new Error('auth'); }
         if(!resp.body) throw new Error('no stream');
         const reader=resp.body.getReader(), dec=new TextDecoder(); let buf='';

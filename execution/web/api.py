@@ -14,8 +14,10 @@ from typing import Any, Iterator, Optional
 
 from ..agent import Agent
 from ..core import credentials
+from ..core.config import get_config
 from ..core.context import ToolContext
 from ..core.dispatch import dispatch
+from ..core.hermes_bridge import HermesBridge
 from ..runtime import get_client_factory
 from .auth import AuthStore, SessionSigner
 
@@ -184,10 +186,21 @@ class Api:
                                else "vault not created yet"),
                     "path": str(v.root)})
         h = HermesSkillsReader()
+        bridge = HermesBridge(get_config())
+        mi = bridge.model_info() if h.available else None
+        # The brain Hermes drives is a SEPARATE connection from DTM AI's own OpenAI/Claude keys
+        # (Hermes uses its own OAuth/provider), so we surface it on the Hermes card, not theirs.
+        brain = (f"{mi['model']} · {mi['provider_label']}" if mi and mi.get("model") else None)
+        n_skills = len(h.list_skills()) if h.available else 0
+        if h.available:
+            detail = f"{n_skills} learned skills" + (f" · brain: {brain}" if brain else "")
+        else:
+            detail = "not connected"
         out.append({"integration": "hermes", "label": "Hermes Agent", "kind": "local",
                     "configured": h.available,
-                    "detail": (f"{len(h.list_skills())} learned skills" if h.available
-                               else "not connected"),
+                    "detail": detail,
+                    "brain": brain,                       # e.g. "gpt-5.5 · OpenAI Codex" or null
+                    "chat_engine": bridge.available,      # can the dashboard chat THROUGH Hermes?
                     "path": str(h.root)})
         return out
 
@@ -420,6 +433,22 @@ class Api:
         # Server-side history is authoritative (the browser no longer holds the transcript).
         history = convs.history(user, conv_id)
         convs.add_message(user, conv_id, "user", message)
+        # Engine select: "hermes" relays to the Hermes brain (it keeps its own session memory
+        # and reaches our tools back through the MCP fence); default "dtm" = our own agent loop.
+        if (body.get("engine") or "dtm").lower() == "hermes":
+            bridge = HermesBridge(get_config())
+            if not bridge.available:
+                return Resp(400, {"error": "Hermes engine not configured (HERMES_API_KEY missing)"})
+            try:
+                answer = bridge.complete(message, conv_id)
+            except Exception as e:                       # unreachable / API error → fail closed
+                return Resp(502, {"error": str(e)})
+            model = (bridge.model_info() or {}).get("model") or "hermes-agent"
+            convs.add_message(user, conv_id, "assistant", answer, meta={"label": f"hermes/{model}"})
+            title = next((c["title"] for c in convs.list(user) if c["id"] == conv_id), "")
+            return Resp(200, {"answer": answer, "citations": [], "tool_events": [],
+                              "provider": "hermes", "model": model, "rounds": 1, "tenant": tenant,
+                              "conversation_id": conv_id, "title": title})
         turn = self.agent.chat(ctx, message, model_id=model_id, history=history)
         convs.add_message(user, conv_id, "assistant", turn.answer, meta={
             "tools": turn.tool_events, "citations": turn.citations,
@@ -452,6 +481,11 @@ class Api:
         prior = convs.history(user, conv_id)
         convs.add_message(user, conv_id, "user", message)
         yield {"type": "start", "conversation_id": conv_id, "tenant": tenant}
+
+        engine = (body.get("engine") or "dtm").lower()
+        if engine == "hermes":
+            yield from self._stream_hermes(message, conv_id, tenant, user)
+            return
 
         q: "queue.Queue" = queue.Queue()
         DONE = object()
@@ -488,6 +522,49 @@ class Api:
         yield {"type": "answer", "answer": turn.answer, "citations": turn.citations,
                "tool_events": turn.tool_events, "provider": turn.provider, "model": turn.model,
                "rounds": turn.rounds, "tenant": tenant, "conversation_id": conv_id, "title": title}
+
+    def _stream_hermes(self, message: str, conv_id: str, tenant: str, user: str) -> Iterator[dict]:
+        """Stream a turn through the Hermes brain (IN channel). Bridges the bridge's blocking
+        SSE read to this generator via a queue + worker thread, mirroring stream_chat's pattern.
+        Hermes' own tool calls are audited separately (actor=hermes) via the MCP fence."""
+        bridge = HermesBridge(get_config())
+        if not bridge.available:
+            yield {"type": "error", "error": "Hermes engine not configured (HERMES_API_KEY missing)"}
+            return
+        convs = self.agent.conversations
+        q: "queue.Queue" = queue.Queue()
+        DONE = object()
+        result: dict = {}
+        tool_events: list[dict] = []
+
+        def run():
+            try:
+                result["answer"] = bridge.stream(message, conv_id, lambda e: q.put(e))
+            except Exception as e:                        # contained → surfaced as an error frame
+                result["error"] = str(e)
+            finally:
+                q.put(DONE)
+
+        threading.Thread(target=run, daemon=True).start()
+        while True:
+            ev = q.get()
+            if ev is DONE:
+                break
+            if ev.get("type") in ("tool_call", "tool_result"):
+                tool_events.append(ev)
+            yield ev
+
+        if "error" in result:
+            yield {"type": "error", "error": result["error"]}
+            return
+        answer = result.get("answer", "")
+        model = (bridge.model_info() or {}).get("model") or "hermes-agent"
+        convs.add_message(user, conv_id, "assistant", answer,
+                          meta={"tools": tool_events, "label": f"hermes/{model}"})
+        title = next((c["title"] for c in convs.list(user) if c["id"] == conv_id), "")
+        yield {"type": "answer", "answer": answer, "citations": [], "tool_events": tool_events,
+               "provider": "hermes", "model": model, "rounds": 1, "tenant": tenant,
+               "conversation_id": conv_id, "title": title}
 
     def _compact_conversation(self, conv_id: str, body: dict, user: str) -> Resp:
         convs = self.agent.conversations

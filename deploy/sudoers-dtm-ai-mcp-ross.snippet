@@ -1,0 +1,11 @@
+# Optional convenience: let `ross` manage the dtm-ai-mcp service without a password,
+# mirroring the existing dtm-ai rule. NO general root — only these exact commands.
+#
+# Install SAFELY (validates before saving; never edit sudoers with a plain editor):
+#   sudo cp /opt/dtm-ai/deploy/sudoers-dtm-ai-mcp-ross.snippet /etc/sudoers.d/dtm-ai-mcp-ross
+#   sudo chmod 0440 /etc/sudoers.d/dtm-ai-mcp-ross
+#   sudo visudo -c        # must print: /etc/sudoers.d/dtm-ai-mcp-ross: parsed OK
+#
+# (If visudo -c reports an error, remove the file: sudo rm /etc/sudoers.d/dtm-ai-mcp-ross)
+
+ross ALL=(root) NOPASSWD: /usr/bin/systemctl restart dtm-ai-mcp, /usr/bin/systemctl start dtm-ai-mcp, /usr/bin/systemctl stop dtm-ai-mcp, /usr/bin/systemctl status dtm-ai-mcp, /usr/bin/systemctl is-active dtm-ai-mcp, /usr/bin/systemctl is-enabled dtm-ai-mcp, /usr/bin/journalctl -u dtm-ai-mcp*
