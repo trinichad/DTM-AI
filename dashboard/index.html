@@ -699,12 +699,13 @@ const VIEWS={
 
   async board(){
     const data=await api('GET','/api/kanban');
-    if(!data || data.available===false){
+    if(!data || data.error || !Array.isArray(data.columns) || data.available===false){
+      const stale=data&&data.error;   // backend reachable but route missing/errored (e.g. not restarted)
       $('#view').innerHTML=`<div class="card glass p-10 max-w-2xl mx-auto text-center animate-fadeup">
         <div class="h-14 w-14 rounded-2xl grad grid place-items-center mx-auto mb-4 shadow-lg shadow-indigo-500/30"><i data-lucide="layout-grid" class="text-white text-2xl"></i></div>
-        <div class="font-semibold text-lg">No delegation board yet</div>
-        <div class="text-sm text-slate-400 mt-2 max-w-md mx-auto">When AtlasOps delegates — or you assign a task below — a specialist picks it up here and runs it with its own soul & memory, through the tool fence. The board appears once the first task is created.</div>
-        <div class="mt-5"><button id="bDelegate0" class="grad text-white rounded-lg px-4 py-2 text-sm font-semibold inline-flex items-center gap-1.5"><i data-lucide="plus"></i> Delegate a task</button></div></div>`;
+        <div class="font-semibold text-lg">${stale?'Delegation API not available':'No delegation board yet'}</div>
+        <div class="text-sm text-slate-400 mt-2 max-w-md mx-auto">${stale?'The dashboard loaded but the backend didn\'t answer /api/kanban — restart the service ('+esc(String(data.error)).slice(0,80)+').':'When AtlasOps delegates — or you assign a task below — a specialist picks it up here and runs it with its own soul & memory, through the tool fence. The board appears once the first task is created.'}</div>
+        ${stale?'':'<div class="mt-5"><button id="bDelegate0" class="grad text-white rounded-lg px-4 py-2 text-sm font-semibold inline-flex items-center gap-1.5"><i data-lucide="plus"></i> Delegate a task</button></div>'}</div>`;
       icons(); const b0=$('#bDelegate0'); if(b0) b0.onclick=openDelegate; return;
     }
     const COLORS={triage:'slate',todo:'slate',ready:'amber',running:'sky',review:'violet',blocked:'rose',scheduled:'slate',done:'emerald'};
