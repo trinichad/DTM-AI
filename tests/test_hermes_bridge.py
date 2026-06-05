@@ -81,6 +81,9 @@ class StreamFlow(unittest.TestCase):
         self.assertEqual(types, ["tool_call", "tool_result", "delta", "delta"])
         self.assertEqual(events[0]["name"], "system_health")   # namespacing stripped
         self.assertTrue(events[1]["ok"])
+        # delta frames use "text" (matches the UI + direct engine), not "content"
+        self.assertEqual(events[2]["text"], "DTM ")
+        self.assertNotIn("content", events[2])
 
     def test_session_header_set(self):
         captured = {}

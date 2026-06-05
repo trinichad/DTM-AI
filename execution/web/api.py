@@ -526,16 +526,22 @@ class Api:
     def _stream_hermes(self, message: str, conv_id: str, tenant: str, user: str) -> Iterator[dict]:
         """Stream a turn through the Hermes brain (IN channel). Bridges the bridge's blocking
         SSE read to this generator via a queue + worker thread, mirroring stream_chat's pattern.
-        Hermes' own tool calls are audited separately (actor=hermes) via the MCP fence."""
+        Hermes' own tool calls are audited separately (actor=hermes) via the MCP fence.
+
+        Surfaces, for the transcript: deduped tool pills, citations (tool@tenant), and a
+        new-skills badge when the turn caused Hermes to author a skill (the skills folder is
+        read live, so we diff the names before/after)."""
+        from ..core.hermes_skills import HermesSkillsReader
         bridge = HermesBridge(get_config())
         if not bridge.available:
             yield {"type": "error", "error": "Hermes engine not configured (HERMES_API_KEY missing)"}
             return
         convs = self.agent.conversations
+        skills_before = {s["name"] for s in HermesSkillsReader().list_skills()}
         q: "queue.Queue" = queue.Queue()
         DONE = object()
         result: dict = {}
-        tool_events: list[dict] = []
+        tools: dict[str, dict] = {}          # name -> {name, category, ok}  (deduped, one per tool)
 
         def run():
             try:
@@ -550,8 +556,13 @@ class Api:
             ev = q.get()
             if ev is DONE:
                 break
-            if ev.get("type") in ("tool_call", "tool_result"):
-                tool_events.append(ev)
+            t = ev.get("type")
+            if t == "tool_call":
+                tools.setdefault(ev["name"], {"name": ev["name"],
+                                              "category": ev.get("category", "read"), "ok": None})
+            elif t == "tool_result":
+                tools.setdefault(ev["name"], {"name": ev["name"], "category": "read", "ok": None})
+                tools[ev["name"]]["ok"] = ev.get("ok", True)
             yield ev
 
         if "error" in result:
@@ -559,10 +570,15 @@ class Api:
             return
         answer = result.get("answer", "")
         model = (bridge.model_info() or {}).get("model") or "hermes-agent"
+        tool_list = list(tools.values())
+        citations = [f"{t['name']}@{tenant}" for t in tool_list]   # sourced-answer trail
+        new_skills = sorted({s["name"] for s in HermesSkillsReader().list_skills()} - skills_before)
         convs.add_message(user, conv_id, "assistant", answer,
-                          meta={"tools": tool_events, "label": f"hermes/{model}"})
+                          meta={"tools": tool_list, "citations": citations,
+                                "new_skills": new_skills, "label": f"hermes/{model}"})
         title = next((c["title"] for c in convs.list(user) if c["id"] == conv_id), "")
-        yield {"type": "answer", "answer": answer, "citations": [], "tool_events": tool_events,
+        yield {"type": "answer", "answer": answer, "citations": citations,
+               "tool_events": tool_list, "new_skills": new_skills,
                "provider": "hermes", "model": model, "rounds": 1, "tenant": tenant,
                "conversation_id": conv_id, "title": title}
 

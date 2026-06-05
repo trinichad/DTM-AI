@@ -14,7 +14,7 @@ Session continuity: we pass the DTM AI `conversation_id` as `X-Hermes-Session-Id
 brain keeps its own per-conversation memory in step with the DTM AI transcript.
 
 Stdlib-only (urllib). Streaming SSE is parsed into normalized frames that match the shapes
-`stream_chat` already emits: {"type":"delta","content":...}, {"type":"tool_call","name":...},
+`stream_chat` already emits: {"type":"delta","text":...}, {"type":"tool_call","name":...},
 {"type":"tool_result","name":...}.
 """
 from __future__ import annotations
@@ -98,7 +98,7 @@ class HermesBridge:
             delta = (((obj.get("choices") or [{}])[0]).get("delta") or {}).get("content")
             if delta:
                 answer_parts.append(delta)
-                emit({"type": "delta", "content": delta})
+                emit({"type": "delta", "text": delta})   # "text" matches the UI + direct engine
         return "".join(answer_parts)
 
     # ── non-streaming: returns the full answer text ──
