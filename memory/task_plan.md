@@ -114,6 +114,19 @@ coding/apple(macOS-only)/jailbreak noise. Full original set backed up (reversibl
 `/srv/hermes-data/.skills-backup-20260605-150859.tar.gz`. DTM AI reader reflects live (no GITHUB_TOKEN →
 Hub won't silently re-add them; a `hermes update` could re-seed built-ins — re-prune if so).
 
+**Transcript + privacy tuning (2026-06-05):**
+- **Inline tool data** ✅ — each tool pill shows an expandable "returned data" panel. Hermes path: MCP
+  `_call` writes a capped, 30-min-TTL preview to `audit.tool_result_cache`; `_stream_hermes` correlates
+  by actor=hermes + turn-start window. Direct engine: preview attached in-process. (Needed a `dtm-ai-mcp`
+  restart to activate — now passwordless via the installed sudoers snippet.)
+- **Hermes local-model option** ✅ — engine dropdown = Hermes·gpt-5.5 ☁ / Hermes·qwen3.5:27b (local 🔒) /
+  DTM AI direct. Per-request `model` override to the api_server routes the brain to local Ollama
+  (`qwen3.5:27b`, **262K ctx** — token concern moot); nothing leaves the box. `HERMES_LOCAL_MODEL` env
+  overrides the default. Verified: local qwen turn streamed on-box; cloud unchanged.
+- `dtm-ai-mcp` now managed passwordless by ross (`/etc/sudoers.d/dtm-ai-mcp-ross`, 0440). NOTE: the older
+  `/etc/sudoers.d/dtm-ai-ross` has loose perms (visudo warns "should be 0440") — works today; tighten with
+  `sudo chmod 0440 /etc/sudoers.d/dtm-ai-ross` to avoid a stricter sudo ignoring it later.
+
 **Remaining / optional:**
 - Use it: open the dashboard → Chat; the engine selector defaults to **Hermes** — ask a client question.
 - Optional: per-client `mcp_servers` entries (`dtm_<client>` → `/mcp/<tenant>`) beyond `dtm_all`; sudoers
