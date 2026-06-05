@@ -95,6 +95,29 @@ owner-gated, audited toggle — not a per-message dropdown (which would race + c
 - The Hermes engine label in the dashboard reflects the REAL configured brain (read from config), so a
   swap can't silently misreport which model is answering.
 
+## Agent team — profiles as specialists (`core/hermes_agents.py`)
+Each specialist agent **is a Hermes profile** on the shared volume: AtlasOps Manager = the `default`
+profile (chat flows through it); specialists live under `profiles/<name>/` (`SOUL.md`, `config.yaml`,
+`profile.yaml` description, `memories/`, `sessions/`, `skills/`). The Agents tab reads each one's soul,
+role, brain (per-profile config), and how it's "compounded" (memory entries, skills, sessions).
+
+**Add/delete is pure on-disk file IO — no `docker exec`.** Hermes discovers profiles by *scanning* the
+`profiles/` dir (`hermes_cli/profiles.py list_profiles()` → `iterdir()`), so writing/removing the files
+IS the create/delete. This matters because the web service (`dtm-ai` user) is **not in the docker group**
+and cannot `docker exec`; it only needs RW to `/srv/hermes-data` (the same `hermes-rw.conf` drop-in used
+by the brain swap). Verified on the box: a cloned profile dir appeared in `hermes profile list` and the
+DTM AI reader picked it up immediately.
+- `create_agent(name, soul, description, role)` — validates the name (`^[a-z0-9_-]+$`, not `default`,
+  not existing), mkdir the profile + empty `memories/sessions/skills`, **copies the manager's
+  `config.yaml`** so the new agent inherits the same MCP fence + tools + cloud brain (swap to local
+  per-agent after), writes `SOUL.md` (a safe stub if none pasted) + `profile.yaml` (description; YAML
+  single-quoted, `'`→`''` escaped — and the reader un-doubles on read).
+- `delete_agent(name)` — refuses `default` (manager is protected), `rmtree`s the profile dir, best-effort
+  removes the `.local/bin/<name>` alias + `logs/gateways/<name>`.
+- API: `POST /api/agents` (create), `DELETE /api/agents/<name>` (delete) — both owner-gated + audited
+  `config_change`. UI: "+ Add agent" form; delete is gated behind a **type-the-profile-name** "ARE YOU
+  SURE?" confirm (irreversible: soul + memory + learned skills are gone).
+
 ## Edge cases / lessons
 - MCP `mcp_servers` has **no `cwd` key** → always launch via the wrapper script (or set `env.PYTHONPATH`).
 - Multiple per-tenant server processes share one `dtm_ai.db` (sqlite). Low write volume; fine for v1.

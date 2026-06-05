@@ -7,6 +7,7 @@ the dashboard Agents tab. Edits write the profile's SOUL.md (loaded fresh by Her
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -31,6 +32,15 @@ def _data_dir(cfg: Config) -> Path:
 def _profile_dir(cfg: Config, name: str) -> Path:
     d = _data_dir(cfg)
     return d if name == "default" else d / "profiles" / _safe(name)
+
+
+def _yaml_unquote(val: str) -> str:
+    """Decode a YAML scalar: single-quoted ('' → '), double-quoted, or bare."""
+    if len(val) >= 2 and val[0] == val[-1] == "'":
+        return val[1:-1].replace("''", "'")
+    if len(val) >= 2 and val[0] == val[-1] == '"':
+        return val[1:-1]
+    return val
 
 
 def _soul_field(soul: str, key: str) -> str:
@@ -86,7 +96,7 @@ def _read_one(cfg: Config, name: str) -> dict:
     try:
         for line in (pd / "profile.yaml").read_text(encoding="utf-8").splitlines():
             if line.strip().startswith("description:"):
-                descr = line.split(":", 1)[1].strip().strip("'\"")
+                descr = _yaml_unquote(line.split(":", 1)[1].strip())
                 break
     except OSError:
         pass
@@ -149,3 +159,86 @@ def set_soul(name: str, text: str, cfg: Optional[Config] = None) -> dict:
         raise FileNotFoundError(f"unknown agent '{name}'")
     (pd / "SOUL.md").write_text(text, encoding="utf-8")   # loaded fresh by Hermes next message
     return get_agent(name, cfg)
+
+
+def _yaml_str(s: str) -> str:
+    """Single-quote a scalar for profile.yaml (YAML escapes ' by doubling it)."""
+    return "'" + (s or "").replace("'", "''") + "'"
+
+
+def _default_soul(name: str, role: str) -> str:
+    """A minimal SOUL stub when the owner doesn't paste one — keeps the fence/honesty rules."""
+    title = name.replace("_", " ").replace("-", " ").title()
+    lines = [f"# {title}", "", "## Identity", f"- name: {title}"]
+    if role:
+        lines.append(f"- role: {role}")
+    lines += [
+        "",
+        "## Operating environment",
+        "- You are a DTM AI specialist agent. Reach client systems ONLY through the registered",
+        "  DTM AI tools (the MCP fence) — never free-form shell, never invent identifiers or facts.",
+        "- Read-only by default. If a tool didn't return it, say you don't know and cite your sources.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def create_agent(name: str, soul: str = "", description: str = "", role: str = "",
+                 cfg: Optional[Config] = None) -> dict:
+    """Add a new specialist agent = a fresh Hermes profile on disk under `profiles/<name>/`.
+
+    Hermes discovers profiles by scanning that directory, so writing the files IS the create —
+    no `docker exec` needed (the web service has RW to the shared volume). The new profile inherits
+    the manager's full Hermes config (the same MCP fence + tools, cloud brain) so it can reach DTM
+    AI's tools immediately; its brain can be swapped to local per-agent afterward.
+    """
+    cfg = cfg or get_config()
+    name = _safe(name)
+    if name == "default":
+        raise ValueError("'default' is reserved for the AtlasOps manager")
+    pd = _profile_dir(cfg, name)
+    if pd.exists():
+        raise FileExistsError(f"agent '{name}' already exists")
+
+    data = _data_dir(cfg)
+    pd.mkdir(parents=True, exist_ok=False)
+    for sub in ("memories", "sessions", "skills"):
+        (pd / sub).mkdir(exist_ok=True)
+
+    src_cfg = data / "config.yaml"          # inherit the manager's brain + tool config
+    if src_cfg.is_file():
+        shutil.copyfile(src_cfg, pd / "config.yaml")
+
+    soul = soul if (soul and soul.strip()) else _default_soul(name, role)
+    (pd / "SOUL.md").write_text(soul, encoding="utf-8")
+    descr = " ".join((description or "").split())
+    (pd / "profile.yaml").write_text(
+        f"description: {_yaml_str(descr)}\ndescription_auto: false\n", encoding="utf-8")
+    return get_agent(name, cfg)
+
+
+def delete_agent(name: str, cfg: Optional[Config] = None) -> dict:
+    """Remove a specialist agent (its whole profile dir). The manager (`default`) is protected.
+
+    Best-effort cleanup of the per-profile alias + gateway logs Hermes may have created so a deleted
+    agent leaves nothing behind.
+    """
+    cfg = cfg or get_config()
+    name = _safe(name)
+    if name == "default":
+        raise ValueError("the AtlasOps manager (default) cannot be deleted")
+    pd = _profile_dir(cfg, name)
+    if not pd.is_dir():
+        raise FileNotFoundError(f"unknown agent '{name}'")
+    shutil.rmtree(pd)
+
+    data = _data_dir(cfg)
+    for extra in (data / ".local" / "bin" / name, data / "logs" / "gateways" / name):
+        try:
+            if extra.is_dir():
+                shutil.rmtree(extra)
+            elif extra.exists():
+                extra.unlink()
+        except OSError:
+            pass
+    return {"id": name, "deleted": True}

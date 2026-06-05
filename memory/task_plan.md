@@ -158,6 +158,15 @@ actor=hermes); answer summarized "Delegated to SentinelOps: completed… 177 thr
 `delegate_task` spawns an INLINE worker in the manager's profile with a role instruction — it does NOT load
 the specialist PROFILE's own SOUL.md/memory. To make the manager delegate to the actual profile-specialists
 (their souls/memory), wire the **Kanban orchestrator** routing (cards → profiles by description) — NEXT STEP.
+**Add/delete agents** ✅ — `create_agent`/`delete_agent` in `core/hermes_agents.py` do pure on-disk profile
+IO (Hermes discovers profiles by dir-scan, so the web service needs NO `docker exec` — it's not in the
+docker group; only RW to `/srv/hermes-data` via the existing `hermes-rw.conf` drop-in). Create clones the
+manager's config.yaml (inherits the MCP fence + cloud brain), writes SOUL (safe stub if none) + description;
+delete protects `default` (manager) and cleans the alias + gateway logs. API: `POST /api/agents`,
+`DELETE /api/agents/<name>` (owner-gated, audited). UI: "+ Add agent" form; delete behind a
+**type-the-profile-name "ARE YOU SURE?"** confirm. +10 tests (202 green). _Server note: a stray
+`manualtest` profile from the dir-scan recon is still at `/srv/hermes-data/profiles/manualtest` — `rm -rf`
+it (or delete it from the Agents tab) after pulling._
 
 **Remaining / optional:**
 - Use it: open the dashboard → Chat; the engine selector defaults to **Hermes** — ask a client question.

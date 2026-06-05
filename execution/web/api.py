@@ -121,6 +121,10 @@ class Api:
         if method == "GET" and path == "/api/agents":
             from ..core.hermes_agents import list_agents
             return Resp(200, {"agents": list_agents()})
+        if method == "POST" and path == "/api/agents":
+            return self._require_admin(role) or self._create_agent(body, user)
+        if method == "DELETE" and path.startswith("/api/agents/") and len(path.split("/")) == 4:
+            return self._require_admin(role) or self._delete_agent(path.split("/")[3], user)
         if method == "GET" and path.startswith("/api/agents/") and path.endswith("/memory"):
             from ..core.hermes_agents import read_memory
             try:
@@ -394,6 +398,40 @@ class Api:
         from ..core.hermes_skills import HermesSkillsReader
         r = HermesSkillsReader()
         return {"available": r.available, "dir": str(r.root), "skills": r.list_skills()}
+
+    def _create_agent(self, body: dict, user: str) -> Resp:
+        """Add a new specialist agent = a fresh Hermes profile on the shared volume (owner-gated)."""
+        from ..core.hermes_agents import create_agent
+        name = (body.get("name") or "").strip().lower().replace(" ", "_")
+        if not name:
+            return Resp(400, {"error": "agent name required"})
+        try:
+            a = create_agent(name, soul=body.get("soul") or "",
+                             description=body.get("description") or "", role=body.get("role") or "")
+        except ValueError as e:
+            return Resp(400, {"error": str(e)})
+        except FileExistsError as e:
+            return Resp(409, {"error": str(e)})
+        except OSError as e:
+            return Resp(500, {"error": f"cannot create agent (config dir not writable?): {e}"})
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"agent_create={name}")
+        return Resp(200, a)
+
+    def _delete_agent(self, name: str, user: str) -> Resp:
+        """Remove a specialist agent (the AtlasOps manager is protected; owner-gated; audited)."""
+        from ..core.hermes_agents import delete_agent
+        try:
+            res = delete_agent(name)
+        except ValueError as e:
+            return Resp(400, {"error": str(e)})
+        except FileNotFoundError as e:
+            return Resp(404, {"error": str(e)})
+        except OSError as e:
+            return Resp(500, {"error": f"cannot delete agent: {e}"})
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"agent_delete={name}")
+        return Resp(200, res)
 
     def _set_agent_brain(self, name: str, body: dict, user: str) -> Resp:
         """Swap ONE agent's brain cloud↔local (per-profile config; owner-gated; audited)."""

@@ -3,7 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from execution.core.hermes_agents import get_agent, list_agents, read_memory, set_soul
+from execution.core.hermes_agents import (
+    create_agent, delete_agent, get_agent, list_agents, read_memory, set_soul,
+)
 
 
 class StubCfg:
@@ -69,6 +71,74 @@ class Agents(unittest.TestCase):
     def test_path_traversal_rejected(self):
         with self.assertRaises(ValueError):
             set_soul("../etc", "x", self.cfg)
+
+    def test_create_agent(self):
+        a = create_agent("reportwright", description="Builds reports", role="Reporter",
+                         cfg=self.cfg)
+        self.assertEqual(a["id"], "reportwright")
+        self.assertEqual(a["role"], "Reporter")
+        self.assertEqual(a["description"], "Builds reports")
+        self.assertFalse(a["is_manager"])
+        self.assertTrue(a["soul_present"])
+        # inherited the manager's brain config (cloud)
+        self.assertEqual(a["brain"]["mode"], "cloud")
+        # fresh — no memory/skills/sessions
+        self.assertEqual(a["memories"], 0)
+        self.assertEqual(a["sessions"], 0)
+        # now visible to the reader
+        self.assertIn("reportwright", [x["id"] for x in list_agents(self.cfg)])
+        # dirs exist
+        pd = self.d / "profiles" / "reportwright"
+        for sub in ("memories", "sessions", "skills"):
+            self.assertTrue((pd / sub).is_dir())
+
+    def test_create_with_custom_soul(self):
+        a = create_agent("custom", soul="# Custom\n- name: Custom Bot\n", cfg=self.cfg)
+        self.assertEqual(a["name"], "Custom Bot")
+        self.assertIn("Custom Bot", get_agent("custom", self.cfg)["soul"])
+
+    def test_create_default_rejected(self):
+        with self.assertRaises(ValueError):
+            create_agent("default", cfg=self.cfg)
+
+    def test_create_duplicate_rejected(self):
+        with self.assertRaises(FileExistsError):
+            create_agent("patchwright", cfg=self.cfg)
+
+    def test_create_bad_name_rejected(self):
+        with self.assertRaises(ValueError):
+            create_agent("../evil", cfg=self.cfg)
+
+    def test_create_description_yaml_safe(self):
+        # an apostrophe in the description must not break profile.yaml parsing
+        a = create_agent("apos", description="Acme's reporter", cfg=self.cfg)
+        self.assertEqual(a["description"], "Acme's reporter")
+
+    def test_delete_agent(self):
+        create_agent("temp", cfg=self.cfg)
+        res = delete_agent("temp", self.cfg)
+        self.assertTrue(res["deleted"])
+        self.assertIsNone(get_agent("temp", self.cfg))
+        self.assertNotIn("temp", [x["id"] for x in list_agents(self.cfg)])
+
+    def test_delete_default_rejected(self):
+        with self.assertRaises(ValueError):
+            delete_agent("default", self.cfg)
+        self.assertTrue((self.d / "SOUL.md").exists())   # manager untouched
+
+    def test_delete_unknown_rejected(self):
+        with self.assertRaises(FileNotFoundError):
+            delete_agent("ghost", self.cfg)
+
+    def test_delete_cleans_alias_and_logs(self):
+        create_agent("withextras", cfg=self.cfg)
+        alias = self.d / ".local" / "bin" / "withextras"
+        alias.parent.mkdir(parents=True, exist_ok=True); alias.write_text("#!/bin/sh\n")
+        glog = self.d / "logs" / "gateways" / "withextras"
+        glog.mkdir(parents=True, exist_ok=True); (glog / "g.log").write_text("x")
+        delete_agent("withextras", self.cfg)
+        self.assertFalse(alias.exists())
+        self.assertFalse(glog.exists())
 
 
 if __name__ == "__main__":
