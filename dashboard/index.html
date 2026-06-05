@@ -123,6 +123,7 @@ const SUB={overview:'Live health across your clients',chat:'Ask about a client �
   approvals:'Write actions awaiting your sign-off',build:'Draft new tools — sandboxed, you approve',
   audit:'Every action, logged',settings:'Account & users'};
 let ME=null, MODEL='', ENGINE=null;   // ENGINE: null=auto, 'hermes'=brain, 'dtm'=direct
+let STREAM=null;   // in-flight chat turn, at module scope so it survives tab switches
 // Chat history lives on the SERVER now (per-user, multi-conversation) — it persists across
 // devices/browsers until a conversation is explicitly deleted, like ChatGPT/Claude.
 let CONV=null;   // current conversation id (null = unsaved new chat)
@@ -207,6 +208,25 @@ function aiHtml(t){ let h=md(t.answer||'');
   if(t.new_skills&&t.new_skills.length) h+=`<div class="text-[11px] text-emerald-300 mt-1.5 inline-flex items-center gap-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-2 py-1"><i data-lucide="sparkles" class="text-[12px]"></i>Hermes saved a new skill: <span class="font-semibold">${t.new_skills.map(esc).join(', ')}</span> — see the Skills tab</div>`;
   if(t.meta) h+=`<div class="text-[11px] text-slate-600 mt-1">${esc(t.meta)}</div>`;
   return h; }
+// ── live chat streaming, decoupled from the view so it keeps painting across tab switches ──
+const CHAT_DOTS='<span class="inline-flex gap-1"><span class="dot">●</span><span class="dot">●</span><span class="dot">●</span></span>';
+function chatThinkBlock(){ const think=STREAM?STREAM.think:'', acc=STREAM?STREAM.acc:''; if(!think) return '';
+  if(acc) return `<div class="text-[11px] text-slate-500 mb-1.5 flex items-center gap-1.5"><i data-lucide="brain" class="text-[11px]"></i><span class="italic opacity-70">Thought for a moment</span></div>`;
+  const tail=esc(think).replace(/\s+/g,' ').slice(-280);
+  return `<div class="text-[11px] text-slate-500 mb-1.5 flex items-start gap-1.5"><i data-lucide="brain" class="text-[12px] mt-0.5 shrink-0 animate-pulse"></i><span class="italic opacity-70">${tail}…</span></div>`; }
+function chatToolChips(ts){ return !ts||!ts.length?'':`<div class="mt-2 flex flex-wrap gap-1">`+ts.map(x=>{
+  const cls=x.ok===null?'bg-white/10 text-slate-300':x.ok?'bg-emerald-500/15 text-emerald-300':'bg-rose-500/15 text-rose-300';
+  const ic=x.ok===null?'loader-circle':x.ok?'check':'x';
+  return `<span class="pill ${cls} inline-flex items-center gap-1"><i data-lucide="${ic}" class="text-[11px] ${x.ok===null?'animate-spin':''}"></i>${esc(x.name)}</span>`;
+}).join('')+`</div>`; }
+function paintStream(){ const e=document.getElementById('ai-streaming'); if(!e||!STREAM)return;
+  e.innerHTML=chatThinkBlock()+(STREAM.acc?md(STREAM.acc):(STREAM.think?'':CHAT_DOTS))+chatToolChips(STREAM.tools);
+  icons(); const mb=$('#msgs'); if(mb)mb.scrollTop=1e9; }
+// When (re)entering chat with an in-flight turn, recreate the live bubble so the still-running
+// reader keeps painting into the current DOM.
+function reattachStream(){ if(!STREAM||STREAM.done||STREAM.conv!==CONV||!$('#msgs'))return;
+  if(!document.getElementById('ai-streaming')) bubble('ai',CHAT_DOTS,'ai-streaming');
+  paintStream(); }
 function renderChatLog(){ const box=$('#msgs'); if(!box)return; box.innerHTML='';
   for(const t of MSGS) bubble(t.role==='user'?'you':'ai', t.role==='user'?esc(t.text):(t.error?'<span class="text-rose-400">error</span>':aiHtml(t)));
   box.scrollTop=1e9; icons(); }
@@ -435,24 +455,13 @@ const VIEWS={
       if(!r||!r.messages){ toast('compact failed',false); return; }
       MSGS=r.messages.map(normMsg); renderChatLog(); showSuggest(); updateMeter(); toast('Conversation compacted'); };
     $('#msgs').addEventListener('click',e=>{ const b=e.target.closest('.open-table'); if(b) openTablePopup(decodeURIComponent(b.dataset.answer)); });
-    // live tool chips while streaming (pending = neutral, then green/red on result)
-    const toolChips=ts=>!ts.length?'':`<div class="mt-2 flex flex-wrap gap-1">`+ts.map(x=>{
-      const cls=x.ok===null?'bg-white/10 text-slate-300':x.ok?'bg-emerald-500/15 text-emerald-300':'bg-rose-500/15 text-rose-300';
-      const ic=x.ok===null?'loader-circle':x.ok?'check':'x';
-      return `<span class="pill ${cls} inline-flex items-center gap-1"><i data-lucide="${ic}" class="text-[11px] ${x.ok===null?'animate-spin':''}"></i>${esc(x.name)}</span>`;
-    }).join('')+`</div>`;
-    const DOTS='<span class="inline-flex gap-1"><span class="dot">●</span><span class="dot">●</span><span class="dot">●</span></span>';
     $('#chatForm').onsubmit=async e=>{e.preventDefault();const m=$('#msg').value.trim();if(!m)return;$('#msg').value='';
       MSGS.push({role:'user',text:m}); showSuggest(); updateMeter();
-      bubble('you',esc(m));const id=bubble('ai',DOTS);
-      const el=()=>document.getElementById(id);
-      let acc='', think='', tools=[], finalTurn=null;
-      const thinkBlock=()=>{ if(!think) return '';
-        if(acc) return `<div class="text-[11px] text-slate-500 mb-1.5 flex items-center gap-1.5"><i data-lucide="brain" class="text-[11px]"></i><span class="italic opacity-70">Thought for a moment</span></div>`;
-        const tail=esc(think).replace(/\s+/g,' ').slice(-280);
-        return `<div class="text-[11px] text-slate-500 mb-1.5 flex items-start gap-1.5"><i data-lucide="brain" class="text-[12px] mt-0.5 shrink-0 animate-pulse"></i><span class="italic opacity-70">${tail}…</span></div>`; };
-      const renderLive=()=>{ const e=el(); if(!e)return;
-        e.innerHTML=thinkBlock()+(acc?md(acc):(think?'':DOTS))+toolChips(tools); icons(); $('#msgs').scrollTop=1e9; };
+      bubble('you',esc(m));
+      // State at module scope (STREAM) so a tab switch can't kill the turn; the reader keeps
+      // painting into the stable #ai-streaming bubble wherever it currently lives.
+      STREAM={conv:CONV, acc:'', think:'', tools:[], done:false, turn:null};
+      bubble('ai',CHAT_DOTS,'ai-streaming');
       try{
         const resp=await fetch('/api/chat/stream',{method:'POST',credentials:'same-origin',
           headers:{'Content-Type':'application/json'},
@@ -464,20 +473,25 @@ const VIEWS={
           buf+=dec.decode(value,{stream:true}); let i;
           while((i=buf.indexOf('\n\n'))>=0){ const line=buf.slice(0,i).replace(/^data: ?/,''); buf=buf.slice(i+2);
             if(!line)continue; let ev; try{ev=JSON.parse(line);}catch(_){continue;}
-            if(ev.type==='start'){ CONV=ev.conversation_id||CONV; }
-            else if(ev.type==='thinking'){ think+=ev.text; renderLive(); }
-            else if(ev.type==='delta'){ acc+=ev.text; renderLive(); }
-            else if(ev.type==='tool_call'){ tools.push({name:ev.name,ok:null}); renderLive(); }
-            else if(ev.type==='tool_result'){ const t=tools.find(x=>x.name===ev.name&&x.ok===null); if(t)t.ok=ev.ok; else tools.push({name:ev.name,ok:ev.ok}); renderLive(); }
-            else if(ev.type==='answer'){ finalTurn={role:'assistant',answer:ev.answer||acc,tools:ev.tool_events||[],citations:ev.citations||[],new_skills:ev.new_skills||[],meta:`${ev.provider}/${ev.model} · ${ev.rounds} round(s)`}; }
+            if(ev.type==='start'){ CONV=ev.conversation_id||CONV; STREAM.conv=CONV; }
+            else if(ev.type==='thinking'){ STREAM.think+=ev.text; paintStream(); }
+            else if(ev.type==='delta'){ STREAM.acc+=ev.text; paintStream(); }
+            else if(ev.type==='tool_call'){ STREAM.tools.push({name:ev.name,ok:null}); paintStream(); }
+            else if(ev.type==='tool_result'){ const t=STREAM.tools.find(x=>x.name===ev.name&&x.ok===null); if(t)t.ok=ev.ok; else STREAM.tools.push({name:ev.name,ok:ev.ok}); paintStream(); }
+            else if(ev.type==='answer'){ STREAM.turn={role:'assistant',answer:ev.answer||STREAM.acc,tools:ev.tool_events||[],citations:ev.citations||[],new_skills:ev.new_skills||[],meta:`${ev.provider}/${ev.model} · ${ev.rounds} round(s)`}; }
             else if(ev.type==='error'){ throw new Error(ev.error||'stream error'); }
           }
         }
-        const turn=finalTurn||{role:'assistant',answer:acc,tools:tools.map(t=>({name:t.name,ok:t.ok}))};
-        MSGS.push(turn); const e=el(); if(e){ e.innerHTML=aiHtml(turn); icons(); }
-        updateMeter(); refreshConvs();   // pick up new conversation / auto-title / reorder
-      }catch(_){ MSGS.push({role:'assistant',error:true}); const e=el(); if(e)e.innerHTML='<span class="text-rose-400">error</span>'; }};
+        const turn=STREAM.turn||{role:'assistant',answer:STREAM.acc,tools:STREAM.tools.map(t=>({name:t.name,ok:t.ok}))};
+        STREAM.done=true; MSGS.push(turn);
+        const e=document.getElementById('ai-streaming'); if(e){ e.removeAttribute('id'); e.innerHTML=aiHtml(turn); icons(); }
+        STREAM=null; updateMeter(); refreshConvs();   // server has persisted it; refresh titles/order
+      }catch(err){ if(STREAM)STREAM.done=true;
+        if(!(err&&err.message==='auth')){ MSGS.push({role:'assistant',error:true});
+          const e=document.getElementById('ai-streaming'); if(e){ e.removeAttribute('id'); e.innerHTML='<span class="text-rose-400">error</span>'; } }
+        STREAM=null; }};
     renderRail(); await loadMsgs(); renderChatLog(); showSuggest(); updateMeter(); icons();
+    reattachStream();   // if a turn is still streaming, re-show it continuing
   },
 
   async integrations(){
@@ -794,7 +808,7 @@ function toggle(name,field,val,disabled,label){
   return `<div class="flex flex-col items-center gap-1">
     <div class="switch ${val?'on':''} ${disabled?'disabled':''}" data-name="${esc(name)}" data-field="${field}"></div>
     <span class="text-[10px] text-slate-600 md:hidden">${label}</span></div>`;}
-function bubble(who,html){const id='m'+Math.random().toString(36).slice(2);const mine=who==='you';
+function bubble(who,html,fixedId){const id=fixedId||('m'+Math.random().toString(36).slice(2));const mine=who==='you';
   const avatar=mine?`<div class="h-8 w-8 rounded-full bg-edge grid place-items-center text-xs font-semibold shrink-0">You</div>`
     :`<div class="h-8 w-8 rounded-full grad grid place-items-center shrink-0 shadow-lg shadow-indigo-500/30"><i data-lucide="sparkles" class="text-white text-sm"></i></div>`;
   $('#msgs').insertAdjacentHTML('beforeend',`<div class="flex gap-3 ${mine?'flex-row-reverse':''} animate-fadeup">
