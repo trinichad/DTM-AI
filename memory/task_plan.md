@@ -89,12 +89,29 @@ stay ON — the container, not the tool config, contains the blast radius.
     test process was stopped to free the port). Cmd: `sudo cp /opt/dtm-ai/deploy/dtm-ai-mcp.service
     /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now dtm-ai-mcp`.
 
-**Remaining:**
-- **Install the MCP systemd unit** (one-time root step above) so the OUT channel survives reboots.
-- **Step 4-IN:** DTM AI chat → Hermes API bridge (publish a Hermes API port; streaming). The real
-  "chat in DTM AI talks through Hermes" build.
-- Optional: per-client `mcp_servers` entries (e.g. `dtm_<client>` → `/mcp/<tenant>`) beyond the `dtm_all`
-  read view; optional sudoers line so `ross` can manage `dtm-ai-mcp` passwordless like `dtm-ai`.
+- **IN channel** ✅ **WIRED & VERIFIED (2026-06-05).** DTM AI dashboard chat can talk THROUGH Hermes.
+  - Enabled Hermes' OpenAI-compatible **api_server** (gateway platform): `API_SERVER_HOST=127.0.0.1`,
+    `API_SERVER_PORT=8642`, `API_SERVER_KEY` (in `~/hermes-agent/.env` + compose env; same key mirrored
+    to `/opt/dtm-ai/.env` as `HERMES_API_KEY`). `network_mode: host` → dtm-ai backend reaches it on
+    loopback (the backend is NOT in the docker group, so a network relay, not docker-exec).
+  - `core/hermes_bridge.py`: relays a turn to `POST /v1/chat/completions` (Bearer, `X-Hermes-Session-Id`
+    = conversation_id for continuity). Parses content deltas AND `event: hermes.tool.progress` frames
+    into the UI's existing frame shapes (tool_call/tool_result/delta). Strips `mcp_dtm_<client>_` naming.
+  - `web/api.py`: `engine` field ("hermes" | "dtm") on `_chat` + `stream_chat`; `_stream_hermes` worker.
+    Hermes integration card now shows brain (`gpt-5.5 / OpenAI Codex`) + `chat_engine` flag — DISTINCT
+    from DTM AI's own OpenAI/Claude keys (separate connection; do NOT conflate).
+  - Dashboard: **engine selector** (Hermes·<brain> | DTM AI direct), defaults to Hermes when available;
+    model picker disabled when Hermes drives; `engine` sent per turn. JS node --check OK; 181 tests green.
+  - **End-to-end proof:** bridge.stream() as dtm-ai → tool_call/tool_result(system_health) + deltas +
+    "DTM AI is OK."; audit shows `hermes | system_health | ok=1` (full chain: chat→Hermes→MCP→dispatch).
+  - Persistence: api_server rides the `gateway` container (`restart: unless-stopped`, docker enabled on
+    boot). MCP server = systemd `dtm-ai-mcp` (enabled). All survive reboot.
+
+**Remaining / optional:**
+- Use it: open the dashboard → Chat; the engine selector defaults to **Hermes** — ask a client question.
+- Optional: per-client `mcp_servers` entries (`dtm_<client>` → `/mcp/<tenant>`) beyond `dtm_all`; sudoers
+  snippet `deploy/sudoers-dtm-ai-mcp-ross.snippet` (passwordless `dtm-ai-mcp` mgmt for ross) — committed,
+  install optional. Richer IN-channel: surface Hermes per-tool detail / citations in the DTM AI transcript.
 
 **Known cosmetic items (non-blocking):** (a) host dir group shows 10000 not 981 — irrelevant, OWNER is
 `dtm-ai`; (b) the UID remap re-chowns the baked-in `/opt/hermes` build trees on EVERY container start
