@@ -135,6 +135,19 @@ Hub won't silently re-add them; a `hermes update` could re-seed built-ins — re
   `/etc/sudoers.d/dtm-ai-ross` has loose perms (visudo warns "should be 0440") — works today; tighten with
   `sudo chmod 0440 /etc/sudoers.d/dtm-ai-ross` to avoid a stricter sudo ignoring it later.
 
+**Specialist agent team (2026-06-05):** 8 agents as Hermes profiles on `/srv/hermes-data` —
+**AtlasOps Manager** = the `default` (active) profile that chat flows through + delegates; specialists
+under `profiles/<name>/`: TenantSmith (M365), Patchwright (Kaseya LIVE), DomainForge (Windows),
+SentinelOps (Cylance/Huntress LIVE), Netwarden (Network), Vaultkeeper (Backup), DeskPilot (Freshdesk).
+Each: own SOUL.md (in repo `deploy/hermes/souls/`, grounded with an "Operating environment" block re the
+DTM AI fence + what it can reach today), kanban routing description (for the orchestrator), cloned config
+(gets the dtm_all MCP tools), 10 skills, own memory/sessions. Setup = idempotent
+`deploy/hermes/setup-agents.sh`. **Agents tab** (`core/hermes_agents.py` + `/api/agents*`): cards per
+agent (manager crowned) → view role/brain/description + how it compounded (skills/memory/sessions) +
+view/edit SOUL inline (owner-gated, audited). 8 gateways run (box has 123G RAM — trivial).
+**Not yet:** delegation end-to-end test (descriptions set, kanban routing untested); per-agent brain
+(all cloud now — brain toggle only swaps the manager/default); viewing memory *content* (tab shows counts).
+
 **Remaining / optional:**
 - Use it: open the dashboard → Chat; the engine selector defaults to **Hermes** — ask a client question.
 - Optional: per-client `mcp_servers` entries (`dtm_<client>` → `/mcp/<tenant>`) beyond `dtm_all`; sudoers
