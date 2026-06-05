@@ -121,7 +121,14 @@ class Api:
         if method == "GET" and path == "/api/agents":
             from ..core.hermes_agents import list_agents
             return Resp(200, {"agents": list_agents()})
-        if method == "GET" and path.startswith("/api/agents/") and not path.endswith("/soul"):
+        if method == "GET" and path.startswith("/api/agents/") and path.endswith("/memory"):
+            from ..core.hermes_agents import read_memory
+            try:
+                m = read_memory(path.split("/")[3])
+            except ValueError:
+                return Resp(400, {"error": "invalid agent name"})
+            return Resp(200, m) if m else Resp(404, {"error": "unknown agent"})
+        if method == "GET" and path.startswith("/api/agents/") and len(path.split("/")) == 4:
             from ..core.hermes_agents import get_agent
             try:
                 a = get_agent(path.split("/")[3])
@@ -130,6 +137,8 @@ class Api:
             return Resp(200, a) if a else Resp(404, {"error": "unknown agent"})
         if method == "POST" and path.startswith("/api/agents/") and path.endswith("/soul"):
             return self._require_admin(role) or self._set_agent_soul(path.split("/")[3], body, user)
+        if method == "POST" and path.startswith("/api/agents/") and path.endswith("/brain"):
+            return self._require_admin(role) or self._set_agent_brain(path.split("/")[3], body, user)
         if method == "POST" and path.startswith("/api/capabilities/"):
             return self._set_capability(path.rsplit("/", 1)[-1], body)
         if method == "GET" and path == "/api/audit":
@@ -385,6 +394,20 @@ class Api:
         from ..core.hermes_skills import HermesSkillsReader
         r = HermesSkillsReader()
         return {"available": r.available, "dir": str(r.root), "skills": r.list_skills()}
+
+    def _set_agent_brain(self, name: str, body: dict, user: str) -> Resp:
+        """Swap ONE agent's brain cloud↔local (per-profile config; owner-gated; audited)."""
+        from ..core.hermes_brain import set_brain_mode
+        mode = (body.get("mode") or "").lower()
+        try:
+            state = set_brain_mode(mode, profile=name)
+        except ValueError as e:
+            return Resp(400, {"error": str(e)})
+        except OSError as e:
+            return Resp(500, {"error": f"cannot write agent config: {e}"})
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"agent_brain[{name}]={mode} ({state.get('model')})")
+        return Resp(200, state)
 
     def _set_agent_soul(self, name: str, body: dict, user: str) -> Resp:
         """Edit an agent's SOUL.md (owner-gated; audited). Hermes loads it fresh next message."""

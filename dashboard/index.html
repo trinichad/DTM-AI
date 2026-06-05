@@ -625,12 +625,15 @@ const VIEWS={
           <div class="flex items-center gap-3 mb-1">
             <div class="h-11 w-11 rounded-xl ${a.is_manager?'grad':'bg-edge'} grid place-items-center shrink-0"><i data-lucide="${a.is_manager?'crown':'bot'}" class="${a.is_manager?'text-white':'text-accent'}"></i></div>
             <div><div class="font-semibold text-lg">${esc(a.name)}</div><div class="text-xs text-slate-400">${esc(a.role||'')} · profile <span class="font-mono">${esc(a.id)}</span></div></div>
-            <span class="ml-auto">${bpill(b)}</span></div>
+            <button id="agentBrain" class="ml-auto pill ${b.mode==='local'?'bg-emerald-500/15 text-emerald-300':'bg-sky-500/15 text-sky-300'} hover:brightness-125 inline-flex items-center gap-1" title="This agent's brain. 🔒 local = on-box/private; ☁ cloud = gpt-5.5. Per-agent, instant, no re-login.">${b.mode==='local'?'🔒':'☁'} ${esc(b.model||'—')} <span class="opacity-60">· switch</span></button></div>
           <div class="text-xs text-slate-400 mt-2 mb-3">${esc(a.description||'')}</div>
-          <div class="flex gap-4 text-[11px] text-slate-500 mb-4"><span><b class="text-slate-300">${a.skills}</b> skills</span><span><b class="text-slate-300">${a.memories}</b> memories</span><span><b class="text-slate-300">${a.sessions}</b> sessions</span></div>
+          <div class="flex gap-4 text-[11px] text-slate-500 mb-4"><span><b class="text-slate-300">${a.skills}</b> skills</span><span><b class="text-slate-300">${a.memories}</b> memory entries</span><span><b class="text-slate-300">${a.sessions}</b> sessions</span></div>
           <div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1.5">SOUL.md — personality, mission, hard nos (loaded fresh each message)</div>
-          <textarea id="soulEdit" class="w-full h-96 bg-ink/70 border border-edge rounded-lg p-3 text-xs font-mono text-slate-200 focus:border-accent focus:outline-none" spellcheck="false">${esc(a.soul||'')}</textarea>
+          <textarea id="soulEdit" class="w-full h-80 bg-ink/70 border border-edge rounded-lg p-3 text-xs font-mono text-slate-200 focus:border-accent focus:outline-none" spellcheck="false">${esc(a.soul||'')}</textarea>
           <div class="flex items-center gap-2 mt-3"><button id="soulSave" class="grad text-white rounded-lg px-4 py-2 text-sm font-semibold inline-flex items-center gap-1.5"><i data-lucide="save"></i> Save soul</button></div>
+          <div class="mt-5 pt-4 border-t border-edge/40">
+            <div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1.5 flex items-center gap-1"><i data-lucide="brain"></i> Long-term memory — how it has compounded</div>
+            <div id="agentMem" class="text-xs text-slate-500">loading…</div></div>
         </div></div>`;
       icons();
       $('#agentBack').onclick=()=>route('agents');
@@ -639,6 +642,14 @@ const VIEWS={
         if(r&&!r.error) toast('Soul saved — Hermes uses it on the next message');
         else toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can edit souls':('Save failed: '+((r&&r.error)||'')),false);
         btn.disabled=false; };
+      $('#agentBrain').onclick=async()=>{ const target=(b.mode==='local')?'cloud':'local';
+        if(!confirm(`Switch ${a.name}'s brain to ${target==='local'?'LOCAL (on-box, private)':'CLOUD (gpt-5.5)'}? Takes effect on its next turn.`))return;
+        const r=await api('POST','/api/agents/'+encodeURIComponent(id)+'/brain',{mode:target});
+        if(r&&r.mode){ toast(`${a.name} → ${r.mode==='local'?'local 🔒':'cloud ☁'} (${esc(r.model||'')})`); openAgent(id); }
+        else toast((r&&r.error&&r.error.includes('admin'))?'Owner only':('Switch failed: '+((r&&r.error)||'')),false); };
+      api('GET','/api/agents/'+encodeURIComponent(id)+'/memory').then(m=>{ const el=$('#agentMem'); if(!el)return;
+        const blk=(t,n)=>t?`<div class="mb-2"><div class="text-[10px] text-slate-500 mb-1 font-mono">${n}</div><pre class="bg-ink/60 border border-edge rounded-lg p-2 whitespace-pre-wrap max-h-64 overflow-auto text-slate-300">${esc(t)}</pre></div>`:'';
+        el.innerHTML=(m&&(m.memory||m.user))?(blk(m.memory,'MEMORY.md')+blk(m.user,'USER.md')):'<span class="text-slate-600">No memory yet — fills in as this agent works (facts it saves to MEMORY.md, notes about the team in USER.md).</span>'; });
     }
   },
 

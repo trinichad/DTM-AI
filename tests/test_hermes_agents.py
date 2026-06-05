@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from execution.core.hermes_agents import get_agent, list_agents, set_soul
+from execution.core.hermes_agents import get_agent, list_agents, read_memory, set_soul
 
 
 class StubCfg:
@@ -32,7 +32,8 @@ class Agents(unittest.TestCase):
         write(pp / "SOUL.md", "# Patchwright\n## Identity\n- name: Patchwright\n- role: Kaseya Engineer\n")
         write(pp / "config.yaml", "model:\n  default: qwen3.5:27b\n  provider: custom\n  base_url: y\n")
         write(pp / "profile.yaml", "description: 'Kaseya ops'\n")
-        write(pp / "memories" / "n1.md", "x"); write(pp / "memories" / "n2.md", "y")
+        write(pp / "MEMORY.md", "# Memory\n- learned a thing\n- learned another\n")
+        write(pp / "USER.md", "DTM Consulting MSP team.\n")
         write(pp / "skills" / "cat" / "s" / "SKILL.md", "x")
         self.cfg = StubCfg({"DTM_HERMES_DATA_DIR": str(self.d)})
 
@@ -47,9 +48,15 @@ class Agents(unittest.TestCase):
         pw = next(x for x in a if x["id"] == "patchwright")
         self.assertEqual(pw["role"], "Kaseya Engineer")
         self.assertEqual(pw["description"], "Kaseya ops")
-        self.assertEqual(pw["memories"], 2)
+        self.assertEqual(pw["memories"], 2)                # MEMORY.md non-heading lines
         self.assertEqual(pw["skills"], 1)
         self.assertEqual(pw["brain"]["mode"], "local")     # per-agent brain read
+
+    def test_read_memory(self):
+        m = read_memory("patchwright", self.cfg)
+        self.assertIn("learned a thing", m["memory"])
+        self.assertIn("DTM Consulting", m["user"])
+        self.assertIsNone(read_memory("nope", self.cfg))
 
     def test_get_and_edit_soul(self):
         self.assertIn("Patchwright", get_agent("patchwright", self.cfg)["soul"])

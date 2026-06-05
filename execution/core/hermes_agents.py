@@ -52,6 +52,16 @@ def _count_skills(p: Path) -> int:
         return 0
 
 
+def _memory_entries(pd: Path) -> int:
+    """Rough 'how much it's learned' count: non-empty, non-heading lines in MEMORY.md."""
+    try:
+        text = (pd / "MEMORY.md").read_text(encoding="utf-8")
+    except OSError:
+        return 0
+    return sum(1 for l in text.splitlines()
+               if l.strip() and not l.lstrip().startswith(("#", "<!--", "-->")))
+
+
 def _brain(cfg_path: Path) -> dict:
     try:
         text = cfg_path.read_text(encoding="utf-8")
@@ -88,10 +98,25 @@ def _read_one(cfg: Config, name: str) -> dict:
         "is_manager": name == "default",
         "brain": _brain(pd / "config.yaml"),
         "skills": _count_skills(pd / "skills"),
-        "memories": _count_dir_files(pd / "memories"),
+        "memories": _memory_entries(pd),
         "sessions": _count_dir_files(pd / "sessions"),
         "soul_present": bool(soul.strip()),
     }
+
+
+def read_memory(name: str, cfg: Optional[Config] = None) -> Optional[dict]:
+    """An agent's built-in long-term memory: MEMORY.md (facts it saved) + USER.md (about the team)."""
+    cfg = cfg or get_config()
+    pd = _profile_dir(cfg, _safe(name))
+    if not pd.is_dir():
+        return None
+
+    def _read(fn: str) -> str:
+        try:
+            return (pd / fn).read_text(encoding="utf-8")
+        except OSError:
+            return ""
+    return {"id": name, "memory": _read("MEMORY.md"), "user": _read("USER.md")}
 
 
 def list_agents(cfg: Optional[Config] = None) -> list[dict]:

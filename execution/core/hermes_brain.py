@@ -22,12 +22,19 @@ from .config import Config, get_config
 _MODEL_RE = re.compile(r"(?m)^model:\n(?:[ \t]+.*\n)*")
 
 
-def _config_path(cfg: Config) -> Path:
+_PROFILE_RE = re.compile(r"^[a-z0-9_-]+$")
+
+
+def _config_path(cfg: Config, profile: str = "default") -> Path:
     skills = cfg.get("DTM_HERMES_SKILLS_DIR")
-    data_dir = (cfg.get("DTM_HERMES_DATA_DIR")
-                or (str(Path(skills).parent) if skills else None)
-                or str(Path.home() / ".hermes"))
-    return Path(data_dir) / "config.yaml"
+    data_dir = Path(cfg.get("DTM_HERMES_DATA_DIR")
+                    or (str(Path(skills).parent) if skills else None)
+                    or str(Path.home() / ".hermes"))
+    if profile == "default":
+        return data_dir / "config.yaml"
+    if not _PROFILE_RE.match(profile or ""):
+        raise ValueError(f"invalid profile: {profile!r}")
+    return data_dir / "profiles" / profile / "config.yaml"
 
 
 def _blocks(cfg: Config) -> dict[str, str]:
@@ -51,11 +58,11 @@ def _field(block: str, key: str) -> str:
     return ""
 
 
-def get_brain_mode(cfg: Optional[Config] = None) -> dict:
-    """Report Hermes' current brain: {available, mode: cloud|local, model, provider}."""
+def get_brain_mode(cfg: Optional[Config] = None, profile: str = "default") -> dict:
+    """Report a profile's current brain: {available, mode: cloud|local, model, provider}."""
     cfg = cfg or get_config()
     try:
-        text = _config_path(cfg).read_text(encoding="utf-8")
+        text = _config_path(cfg, profile).read_text(encoding="utf-8")
     except OSError:
         return {"available": False, "mode": None, "model": None, "provider": None}
     m = _MODEL_RE.search(text)
@@ -66,13 +73,13 @@ def get_brain_mode(cfg: Optional[Config] = None) -> dict:
     return {"available": bool(block), "mode": mode, "model": model, "provider": provider}
 
 
-def set_brain_mode(mode: str, cfg: Optional[Config] = None) -> dict:
-    """Rewrite the `model:` block to cloud or local. Atomic replace. Returns the new state.
-    Raises ValueError on a bad mode, OSError if the config dir isn't writable."""
+def set_brain_mode(mode: str, cfg: Optional[Config] = None, profile: str = "default") -> dict:
+    """Rewrite a profile's `model:` block to cloud or local. Atomic replace. Returns the new
+    state. Raises ValueError on a bad mode/profile, OSError if the config dir isn't writable."""
     if mode not in ("cloud", "local"):
         raise ValueError("mode must be 'cloud' or 'local'")
     cfg = cfg or get_config()
-    path = _config_path(cfg)
+    path = _config_path(cfg, profile)
     text = path.read_text(encoding="utf-8")
     block = _blocks(cfg)[mode]
     new, n = _MODEL_RE.subn(block, text, count=1)
@@ -81,4 +88,4 @@ def set_brain_mode(mode: str, cfg: Optional[Config] = None) -> dict:
     tmp = path.with_suffix(".yaml.swaptmp")
     tmp.write_text(new, encoding="utf-8")
     tmp.replace(path)                            # atomic on POSIX
-    return get_brain_mode(cfg)
+    return get_brain_mode(cfg, profile)
