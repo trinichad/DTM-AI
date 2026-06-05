@@ -143,6 +143,19 @@ class Api:
             return self._require_admin(role) or self._set_agent_soul(path.split("/")[3], body, user)
         if method == "POST" and path.startswith("/api/agents/") and path.endswith("/brain"):
             return self._require_admin(role) or self._set_agent_brain(path.split("/")[3], body, user)
+        if method == "GET" and path == "/api/kanban":
+            from ..core.hermes_kanban import board
+            return Resp(200, board())
+        if method == "GET" and path.startswith("/api/kanban/tasks/") and len(path.split("/")) == 5:
+            from ..core.hermes_kanban import get_task
+            t = get_task(path.split("/")[4])
+            return Resp(200, t) if t else Resp(404, {"error": "task not found"})
+        if method == "POST" and path == "/api/kanban/tasks":
+            return self._require_admin(role) or self._kanban_create(body, user)
+        if method == "POST" and path.startswith("/api/kanban/tasks/") and path.endswith("/assign"):
+            return self._require_admin(role) or self._kanban_assign(path.split("/")[4], body, user)
+        if method == "POST" and path == "/api/kanban/dispatch":
+            return self._require_admin(role) or self._kanban_dispatch(user)
         if method == "POST" and path.startswith("/api/capabilities/"):
             return self._set_capability(path.rsplit("/", 1)[-1], body)
         if method == "GET" and path == "/api/audit":
@@ -432,6 +445,53 @@ class Api:
         self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
                                 detail=f"agent_delete={name}")
         return Resp(200, res)
+
+    def _kanban_create(self, body: dict, user: str) -> Resp:
+        """Delegate: create a board task (optionally pre-assigned to a specialist). Owner-gated."""
+        from ..core.hermes_kanban import KanbanError, create_task
+        title = (body.get("title") or "").strip()
+        if not title:
+            return Resp(400, {"error": "task title required"})
+        assignee = (body.get("assignee") or "").strip()
+        tenant = (body.get("tenant") or "").strip()
+        try:
+            t = create_task(title, body=body.get("body") or "", assignee=assignee,
+                            created_by=f"dtm-ai:{user}", tenant=tenant,
+                            idempotency_key=(body.get("idempotency_key") or "").strip())
+        except ValueError as e:
+            return Resp(400, {"error": str(e)})
+        except KanbanError as e:
+            return Resp(502, {"error": str(e)})       # wrapper missing / not installed / rejected
+        self.agent.audit.record(actor=user, tenant_id=tenant or "*", action="config_change",
+                                detail=f"kanban_delegate={assignee or 'unassigned'}:{title[:60]}")
+        return Resp(200, t)
+
+    def _kanban_assign(self, task_id: str, body: dict, user: str) -> Resp:
+        """Re/assign a board task to a specialist profile (owner-gated; audited)."""
+        from ..core.hermes_kanban import KanbanError, assign_task
+        profile = (body.get("profile") or "").strip()
+        if not profile:
+            return Resp(400, {"error": "profile required"})
+        try:
+            r = assign_task(task_id, profile)
+        except ValueError as e:
+            return Resp(400, {"error": str(e)})
+        except KanbanError as e:
+            return Resp(502, {"error": str(e)})
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"kanban_assign={task_id}->{profile}")
+        return Resp(200, r if isinstance(r, dict) else {"ok": True})
+
+    def _kanban_dispatch(self, user: str) -> Resp:
+        """Force one dispatcher pass (owner-gated). Idempotent — only spawns ready+unclaimed tasks."""
+        from ..core.hermes_kanban import KanbanError, dispatch
+        try:
+            r = dispatch()
+        except KanbanError as e:
+            return Resp(502, {"error": str(e)})
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail="kanban_dispatch")
+        return Resp(200, r if isinstance(r, dict) else {"ok": True})
 
     def _set_agent_brain(self, name: str, body: dict, user: str) -> Resp:
         """Swap ONE agent's brain cloud↔local (per-profile config; owner-gated; audited)."""

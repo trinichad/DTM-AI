@@ -175,6 +175,24 @@ real loopback HTTP; full suite 174 green). SOP `architecture/hermes-integration.
 `config.snippet.yaml` updated with the container `url:` form. Bind the docker-bridge IP (not 0.0.0.0/not
 127.0.0.1); container reaches it via `host.docker.internal`. Creds stay on host, never in the container.
 
+**D-18 — Delegation runs on Hermes' kanban board; DTM AI reads it directly + delegates via a
+locked-down privileged wrapper (2026-06-05).**
+Real cross-profile delegation in Hermes is the **kanban** board (durable shared SQLite; a task assigned
+to a profile is executed by a worker the gateway dispatcher spawns in an isolated workspace, running as
+that specialist). Verified live: a task assigned to `sentinelops` spawned a worker that identified as
+SentinelOps and saw only the `mcp_dtm_all_*` fenced tools. _Two design choices:_
+- **Reads = direct, read-only.** The board DB is on the shared volume (`/srv/hermes-data/kanban.db`,
+  `dtm-ai`-owned), so DTM AI opens it `mode=ro` — no `docker exec`, same as reading profiles. The
+  api_server has **no per-request profile selector** (confirmed in source), so routing chat to a
+  specialist isn't possible; kanban is the path.
+- **Writes = a tiny root-owned wrapper, not direct DB writes.** Writing the DB directly would bypass
+  Hermes' atomic-claim + event invariants, and the web service can't `docker exec`. So `dtm-ai` runs
+  ONE root-owned script (`/usr/local/sbin/dtm-ai-kanban.sh`) via scoped NOPASSWD sudo. _Reason it's safe
+  despite the D-17 escalation reality:_ the script is **root-owned (dtm-ai can't edit it)**, whitelists
+  only `create`/`assign`/`dispatch`, validates every arg, uses **no shell** (argv array to `docker
+  exec`), and only ever touches the agent's own board — never client systems. Delegating a task ≠ acting
+  on a client. Owner-gated + audited. (212 tests green.)
+
 ## Streaming chat (2026-06-03)
 
 **D-16 — Stream chat over Server-Sent Events (SSE), not raw WebSocket.**

@@ -168,6 +168,19 @@ delete protects `default` (manager) and cleans the alias + gateway logs. API: `P
 `manualtest` profile from the dir-scan recon is still at `/srv/hermes-data/profiles/manualtest` — `rm -rf`
 it (or delete it from the Agents tab) after pulling._
 
+**Delegation board (kanban)** ✅ — real cross-profile delegation works. Mechanism: `hermes kanban` =
+durable shared SQLite board; a task assigned to a profile is executed by a worker the gateway dispatcher
+spawns in an isolated workspace, **as that specialist** (own SOUL/memory/brain). Proven live: a task →
+`sentinelops` spawned a worker that ID'd as SentinelOps and saw only the `mcp_dtm_all_*` fenced tools
+(fence holds for spawned workers). DTM AI reads `/srv/hermes-data/kanban.db` **read-only** (no docker
+exec) → `core/hermes_kanban.py` + `GET /api/kanban` + **Delegation board** view (columns, assignee,
+latest run summary, per-task runs/comments/events). **UI-triggered delegation**: "Delegate task" form +
+per-task reassign → `POST /api/kanban/tasks` / `…/assign` (owner-gated, audited), routed through a
+**root-owned locked-down wrapper** (`deploy/hermes/dtm-ai-kanban.sh` + sudoers + `install-kanban.sh`;
+whitelists create/assign/dispatch, no shell, validated). create fires a dispatch pass so workers start
+now. See D-18. +10 kanban tests (212 green). _Server step on pull: `sudo bash
+deploy/hermes/install-kanban.sh` once (installs wrapper root-owned + sudoers), then restart dtm-ai._
+
 **Remaining / optional:**
 - Use it: open the dashboard → Chat; the engine selector defaults to **Hermes** — ask a client question.
 - Optional: per-client `mcp_servers` entries (`dtm_<client>` → `/mcp/<tenant>`) beyond `dtm_all`; sudoers

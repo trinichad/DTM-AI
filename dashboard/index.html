@@ -114,12 +114,13 @@
 const $ = s => document.querySelector(s);
 let TENANT='*', current='overview';
 const NAV=[['overview','Overview','layout-dashboard'],['chat','Chat','message-square'],
-  ['agents','Agents','users-round'],
+  ['agents','Agents','users-round'],['board','Delegation','layout-grid'],
   ['integrations','Integrations','plug-zap'],['capabilities','Capabilities','sliders-horizontal'],
   ['skills','Skills','graduation-cap'],['memory','Memory','brain'],
   ['approvals','Approvals','shield-alert'],['build','Build','hammer'],['audit','Audit','scroll-text']];
 const SUB={overview:'Live health across your clients',chat:'Ask about a client — read-only',
   agents:'Your specialist team — souls, roles & memory',
+  board:'Watch & assign work across your specialist team',
   integrations:'Connections, knowledge & credentials',capabilities:'Primitives the AI may use',
   skills:'What Hermes has learned',memory:'Knowledge base & per-client notes',
   approvals:'Write actions awaiting your sign-off',build:'Draft new tools — sandboxed, you approve',
@@ -692,6 +693,107 @@ const VIEWS={
         const r=await api('POST','/api/agents',{name,role:$('#agRole').value,description:$('#agDesc').value,soul:$('#agSoul').value});
         if(r&&r.id&&!r.error){ toast(`Agent "${r.name}" created`); openAgent(r.id); }
         else { toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can add agents':('Create failed: '+((r&&r.error)||'')),false); btn.disabled=false; }
+      };
+    }
+  },
+
+  async board(){
+    const data=await api('GET','/api/kanban');
+    if(!data || data.available===false){
+      $('#view').innerHTML=`<div class="card glass p-10 max-w-2xl mx-auto text-center animate-fadeup">
+        <div class="h-14 w-14 rounded-2xl grad grid place-items-center mx-auto mb-4 shadow-lg shadow-indigo-500/30"><i data-lucide="layout-grid" class="text-white text-2xl"></i></div>
+        <div class="font-semibold text-lg">No delegation board yet</div>
+        <div class="text-sm text-slate-400 mt-2 max-w-md mx-auto">When AtlasOps delegates — or you assign a task below — a specialist picks it up here and runs it with its own soul & memory, through the tool fence. The board appears once the first task is created.</div>
+        <div class="mt-5"><button id="bDelegate0" class="grad text-white rounded-lg px-4 py-2 text-sm font-semibold inline-flex items-center gap-1.5"><i data-lucide="plus"></i> Delegate a task</button></div></div>`;
+      icons(); const b0=$('#bDelegate0'); if(b0) b0.onclick=openDelegate; return;
+    }
+    const COLORS={triage:'slate',todo:'slate',ready:'amber',running:'sky',review:'violet',blocked:'rose',scheduled:'slate',done:'emerald'};
+    const chip=a=>a?`<span class="pill bg-edge text-slate-300 text-[10px] inline-flex items-center gap-1"><i data-lucide="bot" class="w-3 h-3"></i>${esc(a)}</span>`:'<span class="pill bg-edge/50 text-slate-500 text-[10px]">unassigned</span>';
+    const card=t=>`<div class="card card-hover p-3 cursor-pointer board-card" data-id="${esc(t.id)}">
+        <div class="text-sm font-medium leading-snug mb-1.5">${esc(t.title)}</div>
+        <div class="flex items-center gap-2 flex-wrap">${chip(t.assignee)}${t.consecutive_failures?`<span class="pill bg-rose-500/15 text-rose-300 text-[10px]">⚠ ${t.consecutive_failures}</span>`:''}${t.goal_mode?'<span class="pill bg-violet-500/15 text-violet-300 text-[10px]">goal</span>':''}</div>
+        ${t.latest_summary?`<div class="text-[11px] text-slate-500 mt-2 line-clamp-2">${esc(t.latest_summary)}</div>`:''}</div>`;
+    const column=c=>{const col=COLORS[c.status]||'slate';return `<div class="shrink-0 w-64">
+        <div class="flex items-center gap-2 mb-2 text-[11px] uppercase tracking-wide text-${col}-300"><span class="h-2 w-2 rounded-full bg-${col}-400"></span>${c.status}<span class="text-slate-600">${c.tasks.length}</span></div>
+        <div class="space-y-2">${c.tasks.map(card).join('')||'<div class="text-[11px] text-slate-600 px-1 py-3">—</div>'}</div></div>`;};
+    $('#view').innerHTML=`<div>
+      <div class="flex items-center gap-2 mb-4 text-sm text-slate-400"><i data-lucide="layout-grid" class="text-accent"></i> ${data.total} task${data.total===1?'':'s'} — specialists run with their own soul/memory, through the fence.
+        <button id="bRefresh" class="ml-auto text-xs text-slate-400 hover:text-accent inline-flex items-center gap-1"><i data-lucide="refresh-cw"></i> Refresh</button>
+        <button id="bDelegate" class="grad text-white rounded-lg px-3 py-1.5 text-xs font-semibold inline-flex items-center gap-1.5"><i data-lucide="plus"></i> Delegate task</button></div>
+      <div class="flex gap-4 overflow-x-auto pb-3">${data.columns.map(column).join('')}</div></div>`;
+    icons();
+    document.querySelectorAll('.board-card').forEach(el=>el.onclick=()=>openTask(el.dataset.id));
+    $('#bRefresh').onclick=()=>VIEWS.board();
+    $('#bDelegate').onclick=openDelegate;
+    // light auto-refresh while a worker may be running — self-clears when you navigate away
+    clearTimeout(window._boardPoll);
+    window._boardPoll=setTimeout(()=>{ if(current==='board') VIEWS.board(); }, 6000);
+
+    async function agentOptions(sel){
+      const ags=((await api('GET','/api/agents'))||{}).agents||[];
+      return ags.map(a=>`<option value="${esc(a.id)}"${a.id===sel?' selected':''}>${esc(a.name)}${a.is_manager?' (manager)':''}</option>`).join('');
+    }
+    function fmt(ms){ if(!ms) return ''; const d=new Date(ms); return d.toLocaleString(); }
+
+    async function openTask(id){
+      const t=await api('GET','/api/kanban/tasks/'+encodeURIComponent(id));
+      if(!t||t.error){ toast('Could not load task',false); return; }
+      const col=COLORS[t.status]||'slate';
+      const runRow=r=>`<div class="border border-edge rounded-lg p-2.5 mb-2 text-xs">
+          <div class="flex items-center gap-2 mb-1"><span class="pill bg-${(r.outcome==='completed')?'emerald':(r.outcome?'rose':'sky')}-500/15 text-${(r.outcome==='completed')?'emerald':(r.outcome?'rose':'sky')}-300 text-[10px]">${esc(r.outcome||r.status||'running')}</span><span class="text-slate-400">@${esc(r.profile||'?')}</span><span class="text-slate-600 ml-auto">${fmt(r.started_ms)}</span></div>
+          ${r.summary?`<div class="text-slate-300 whitespace-pre-wrap">${esc(r.summary)}</div>`:''}${r.error?`<div class="text-rose-300 mt-1">${esc(r.error)}</div>`:''}</div>`;
+      $('#view').innerHTML=`<div class="max-w-3xl mx-auto">
+        <button id="tBack" class="text-xs text-slate-400 hover:text-accent inline-flex items-center gap-1 mb-3"><i data-lucide="arrow-left"></i> Board</button>
+        <div class="card p-5">
+          <div class="flex items-start gap-3 mb-2"><span class="mt-1 h-2.5 w-2.5 rounded-full bg-${col}-400 shrink-0"></span>
+            <div class="flex-1 min-w-0"><div class="font-semibold text-lg leading-snug">${esc(t.title)}</div>
+              <div class="text-xs text-slate-400 mt-0.5">${esc(t.status)} · <span class="font-mono">${esc(t.id)}</span> · created ${fmt(t.created_ms)} by ${esc(t.created_by||'?')}</div></div></div>
+          <div class="flex items-center gap-2 mb-4 flex-wrap">${chip(t.assignee)}
+            <select id="tProfile" class="bg-ink/70 border border-edge rounded-lg px-2 py-1 text-xs text-slate-200"></select>
+            <button id="tAssign" class="text-xs border border-edge rounded-lg px-2.5 py-1 hover:border-accent">Reassign</button></div>
+          ${t.body?`<div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Task</div><div class="text-sm text-slate-300 whitespace-pre-wrap mb-4 bg-ink/50 border border-edge rounded-lg p-3">${esc(t.body)}</div>`:''}
+          ${t.result?`<div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Result</div><pre class="text-xs text-slate-200 whitespace-pre-wrap bg-ink/60 border border-edge rounded-lg p-3 mb-4 max-h-72 overflow-auto">${esc(t.result)}</pre>`:''}
+          <div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1.5 flex items-center gap-1"><i data-lucide="history"></i> Runs — who worked it & what they reported</div>
+          ${(t.runs&&t.runs.length)?t.runs.map(runRow).join(''):'<div class="text-xs text-slate-600 mb-2">No runs yet — waiting for the dispatcher to spawn a worker.</div>'}
+          ${(t.comments&&t.comments.length)?`<div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1.5 mt-3">Comments</div>${t.comments.map(c=>`<div class="text-xs mb-1.5"><span class="text-slate-500 font-mono">${esc(c.author)}</span> <span class="text-slate-300">${esc(c.body)}</span></div>`).join('')}`:''}
+        </div></div>`;
+      icons();
+      $('#tProfile').innerHTML=await agentOptions(t.assignee);
+      $('#tBack').onclick=()=>route('board');
+      $('#tAssign').onclick=async()=>{ const p=$('#tProfile').value;
+        const r=await api('POST','/api/kanban/tasks/'+encodeURIComponent(id)+'/assign',{profile:p});
+        if(r&&!r.error){ toast(`Reassigned to ${p}`); openTask(id); }
+        else toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can reassign':('Reassign failed: '+((r&&r.error)||'')),false); };
+    }
+
+    async function openDelegate(){
+      clearTimeout(window._boardPoll);
+      $('#view').innerHTML=`<div class="max-w-2xl mx-auto">
+        <button id="dBack" class="text-xs text-slate-400 hover:text-accent inline-flex items-center gap-1 mb-3"><i data-lucide="arrow-left"></i> Board</button>
+        <div class="card p-5">
+          <div class="flex items-center gap-3 mb-4"><div class="h-11 w-11 rounded-xl grad grid place-items-center shrink-0"><i data-lucide="send" class="text-white"></i></div>
+            <div><div class="font-semibold text-lg">Delegate a task</div><div class="text-xs text-slate-400">The chosen specialist runs it with its own soul, memory & brain — through the tool fence.</div></div></div>
+          <label class="block text-[11px] uppercase tracking-wide text-slate-500 mb-1">Assign to</label>
+          <select id="dAssignee" class="w-full bg-ink/70 border border-edge rounded-lg p-2.5 text-sm text-slate-200 focus:border-accent focus:outline-none mb-3"></select>
+          <label class="block text-[11px] uppercase tracking-wide text-slate-500 mb-1">Task title</label>
+          <input id="dTitle" class="w-full bg-ink/70 border border-edge rounded-lg p-2.5 text-sm text-slate-200 focus:border-accent focus:outline-none mb-3" placeholder="Audit MFA gaps across Acme" spellcheck="false">
+          <label class="block text-[11px] uppercase tracking-wide text-slate-500 mb-1">Details <span class="text-slate-600 normal-case">— what to do, scope, what 'done' looks like</span></label>
+          <textarea id="dBody" class="w-full h-40 bg-ink/70 border border-edge rounded-lg p-2.5 text-sm text-slate-200 focus:border-accent focus:outline-none mb-4" placeholder="List every Acme user with MFA disabled, using the read-only M365/Cylance tools. Report a table. Do not change anything." spellcheck="false"></textarea>
+          <div class="flex items-center gap-2"><button id="dCreate" class="grad text-white rounded-lg px-4 py-2 text-sm font-semibold inline-flex items-center gap-1.5"><i data-lucide="send"></i> Delegate</button>
+            <button id="dCancel" class="text-slate-400 hover:text-slate-200 text-sm px-3 py-2">Cancel</button></div>
+        </div></div>`;
+      icons();
+      $('#dAssignee').innerHTML=await agentOptions('');
+      $('#dBack').onclick=()=>route('board');
+      $('#dCancel').onclick=()=>route('board');
+      $('#dTitle').focus();
+      $('#dCreate').onclick=async()=>{
+        const title=($('#dTitle').value||'').trim();
+        if(!title){ toast('Task title required',false); return; }
+        const btn=$('#dCreate'); btn.disabled=true;
+        const r=await api('POST','/api/kanban/tasks',{title,body:$('#dBody').value,assignee:$('#dAssignee').value});
+        if(r&&r.id&&!r.error){ toast(`Delegated to ${$('#dAssignee').value} — worker spawning`); openTask(r.id); }
+        else { toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can delegate':('Delegate failed: '+((r&&r.error)||'')),false); btn.disabled=false; }
       };
     }
   },

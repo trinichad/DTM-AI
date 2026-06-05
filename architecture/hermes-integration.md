@@ -118,6 +118,43 @@ DTM AI reader picked it up immediately.
   `config_change`. UI: "+ Add agent" form; delete is gated behind a **type-the-profile-name** "ARE YOU
   SURE?" confirm (irreversible: soul + memory + learned skills are gone).
 
+## Delegation board — kanban (`core/hermes_kanban.py`)
+Hermes does **real cross-profile delegation** through `hermes kanban`: a durable **SQLite board shared
+by all profiles**. A task is assigned to a named profile and executed by a worker the gateway's
+dispatcher spawns **in an isolated workspace, running as that specialist** (its own SOUL, memory,
+brain). Verified live: a task assigned to `sentinelops` spawned a worker that identified as
+"SentinelOps, Security Operations Analyst" and listed the `mcp_dtm_all_*` tools — i.e. the delegated
+worker reaches client systems **only through the MCP fence**. The fence holds for spawned workers.
+
+**Read path (no `docker exec`).** The board DB is on the shared volume: `<HERMES_HOME>/kanban.db` =
+`/srv/hermes-data/kanban.db`, `dtm-ai`-owned. DTM AI opens it **read-only** (`mode=ro`) and surfaces a
+**Delegation board** view — columns `triage→todo→ready→running→review→blocked→scheduled→done`, each
+card's assignee + latest run summary (workers often answer in `task_runs.summary`, not `result`), and
+per-task runs/comments/events/links. Same pattern as reading profiles on disk.
+
+**Write path (delegate).** The web service can't `docker exec` and must not write the DB directly
+(would bypass Hermes' atomic-claim + event invariants). So delegation routes through a **locked-down
+privileged wrapper**, mirroring the `dtm-ai-mcp` sudo pattern:
+- `deploy/hermes/dtm-ai-kanban.sh` — installed **root-owned** at `/usr/local/sbin/` (so `dtm-ai` can't
+  tamper with it), whitelists **only** `create`/`assign`/`dispatch`, validates every arg (profile/tenant
+  regex, length caps), and **never uses a shell** — args go to `docker exec` as an argv array, so a task
+  title can't inject a command.
+- `deploy/sudoers-dtm-ai-kanban.snippet` — `dtm-ai` may run **only** that one script as root.
+- `deploy/hermes/install-kanban.sh` — installs both (root-owned wrapper, 0440 sudoers, `visudo -c`).
+- `create_task()` creates then fires a **`dispatch` pass** so the worker starts immediately rather than
+  waiting for the gateway's poll (idempotent — only spawns ready+unclaimed tasks).
+- API: `GET /api/kanban` (board), `GET /api/kanban/tasks/<id>`, `POST /api/kanban/tasks` (delegate),
+  `POST /api/kanban/tasks/<id>/assign`, `POST /api/kanban/dispatch`. **Reads** open to any authed user;
+  **writes owner-gated + audited** (`config_change`, `created-by=dtm-ai:<user>`).
+- A created+assigned task lands directly in `ready` (no manual promote). `created_at` is **epoch
+  seconds** (reader normalizes to ms).
+
+**Security notes.** (1) The wrapper is a controlled root escalation — locked down per above; it only ever
+touches the agent's own board, never client systems. (2) A delegated *worker's* toolset matters on this
+box (terminal/code + `ross` sudo = escalation, see `decisions.md`): keep specialists' terminal/code
+**off** (Capability Console / `hermes-toolset-posture.md`). The kanban worker uses the MCP fence, not a
+shell, which is the safe path.
+
 ## Edge cases / lessons
 - MCP `mcp_servers` has **no `cwd` key** → always launch via the wrapper script (or set `env.PYTHONPATH`).
 - Multiple per-tenant server processes share one `dtm_ai.db` (sqlite). Low write volume; fine for v1.
