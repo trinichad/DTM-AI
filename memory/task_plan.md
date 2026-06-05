@@ -107,6 +107,13 @@ stay ON — the container, not the tool config, contains the blast radius.
   - Persistence: api_server rides the `gateway` container (`restart: unless-stopped`, docker enabled on
     boot). MCP server = systemd `dtm-ai-mcp` (enabled). All survive reboot.
 
+**Skills pruned (2026-06-05):** trimmed Hermes' 74 stock skills → **10** kept for MSP ops: obsidian,
+hermes-agent-skill-authoring, plan, systematic-debugging, ocr-and-documents, google-workspace,
+teams-meeting-pipeline, architecture-diagram, jupyter-live-kernel, himalaya. Removed the creative/ML/
+coding/apple(macOS-only)/jailbreak noise. Full original set backed up (reversible):
+`/srv/hermes-data/.skills-backup-20260605-150859.tar.gz`. DTM AI reader reflects live (no GITHUB_TOKEN →
+Hub won't silently re-add them; a `hermes update` could re-seed built-ins — re-prune if so).
+
 **Remaining / optional:**
 - Use it: open the dashboard → Chat; the engine selector defaults to **Hermes** — ask a client question.
 - Optional: per-client `mcp_servers` entries (`dtm_<client>` → `/mcp/<tenant>`) beyond `dtm_all`; sudoers
