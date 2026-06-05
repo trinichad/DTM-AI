@@ -74,6 +74,27 @@ Point Hermes at the local Ollama OpenAI-compatible endpoint (`http://127.0.0.1:1
 own model router independently enforces local-first for client-data tasks, so sensitivity is protected
 at two layers.
 
+## Brain swap — cloud ↔ local, live (D-12; `core/hermes_brain.py`)
+Hermes' api_server is **single-model**: `_create_agent` builds the agent from
+`_resolve_gateway_model()` (reads `config.yaml` model block) **per request** — the per-request
+`model` field is only echoed in the response, it does NOT switch the LLM (verified: a per-request
+"local" override never loaded Ollama; the cloud served it). So a per-chat brain switch is NOT possible
+through one api_server. Instead we **swap the `model:` block in `config.yaml`** between two definitions:
+- **cloud** → `default: gpt-5.5`, `provider: openai-codex`, Codex base_url
+- **local** → `default: qwen3.5:27b`, `provider: custom`, `base_url: http://127.0.0.1:11434/v1`
+
+Because config is read per request, the swap takes effect on the **next turn with no container restart**.
+The Codex OAuth token lives in a **separate `auth.json`** that the swap never touches → **no gpt
+re-login** when flipping back to cloud. This is a **GLOBAL** setting (one config), so it's surfaced as an
+owner-gated, audited toggle — not a per-message dropdown (which would race + can't actually switch).
+
+- API: `GET /api/hermes/brain` (mode/model), `POST` (owner-only, audited `config_change`).
+- The web service must be able to WRITE the config dir → drop-in
+  `deploy/dtm-ai.service.d/hermes-rw.conf` adds `ReadWritePaths=/srv/hermes-data` (ProtectSystem=strict
+  makes it read-only otherwise). The MCP service does NOT need this (it only reads + caches to the DB).
+- The Hermes engine label in the dashboard reflects the REAL configured brain (read from config), so a
+  swap can't silently misreport which model is answering.
+
 ## Edge cases / lessons
 - MCP `mcp_servers` has **no `cwd` key** → always launch via the wrapper script (or set `env.PYTHONPATH`).
 - Multiple per-tenant server processes share one `dtm_ai.db` (sqlite). Low write volume; fine for v1.

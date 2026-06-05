@@ -119,10 +119,18 @@ Hub won't silently re-add them; a `hermes update` could re-seed built-ins — re
   `_call` writes a capped, 30-min-TTL preview to `audit.tool_result_cache`; `_stream_hermes` correlates
   by actor=hermes + turn-start window. Direct engine: preview attached in-process. (Needed a `dtm-ai-mcp`
   restart to activate — now passwordless via the installed sudoers snippet.)
-- **Hermes local-model option** ✅ — engine dropdown = Hermes·gpt-5.5 ☁ / Hermes·qwen3.5:27b (local 🔒) /
-  DTM AI direct. Per-request `model` override to the api_server routes the brain to local Ollama
-  (`qwen3.5:27b`, **262K ctx** — token concern moot); nothing leaves the box. `HERMES_LOCAL_MODEL` env
-  overrides the default. Verified: local qwen turn streamed on-box; cloud unchanged.
+- **Hermes local-model** — CORRECTED. Per-request model override does NOT work: Hermes' api_server is
+  single-model (`_create_agent` → `_resolve_gateway_model()` reads `config.yaml` per request; the request
+  `model` field is cosmetic, echoed only). Proven by polling Ollama: a "local" per-request turn never
+  loaded the 27B model — cloud served it. **Removed that misleading dropdown option.** ✅ **Real fix =
+  brain swap** (`core/hermes_brain.py`): rewrite the `model:` block cloud↔local. Config read per-request
+  → swap is **live, no restart**; Codex token in separate `auth.json` → **no gpt re-auth**. Global,
+  owner-gated, audited toggle in the chat header ("brain: ☁ cloud / 🔒 local · switch"). Local =
+  `qwen3.5:27b` via `provider: custom` → Ollama `/v1` (262K ctx). Verified live: swap to local loaded
+  qwen in Ollama; swap back restored gpt-5.5 with no re-login; other config keys preserved.
+  Needs drop-in `deploy/dtm-ai.service.d/hermes-rw.conf` (ReadWritePaths=/srv/hermes-data) — **installed**.
+  Genuinely-local alternative also exists: DTM-direct engine on `ollama:qwen3.5:27b` (router truly hits
+  Ollama — verified). 187 tests green.
 - `dtm-ai-mcp` now managed passwordless by ross (`/etc/sudoers.d/dtm-ai-mcp-ross`, 0440). NOTE: the older
   `/etc/sudoers.d/dtm-ai-ross` has loose perms (visudo warns "should be 0440") — works today; tighten with
   `sudo chmod 0440 /etc/sudoers.d/dtm-ai-ross` to avoid a stricter sudo ignoring it later.
