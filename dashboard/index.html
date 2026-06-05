@@ -370,6 +370,7 @@ const VIEWS={
          const h=ig.find(x=>x.integration==='hermes'); if(h){ HCHAT=!!h.chat_engine; HBRAIN=h.brain||null; HLOCAL=h.local_model||null; HMODE=h.brain_mode||null; } }catch(_){}
     if(ENGINE===null) ENGINE = HCHAT ? 'hermes' : 'dtm';   // default to the brain when available
     if(ENGINE!=='dtm' && !HCHAT) ENGINE='dtm';             // can't use a brain that isn't wired
+    const HBMODEL = (HBRAIN&&HBRAIN.split(' · ')[0]) || (HMODE==='local'?(HLOCAL||'local'):'gpt-5.5');
     try{ CONVS=(await api('GET','/api/conversations')).conversations||[]; }catch(_){ CONVS=[]; }
     // Choose which conversation to open: keep the current one if still valid; else the newest for
     // this client; else start a fresh (unsaved) chat.
@@ -383,16 +384,18 @@ const VIEWS={
       <div class="flex-1 flex flex-col min-w-0 max-w-3xl mx-auto w-full">
         <div class="flex items-center gap-2 mb-3">
           ${HCHAT?`<i data-lucide="bot" class="text-slate-500 text-sm" title="Who you're chatting with"></i>
-          <select id="engine" class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none" title="Hermes = the brain (memory, skills, delegation), cloud model. DTM AI = the built-in router (can run the local model).">
-            <option value="hermes" ${ENGINE==='hermes'?'selected':''}>Hermes${HBRAIN?' · '+esc(HBRAIN):''} ${HMODE==='local'?'🔒':'☁'}</option>
-            <option value="dtm" ${ENGINE==='dtm'?'selected':''}>DTM AI (direct)</option>
+          <select id="engine" class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none" title="Hermes = the brain (memory, skills, delegation). DTM AI = the built-in model router.">
+            <option value="hermes" ${ENGINE==='hermes'?'selected':''}>Hermes</option>
+            <option value="dtm" ${ENGINE==='dtm'?'selected':''}>DTM AI direct</option>
           </select>
-          ${HMODE?`<button id="brainToggle" class="text-[11px] px-2 py-1 rounded-lg border border-edge text-slate-300 hover:border-accent inline-flex items-center gap-1 shrink-0" title="Hermes' brain is a GLOBAL setting. Local = on-box ${esc(HLOCAL||'')}, nothing leaves the server; Cloud = gpt-5.5. Switching takes effect next turn and does NOT re-login.">brain: ${HMODE==='local'?'🔒 local':'☁ cloud'} <span class="text-slate-500">· switch</span></button>`:''}`:''}
-          <i data-lucide="cpu" class="text-slate-500 text-sm"></i>
-          <select id="model" ${ENGINE!=='dtm'?'disabled':''} class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none ${ENGINE!=='dtm'?'opacity-40':''}" title="${ENGINE!=='dtm'?'Hermes uses its own brain (pick it in the engine dropdown)':'Model for the DTM AI direct engine'}">
-            ${models.map(m=>`<option value="${esc(m.id)}" ${m.id===MODEL?'selected':''}>${esc(m.label)}${m.local?'':' ☁'}</option>`).join('')}
-          </select>
-          ${models.length<2&&ENGINE==='dtm'?`<a class="text-[11px] text-slate-500 hover:text-slate-300 cursor-pointer" id="addModel">+ add a cloud model</a>`:''}
+          ${HMODE?`<button id="brainToggle" class="${ENGINE==='hermes'?'':'hidden'} text-[11px] px-2.5 py-1.5 rounded-lg border border-edge text-slate-300 hover:border-accent inline-flex items-center gap-1.5 shrink-0" title="Hermes' brain — GLOBAL setting. 🔒 local = on-box ${esc(HLOCAL||'')}, nothing leaves the server; ☁ cloud = gpt-5.5. Switch is instant and does NOT re-login.">${HMODE==='local'?'🔒':'☁'} ${esc(HBMODEL)} <span class="text-slate-500">· switch</span></button>`:''}`:''}
+          <span id="modelCtl" class="${ENGINE==='dtm'?'':'hidden'} inline-flex items-center gap-2">
+            <i data-lucide="cpu" class="text-slate-500 text-sm"></i>
+            <select id="model" class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none" title="Model for the DTM AI direct engine">
+              ${models.map(m=>`<option value="${esc(m.id)}" ${m.id===MODEL?'selected':''}>${esc(m.label)}${m.local?'':' ☁'}</option>`).join('')}
+            </select>
+            ${models.length<2?`<a class="text-[11px] text-slate-500 hover:text-slate-300 cursor-pointer" id="addModel">+ add a cloud model</a>`:''}
+          </span>
           <span id="ctxMeter" class="ml-auto text-[11px] text-slate-500" title="Conversation context sent to the model"></span>
           <button id="compactChat" class="text-[11px] text-slate-500 hover:text-accent inline-flex items-center gap-1" title="Summarise older turns to shrink context, keeping the recent ones"><i data-lucide="archive-restore" class="text-[12px]"></i> Compact</button>
           <button id="delChat" class="text-[11px] text-slate-500 hover:text-rose-300 inline-flex items-center gap-1" title="Delete this conversation"><i data-lucide="trash-2" class="text-[12px]"></i> Delete</button>
@@ -447,8 +450,10 @@ const VIEWS={
       if(c)c.title=(t.trim()||'New chat'); renderRail(); };
     const refreshConvs=async()=>{ try{ CONVS=(await api('GET','/api/conversations')).conversations||[]; }catch(_){} renderRail(); };
     $('#model').onchange=e=>{MODEL=e.target.value; updateMeter();};
-    if($('#engine'))$('#engine').onchange=e=>{ENGINE=e.target.value; const ms=$('#model');
-      if(ms){ms.disabled=ENGINE!=='dtm'; ms.classList.toggle('opacity-40',ENGINE!=='dtm');}};
+    if($('#engine'))$('#engine').onchange=e=>{ENGINE=e.target.value;
+      const bt=$('#brainToggle'), mc=$('#modelCtl');   // show only the control for the chosen engine
+      if(bt)bt.classList.toggle('hidden',ENGINE!=='hermes');
+      if(mc)mc.classList.toggle('hidden',ENGINE!=='dtm');};
     if($('#brainToggle'))$('#brainToggle').onclick=async()=>{
       const target=HMODE==='local'?'cloud':'local';
       if(!confirm(`Switch Hermes' brain to ${target==='local'?'LOCAL (on-box '+(HLOCAL||'qwen')+', private)':'CLOUD (gpt-5.5)'}? This is global — it affects every Hermes chat.`))return;
