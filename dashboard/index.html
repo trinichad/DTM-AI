@@ -383,9 +383,8 @@ const VIEWS={
       <div class="flex-1 flex flex-col min-w-0 max-w-3xl mx-auto w-full">
         <div class="flex items-center gap-2 mb-3">
           ${HCHAT?`<i data-lucide="bot" class="text-slate-500 text-sm" title="Who you're chatting with"></i>
-          <select id="engine" class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none" title="Hermes = the brain (memory, skills, delegation). Local = same brain on the on-box model — nothing leaves. DTM AI = the built-in router.">
+          <select id="engine" class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none" title="Hermes = the brain (memory, skills, delegation), cloud model. DTM AI = the built-in router (can run the local model).">
             <option value="hermes" ${ENGINE==='hermes'?'selected':''}>Hermes${HBRAIN?' · '+esc(HBRAIN)+' ☁':''}</option>
-            ${HLOCAL?`<option value="hermes-local" ${ENGINE==='hermes-local'?'selected':''}>Hermes · ${esc(HLOCAL)} (local 🔒)</option>`:''}
             <option value="dtm" ${ENGINE==='dtm'?'selected':''}>DTM AI (direct)</option>
           </select>`:''}
           <i data-lucide="cpu" class="text-slate-500 text-sm"></i>
@@ -470,7 +469,7 @@ const VIEWS={
         const resp=await fetch('/api/chat/stream',{method:'POST',credentials:'same-origin',
           headers:{'Content-Type':'application/json'},
           body:JSON.stringify({conversation_id:CONV,tenant:TENANT,message:m,model:MODEL,
-            engine:(ENGINE==='dtm'?'dtm':'hermes'), hermes_model:(ENGINE==='hermes-local'?HLOCAL:null)})});
+            engine:(ENGINE==='dtm'?'dtm':'hermes')})});
         if(resp.status===401){ showLogin(); throw new Error('auth'); }
         if(!resp.body) throw new Error('no stream');
         const reader=resp.body.getReader(), dec=new TextDecoder(); let buf='';
