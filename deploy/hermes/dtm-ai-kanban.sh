@@ -48,10 +48,12 @@ if [[ "$action" == "create" ]]; then
     esac
   done
   [[ -n "$title" ]]        || die "title required"
+  [[ "$title" != -* ]]     || die "title cannot start with '-'"   # keep it a clean positional
   [[ ${#title} -le 200 ]]  || die "title too long (max 200)"
   [[ ${#body}  -le 8000 ]] || die "body too long (max 8000)"
   [[ ${#createdby} -le 80 ]] || die "created-by too long"
-  dx+=(--title "$title" --json --created-by "$createdby")
+  # `hermes kanban create` takes the title as a POSITIONAL arg (not --title); flags follow.
+  dx+=("$title" --json --created-by "$createdby")
   [[ -n "$body" ]] && dx+=(--body "$body")
   if [[ -n "$assignee" ]]; then
     [[ "$assignee" =~ $NAME_RE ]] || die "bad assignee"
