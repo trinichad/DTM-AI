@@ -145,8 +145,19 @@ DTM AI fence + what it can reach today), kanban routing description (for the orc
 `deploy/hermes/setup-agents.sh`. **Agents tab** (`core/hermes_agents.py` + `/api/agents*`): cards per
 agent (manager crowned) → view role/brain/description + how it compounded (skills/memory/sessions) +
 view/edit SOUL inline (owner-gated, audited). 8 gateways run (box has 123G RAM — trivial).
-**Not yet:** delegation end-to-end test (descriptions set, kanban routing untested); per-agent brain
-(all cloud now — brain toggle only swaps the manager/default); viewing memory *content* (tab shows counts).
+**Per-agent brain** ✅ — `hermes_brain` got a `profile` param; each agent's config.yaml model block swaps
+cloud↔local independently (verified: sentinelops→local qwen while manager stayed cloud). UI: brain toggle
+in the agent detail (`POST /api/agents/<name>/brain`, owner-gated/audited). All agents share the one
+Ollama qwen when local — Ollama queues/parallelizes; box has 123G so add OLLAMA_NUM_PARALLEL / more models
+only if delegation bottlenecks.
+**Memory viewer** ✅ — agent memory metric now reads Hermes' real `MEMORY.md` (entry count); detail panel
+shows MEMORY.md + USER.md content (`GET /api/agents/<name>/memory`). Fills in as agents work.
+**Delegation** ✅ tested — AtlasOps (manager) fired `delegate_task`; the worker used Cylance+Huntress
+THROUGH the MCP fence (audit shows cylance_list_threats/huntress_list_incidents/cylance_read as
+actor=hermes); answer summarized "Delegated to SentinelOps: completed… 177 threats". **Honest nuance:**
+`delegate_task` spawns an INLINE worker in the manager's profile with a role instruction — it does NOT load
+the specialist PROFILE's own SOUL.md/memory. To make the manager delegate to the actual profile-specialists
+(their souls/memory), wire the **Kanban orchestrator** routing (cards → profiles by description) — NEXT STEP.
 
 **Remaining / optional:**
 - Use it: open the dashboard → Chat; the engine selector defaults to **Hermes** — ask a client question.
