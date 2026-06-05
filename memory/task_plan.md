@@ -13,6 +13,79 @@ Huntress). Recent: server-side multi-conversation chat, AuthStore concurrency fi
 (2026-06-03) for the authoritative current state + open list. Next big feature: Microsoft 365 / Entra.
 _(This phased list below is the original blueprint; many items are now ✅ — progress.md is the live log.)_
 
+## ► CURRENT FOCUS — Hermes brain on Docker (game plan, 2026-06-04)
+
+Wire the **Nous Hermes Agent** in as the conversational brain, run inside **Docker** as the
+security fence (owner has NO root on the Ubuntu box → can't make a dedicated powerless user;
+Docker is the no-root fence — see **D-17**). Native tool lockdown via config proved insufficient
+(`agent.disabled_toolsets` does NOT reach delegated sub-agent workers — a delegated worker still
+ran a shell as `ross`, who can `sudo -u dtm-ai` to the creds). So the fence moves to the OS/container
+layer, NOT the tool list. With the container fence, native tools (terminal/file/code/delegation) can
+stay ON — the container, not the tool config, contains the blast radius.
+
+> **Correction (2026-06-05):** the "no root" premise was inaccurate — `ross` is in the `sudo` group with
+> `(ALL : ALL) ALL` (password-gated) + `(dtm-ai) NOPASSWD: ALL`. So the owner can self-grant docker (no
+> admin) AND the powerless-user option was actually viable; owner reaffirmed **Docker**. Fence still
+> required: the `(dtm-ai) NOPASSWD` line lets any process as `ross` reach client creds with no password.
+
+**Game plan (in order):**
+1. **Install Docker access** — owner self-grants: `sudo usermod -aG docker ross`, re-login, confirm
+   `docker ps` works without sudo. Docker is already `enabled` on boot. _(no admin needed)_
+2. **Install Hermes** inside a container. Data dir on a HOST volume `/srv/hermes-data` mounted to the
+   container's `~/.hermes` (config, SOUL.md, skills/, memories/, profiles). Creds (`/opt/dtm-ai`)
+   are NOT mounted. Run with `--restart unless-stopped`.
+3. **Connect to OpenAI** — `hermes model` → "Sign in with ChatGPT" (Codex OAuth device flow; rides the
+   owner's ChatGPT Plus, NO API key). Re-auth fresh inside the container.
+4. **Connect to DTM AI** — the two channels:
+   - OUT: Hermes → DTM AI tools via the **MCP server over HTTP**. ✅ **BUILT (2026-06-05)** —
+     `execution/mcp_server.py --transport http --host <bridge> --port 8089`; tenant bound by URL path
+     (`/mcp/<client>`, fence preserved); `DTM_MCP_TOKEN` bearer auth optional; GET `/health` open.
+     Tested (14 MCP tests incl. real HTTP loopback; full suite 174 green). Container `url:` form in
+     `deploy/hermes/config.snippet.yaml`; SOP `architecture/hermes-integration.md` updated.
+   - IN: DTM AI chat → Hermes brain (publish a Hermes API port to localhost) so "chatting in DTM AI
+     talks through Hermes." This is a real build (DTM AI↔Hermes bridge + streaming), not a flag. _(TODO)_
+
+**Integration goals (all achievable with the /srv volume — container fences execution, NOT data):**
+- Hermes' **skills show in DTM AI's skills tab**, viewable in UI (point `DTM_HERMES_SKILLS_DIR` at
+  `/srv/hermes-data/skills`; `/srv` is NOT masked by the service's `ProtectHome`, unlike `/home` —
+  this also fixes the old skills-pane problem).
+- **View + edit profiles / SOUL / memory in the DTM AI UI** (they're plain files on the host volume).
+- **Memory/SOUL are model-agnostic** (markdown files; work whether Hermes drives OpenAI or local LLM).
+- **Manager + specialist profiles** (office / security / backup / kaseya) visible/editable in UI.
+
+**Status (2026-06-05):** Steps 1, 2, and 4-OUT DONE. Hermes is **installed in Docker and visible to DTM AI.**
+- **Step 1** ✅ `ross` in `docker` group, `docker ps` works, docker `enabled` on boot. (Self-granted — `ross`
+  has full password'd sudo; the "no root" premise was wrong, see D-17 correction.)
+- **Step 2** ✅ Upstream official compose (`~/hermes-agent`, image `hermes-agent:latest` 1.09GB,
+  `gateway`+`dashboard` services, `restart: unless-stopped`, `network_mode: host`). Volume repointed
+  `~/.hermes` → **`/srv/hermes-data`** (host). `HERMES_UID/GID=994/981` (= `dtm-ai`) via repo `.env` so
+  Hermes writes its data **owned by `dtm-ai`** → the DTM AI service reads/edits it natively (no shared-group
+  gymnastics; fence intact — only `/srv/hermes-data` is mounted, never `/opt/dtm-ai`). Container healthy,
+  `default` profile registered, 18 skill categories / **74 SKILL.md** seeded.
+- **DTM AI visibility** ✅ `DTM_HERMES_SKILLS_DIR=/srv/hermes-data/skills` added to `/opt/dtm-ai/.env`
+  (still 0600 dtm-ai:dtm-ai), service restarted. Deployed `HermesSkillsReader` returns **74 skills,
+  available=True** → Skills tab + integrations panel show "Hermes Agent — 74 learned skills".
+- **Step 4-OUT** ✅ MCP HTTP transport (built earlier this session). With `network_mode: host` the container
+  reaches the host MCP at `127.0.0.1:8089` directly (no bridge/host-gateway needed).
+
+- **Step 3** ✅ (2026-06-05) OpenAI connected via Codex OAuth — `hermes setup` (full) done inside the
+  container. Model `gpt-5.5`, provider `openai-codex` (base `chatgpt.com/backend-api/codex`, owner's
+  ChatGPT Plus, no API key). `auth.json` present (0600 dtm-ai). Terminal backend kept `local` (= inside
+  the container = contained). Native tools enabled (terminal/file/code/skills/vision/TTS/browser-local);
+  Computer-Use(macOS) + image-gen trimmed. Web premium search skipped (free DuckDuckGo skill covers it);
+  no GITHUB_TOKEN (Hub installs off; 74 built-ins present). Config/.env/auth.json all owned by `dtm-ai`.
+
+**Remaining:**
+- **Step 4-IN:** DTM AI chat → Hermes API bridge (publish a Hermes API port; streaming). The real
+  "chat in DTM AI talks through Hermes" build.
+- **Wire OUT channel:** point Hermes at the DTM AI MCP (start `mcp_server.py --transport http`, add the
+  `url:` block from `deploy/hermes/config.snippet.yaml`, `/reload-mcp`). With `network_mode: host` the
+  container reaches the host MCP at `127.0.0.1:8089` directly.
+
+**Known cosmetic items (non-blocking):** (a) host dir group shows 10000 not 981 — irrelevant, OWNER is
+`dtm-ai`; (b) the UID remap re-chowns the baked-in `/opt/hermes` build trees on EVERY container start
+(slow start, ~minutes) — acceptable for a rarely-restarted service; revisit only if restarts get painful.
+
 ## Phase 0 — Initialization  ✅ in progress
 - [x] Recon of `Kaseya Link` + `ClaudeOS [Hermes] V2` (reuse/replace matrix → findings.md)
 - [x] Lock architecture forks (tenancy, model posture, self-coding gate, UI hosting → decisions.md)

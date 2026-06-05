@@ -53,3 +53,21 @@ mcp_servers:
   #   command: /opt/dtm-ai/deploy/hermes/dtm-ai-mcp.sh
   #   args: ["--tenant", "*"]
   #   tools: { include: [system_health, kb_search] }
+
+# ── HTTP form (use when Hermes runs INSIDE a container — D-17) ─────────────────
+# The MCP server runs on the HOST (as dtm-ai, with creds):
+#     DTM_MCP_TOKEN=<token> python3 -m execution.mcp_server --transport http \
+#         --host 172.17.0.1 --port 8089          # bind the docker bridge IP, NOT 0.0.0.0
+# Run the container with:  --add-host=host.docker.internal:host-gateway
+# Then the tenant is bound by the URL PATH (the fence) — one `url:` entry per client:
+#
+#   dtm_acme:
+#     url: http://host.docker.internal:8089/mcp/acme   # /mcp/<tenant>  → that client
+#     enabled: true
+#     headers:
+#       Authorization: "Bearer ${DTM_MCP_TOKEN}"       # required iff the host set DTM_MCP_TOKEN
+#     tools:
+#       include: [kaseya_read, cylance_read, huntress_read, system_health, kb_search,
+#                 memory_read, memory_note]
+#
+#   # dtm_all:  url: http://host.docker.internal:8089/mcp        # /mcp → tenant "*"

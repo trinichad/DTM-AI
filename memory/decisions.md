@@ -135,6 +135,46 @@ owner says "deploy". We keep building the clean code in the meantime. (locked; d
 - **D-9 secret management** — defaulting to SOPS-encrypted env / OS keyring + 0600 + fingerprints for v1
   unless user names an existing vault. (assumed; flag if wrong)
 
+## Hermes execution fence — Docker, not a dedicated user (2026-06-04)
+
+**D-17 — Run Hermes inside a Docker container as the execution fence; share data (not creds) via a
+host volume.**
+The fence that matters is the OS/process boundary, NOT Hermes' tool config. Proven this session:
+`agent.disabled_toolsets` (terminal/code/file/cronjob) does NOT propagate to delegated **sub-agent
+workers** — a delegated worker still ran `whoami` as `ross`, and `ross` has scoped sudo to `dtm-ai`
+(the creds owner). So disabling tools in config is not a real boundary, and disabling `delegation`
+would break the owner's manager→specialist plan. The clean fix (a dedicated powerless `hermes` user)
+needs root, which the owner does NOT have on the box. **Docker is the no-root fence:** the container
+confines the agent's shell (no `/opt/dtm-ai`, no sudo), so native tools can stay ON without risking the
+creds. Data is shared deliberately via a host volume `/srv/hermes-data` → `~/.hermes`, so DTM AI (on the
+host) can read/display/edit skills, profiles, SOUL, and memory, and they stay model-agnostic. Two wired
+channels: OUT = Hermes→DTM AI MCP over **HTTP** (`mcp_server.py` must gain an HTTP transport so the MCP
+server + creds stay on the host); IN = DTM AI chat→Hermes API (published localhost port). _Reason: get a
+real security boundary without root, keep every capability, and integrate Hermes' files into the DTM AI
+UI. Supersedes the earlier "lock down native toolsets in Hermes config" approach (D-12's native-toolset
+control) for THIS deployment — the container is the boundary; the Capability Console still governs the
+MSP tools._ (locked; pending Docker-group grant — see task_plan.md "Current Focus")
+
+**D-17 correction (2026-06-05) — the "no root" premise was inaccurate; `ross` has FULL sudo.**
+`sudo -n -l` on the box shows `ross` is in the `sudo` group with `(ALL : ALL) ALL` (password-gated) plus
+`(dtm-ai) NOPASSWD: ALL` and scoped NOPASSWD systemctl for the `dtm-ai` service. So: (a) the owner can
+self-grant docker (`sudo usermod -aG docker ross`) — no admin needed; docker is already `enabled` on boot;
+(b) the abandoned "dedicated powerless `hermes` user" fix is actually possible after all (would need a
+password'd sudo). **Owner reaffirmed Docker (2026-06-05).** The fence is still genuinely required: the
+`(dtm-ai) NOPASSWD: ALL` line means ANY process running as `ross` (incl. a Hermes delegated worker with a
+terminal) can `sudo -u dtm-ai` with NO password and read the live client creds under `/opt/dtm-ai`. The
+container shell can't reach host sudo or `/opt/dtm-ai`, so it closes that exact path.
+
+**D-17 build (2026-06-05) — MCP HTTP transport added (the OUT channel prerequisite).**
+`execution/mcp_server.py` now has BOTH transports: stdio (unchanged) and HTTP
+(`--transport http --host <bridge> --port 8089`). **Tenant bound by URL path** — `/mcp`→`*`,
+`/mcp/<client>`→that client — preserving the per-tenant fence one process (no process-per-client needed);
+a `tenant_id` smuggled in args is ignored (path wins, tested). Optional `DTM_MCP_TOKEN` → `Authorization:
+Bearer` required on POST; GET `/health` open. One shared agent serves all tenants. Tested (14 MCP tests inc.
+real loopback HTTP; full suite 174 green). SOP `architecture/hermes-integration.md` + deploy kit
+`config.snippet.yaml` updated with the container `url:` form. Bind the docker-bridge IP (not 0.0.0.0/not
+127.0.0.1); container reaches it via `host.docker.internal`. Creds stay on host, never in the container.
+
 ## Streaming chat (2026-06-03)
 
 **D-16 — Stream chat over Server-Sent Events (SSE), not raw WebSocket.**
