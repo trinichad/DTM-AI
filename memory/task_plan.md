@@ -75,12 +75,26 @@ stay ON — the container, not the tool config, contains the blast radius.
   Computer-Use(macOS) + image-gen trimmed. Web premium search skipped (free DuckDuckGo skill covers it);
   no GITHUB_TOKEN (Hub installs off; 74 built-ins present). Config/.env/auth.json all owned by `dtm-ai`.
 
+- **OUT channel** ✅ **WIRED & VERIFIED (2026-06-05).** Hermes → DTM AI guarded tools over MCP-HTTP.
+  - MCP server runs on host as `dtm-ai`, `127.0.0.1:8089`, Bearer-gated (`DTM_MCP_TOKEN`, 64-hex, in
+    `/opt/dtm-ai/.env`). Verified: health 200, no-token 401, authed `system_health` ok tenant=`*`.
+  - Container reaches it via host loopback (`network_mode: host`) — confirmed `200` from inside.
+  - Hermes config: `mcp_servers.dtm_all` → `http://127.0.0.1:8089/mcp` + Bearer header, in
+    `/srv/hermes-data/config.yaml` (0600). `hermes mcp test dtm_all` → ✓ connected 28ms, **16 tools**
+    discovered (kaseya/cylance/huntress reads, endpoint_coverage, kb_search, memory, system_health).
+  - **End-to-end proof:** `hermes -z` agent run on gpt-5.5 called `system_health` through the fence;
+    DTM AI audit shows `hermes | system_health | read | ok=1`. Every call still goes through dispatch().
+  - **Persistence:** systemd unit `deploy/dtm-ai-mcp.service` committed (bb517ca); install/enable needs
+    one root step (owner has only password'd sudo). Until enabled, the MCP server is NOT running (manual
+    test process was stopped to free the port). Cmd: `sudo cp /opt/dtm-ai/deploy/dtm-ai-mcp.service
+    /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now dtm-ai-mcp`.
+
 **Remaining:**
+- **Install the MCP systemd unit** (one-time root step above) so the OUT channel survives reboots.
 - **Step 4-IN:** DTM AI chat → Hermes API bridge (publish a Hermes API port; streaming). The real
   "chat in DTM AI talks through Hermes" build.
-- **Wire OUT channel:** point Hermes at the DTM AI MCP (start `mcp_server.py --transport http`, add the
-  `url:` block from `deploy/hermes/config.snippet.yaml`, `/reload-mcp`). With `network_mode: host` the
-  container reaches the host MCP at `127.0.0.1:8089` directly.
+- Optional: per-client `mcp_servers` entries (e.g. `dtm_<client>` → `/mcp/<tenant>`) beyond the `dtm_all`
+  read view; optional sudoers line so `ross` can manage `dtm-ai-mcp` passwordless like `dtm-ai`.
 
 **Known cosmetic items (non-blocking):** (a) host dir group shows 10000 not 981 — irrelevant, OWNER is
 `dtm-ai`; (b) the UID remap re-chowns the baked-in `/opt/hermes` build trees on EVERY container start
