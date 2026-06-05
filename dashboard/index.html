@@ -114,10 +114,12 @@
 const $ = s => document.querySelector(s);
 let TENANT='*', current='overview';
 const NAV=[['overview','Overview','layout-dashboard'],['chat','Chat','message-square'],
+  ['agents','Agents','users-round'],
   ['integrations','Integrations','plug-zap'],['capabilities','Capabilities','sliders-horizontal'],
   ['skills','Skills','graduation-cap'],['memory','Memory','brain'],
   ['approvals','Approvals','shield-alert'],['build','Build','hammer'],['audit','Audit','scroll-text']];
 const SUB={overview:'Live health across your clients',chat:'Ask about a client — read-only',
+  agents:'Your specialist team — souls, roles & memory',
   integrations:'Connections, knowledge & credentials',capabilities:'Primitives the AI may use',
   skills:'What Hermes has learned',memory:'Knowledge base & per-client notes',
   approvals:'Write actions awaiting your sign-off',build:'Draft new tools — sandboxed, you approve',
@@ -595,6 +597,49 @@ const VIEWS={
       await api('POST','/api/capabilities/'+encodeURIComponent(name),{[field]:val});
       toast(`${name}: ${field.replace('_',' ')} ${val?'on':'off'}`);});
     icons();
+  },
+
+  async agents(){
+    const {agents}=await api('GET','/api/agents');
+    if(!agents||!agents.length){ $('#view').innerHTML=`<div class="card p-8 text-center text-slate-400 max-w-2xl mx-auto">No agents yet. Run <span class="font-mono">deploy/hermes/setup-agents.sh</span> on the server.</div>`; return; }
+    const bpill=b=>`<span class="pill ${(b&&b.mode==='local')?'bg-emerald-500/15 text-emerald-300':'bg-sky-500/15 text-sky-300'} inline-flex items-center gap-1">${(b&&b.mode==='local')?'🔒':'☁'} ${esc((b&&b.model)||'—')}</span>`;
+    const card=a=>`<div class="card card-hover p-4 cursor-pointer agent-card" data-id="${esc(a.id)}">
+        <div class="flex items-start gap-3">
+          <div class="h-10 w-10 rounded-xl ${a.is_manager?'grad':'bg-edge'} grid place-items-center shrink-0 ${a.is_manager?'shadow-lg shadow-indigo-500/30':''}"><i data-lucide="${a.is_manager?'crown':'bot'}" class="${a.is_manager?'text-white':'text-accent'} text-sm"></i></div>
+          <div class="min-w-0 flex-1"><div class="flex items-center gap-2"><span class="font-semibold truncate">${esc(a.name)}</span>${a.is_manager?'<span class="pill bg-indigo-500/15 text-indigo-300 text-[10px]">manager</span>':''}</div>
+            <div class="text-xs text-slate-400 truncate">${esc(a.role||'')}</div></div></div>
+        <div class="text-xs text-slate-400 mt-3 leading-relaxed">${esc(a.description||'—')}</div>
+        <div class="flex items-center gap-2 mt-3 flex-wrap">${bpill(a.brain)}<span class="text-[11px] text-slate-500">${a.skills} skills · ${a.memories} memories · ${a.sessions} sessions</span></div></div>`;
+    $('#view').innerHTML=`<div class="max-w-5xl">
+      <div class="flex items-center gap-2 text-sm text-slate-400 mb-4"><i data-lucide="users-round" class="text-accent"></i> ${agents.length} agents — AtlasOps Manager delegates to the specialists. Click one to view or edit its soul.</div>
+      <div class="grid gap-3 md:grid-cols-2 lg:grid-cols-3">${agents.map(card).join('')}</div></div>`;
+    icons();
+    document.querySelectorAll('.agent-card').forEach(el=>el.onclick=()=>openAgent(el.dataset.id));
+    async function openAgent(id){
+      const a=await api('GET','/api/agents/'+encodeURIComponent(id));
+      if(!a||a.error){ toast('Could not load agent',false); return; }
+      const b=a.brain||{};
+      $('#view').innerHTML=`<div class="max-w-3xl mx-auto">
+        <button id="agentBack" class="text-xs text-slate-400 hover:text-accent inline-flex items-center gap-1 mb-3"><i data-lucide="arrow-left"></i> All agents</button>
+        <div class="card p-5">
+          <div class="flex items-center gap-3 mb-1">
+            <div class="h-11 w-11 rounded-xl ${a.is_manager?'grad':'bg-edge'} grid place-items-center shrink-0"><i data-lucide="${a.is_manager?'crown':'bot'}" class="${a.is_manager?'text-white':'text-accent'}"></i></div>
+            <div><div class="font-semibold text-lg">${esc(a.name)}</div><div class="text-xs text-slate-400">${esc(a.role||'')} · profile <span class="font-mono">${esc(a.id)}</span></div></div>
+            <span class="ml-auto">${bpill(b)}</span></div>
+          <div class="text-xs text-slate-400 mt-2 mb-3">${esc(a.description||'')}</div>
+          <div class="flex gap-4 text-[11px] text-slate-500 mb-4"><span><b class="text-slate-300">${a.skills}</b> skills</span><span><b class="text-slate-300">${a.memories}</b> memories</span><span><b class="text-slate-300">${a.sessions}</b> sessions</span></div>
+          <div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1.5">SOUL.md — personality, mission, hard nos (loaded fresh each message)</div>
+          <textarea id="soulEdit" class="w-full h-96 bg-ink/70 border border-edge rounded-lg p-3 text-xs font-mono text-slate-200 focus:border-accent focus:outline-none" spellcheck="false">${esc(a.soul||'')}</textarea>
+          <div class="flex items-center gap-2 mt-3"><button id="soulSave" class="grad text-white rounded-lg px-4 py-2 text-sm font-semibold inline-flex items-center gap-1.5"><i data-lucide="save"></i> Save soul</button></div>
+        </div></div>`;
+      icons();
+      $('#agentBack').onclick=()=>route('agents');
+      $('#soulSave').onclick=async()=>{ const btn=$('#soulSave'); btn.disabled=true;
+        const r=await api('POST','/api/agents/'+encodeURIComponent(id)+'/soul',{soul:$('#soulEdit').value});
+        if(r&&!r.error) toast('Soul saved — Hermes uses it on the next message');
+        else toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can edit souls':('Save failed: '+((r&&r.error)||'')),false);
+        btn.disabled=false; };
+    }
   },
 
   async skills(){
