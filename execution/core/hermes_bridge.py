@@ -35,6 +35,7 @@ _PROVIDER_LABELS = {
     "openai": "OpenAI",
     "anthropic": "Claude",
     "ollama": "Ollama (local)",
+    "custom": "local (on-box)",     # our local-brain swap uses provider: custom → Ollama /v1
     "openrouter": "OpenRouter",
     "nous-portal": "Nous Portal",
 }

@@ -365,9 +365,9 @@ const VIEWS={
     const mm=await api('GET','/api/models'); const models=mm.models||[];
     if(!MODEL||!models.find(m=>m.id===MODEL)) MODEL=(models.find(m=>m.default)||models[0]||{}).id||'';
     // Discover whether we can chat THROUGH Hermes (the brain) + which model it's driving.
-    let HBRAIN=null, HCHAT=false, HLOCAL=null;
+    let HBRAIN=null, HCHAT=false, HLOCAL=null, HMODE=null;
     try{ const ig=(await api('GET','/api/integrations')).integrations||[];
-         const h=ig.find(x=>x.integration==='hermes'); if(h){ HCHAT=!!h.chat_engine; HBRAIN=h.brain||null; HLOCAL=h.local_model||null; } }catch(_){}
+         const h=ig.find(x=>x.integration==='hermes'); if(h){ HCHAT=!!h.chat_engine; HBRAIN=h.brain||null; HLOCAL=h.local_model||null; HMODE=h.brain_mode||null; } }catch(_){}
     if(ENGINE===null) ENGINE = HCHAT ? 'hermes' : 'dtm';   // default to the brain when available
     if(ENGINE!=='dtm' && !HCHAT) ENGINE='dtm';             // can't use a brain that isn't wired
     try{ CONVS=(await api('GET','/api/conversations')).conversations||[]; }catch(_){ CONVS=[]; }
@@ -384,9 +384,10 @@ const VIEWS={
         <div class="flex items-center gap-2 mb-3">
           ${HCHAT?`<i data-lucide="bot" class="text-slate-500 text-sm" title="Who you're chatting with"></i>
           <select id="engine" class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none" title="Hermes = the brain (memory, skills, delegation), cloud model. DTM AI = the built-in router (can run the local model).">
-            <option value="hermes" ${ENGINE==='hermes'?'selected':''}>Hermes${HBRAIN?' · '+esc(HBRAIN)+' ☁':''}</option>
+            <option value="hermes" ${ENGINE==='hermes'?'selected':''}>Hermes${HBRAIN?' · '+esc(HBRAIN):''} ${HMODE==='local'?'🔒':'☁'}</option>
             <option value="dtm" ${ENGINE==='dtm'?'selected':''}>DTM AI (direct)</option>
-          </select>`:''}
+          </select>
+          ${HMODE?`<button id="brainToggle" class="text-[11px] px-2 py-1 rounded-lg border border-edge text-slate-300 hover:border-accent inline-flex items-center gap-1 shrink-0" title="Hermes' brain is a GLOBAL setting. Local = on-box ${esc(HLOCAL||'')}, nothing leaves the server; Cloud = gpt-5.5. Switching takes effect next turn and does NOT re-login.">brain: ${HMODE==='local'?'🔒 local':'☁ cloud'} <span class="text-slate-500">· switch</span></button>`:''}`:''}
           <i data-lucide="cpu" class="text-slate-500 text-sm"></i>
           <select id="model" ${ENGINE!=='dtm'?'disabled':''} class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none ${ENGINE!=='dtm'?'opacity-40':''}" title="${ENGINE!=='dtm'?'Hermes uses its own brain (pick it in the engine dropdown)':'Model for the DTM AI direct engine'}">
             ${models.map(m=>`<option value="${esc(m.id)}" ${m.id===MODEL?'selected':''}>${esc(m.label)}${m.local?'':' ☁'}</option>`).join('')}
@@ -448,6 +449,14 @@ const VIEWS={
     $('#model').onchange=e=>{MODEL=e.target.value; updateMeter();};
     if($('#engine'))$('#engine').onchange=e=>{ENGINE=e.target.value; const ms=$('#model');
       if(ms){ms.disabled=ENGINE!=='dtm'; ms.classList.toggle('opacity-40',ENGINE!=='dtm');}};
+    if($('#brainToggle'))$('#brainToggle').onclick=async()=>{
+      const target=HMODE==='local'?'cloud':'local';
+      if(!confirm(`Switch Hermes' brain to ${target==='local'?'LOCAL (on-box '+(HLOCAL||'qwen')+', private)':'CLOUD (gpt-5.5)'}? This is global — it affects every Hermes chat.`))return;
+      const btn=$('#brainToggle'); if(btn){btn.disabled=true; btn.textContent='switching…';}
+      const r=await api('POST','/api/hermes/brain',{mode:target});   // api() returns the body (even on 4xx/5xx)
+      if(r&&r.mode){ toast(`Hermes brain → ${r.mode==='local'?'local 🔒':'cloud ☁'} (${esc(r.model||'')})`); route('chat'); }
+      else { const e=(r&&r.error)||''; toast(e.includes('admin')?'Owner only — admin can switch the brain':(e.includes('cannot write')?'Config not writable yet — see setup note':('Switch failed: '+e)),false); if(btn){btn.disabled=false; btn.textContent='retry';} }
+    };
     if($('#addModel'))$('#addModel').onclick=()=>route('integrations');
     if($('#newChat'))$('#newChat').onclick=newChat;
     if($('#newChatTop'))$('#newChatTop').onclick=newChat;

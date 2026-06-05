@@ -113,6 +113,11 @@ class Api:
             return Resp(200, {"capabilities": self._tools()})  # tools carry their policy
         if method == "GET" and path == "/api/skills":
             return Resp(200, self._skills())
+        if method == "GET" and path == "/api/hermes/brain":
+            from ..core.hermes_brain import get_brain_mode
+            return Resp(200, get_brain_mode())
+        if method == "POST" and path == "/api/hermes/brain":
+            return self._require_admin(role) or self._set_brain(body, user)
         if method == "POST" and path.startswith("/api/capabilities/"):
             return self._set_capability(path.rsplit("/", 1)[-1], body)
         if method == "GET" and path == "/api/audit":
@@ -197,12 +202,14 @@ class Api:
         else:
             detail = "not connected"
         local_model = get_config().get("HERMES_LOCAL_MODEL") or "qwen3.5:27b"
+        brain_mode = ("local" if (mi and mi.get("provider") == "custom") else "cloud") if mi else None
         out.append({"integration": "hermes", "label": "Hermes Agent", "kind": "local",
                     "configured": h.available,
                     "detail": detail,
                     "brain": brain,                       # e.g. "gpt-5.5 · OpenAI Codex" or null
+                    "brain_mode": brain_mode,             # "cloud" | "local" — current Hermes brain
                     "chat_engine": bridge.available,      # can the dashboard chat THROUGH Hermes?
-                    "local_model": local_model,           # private on-box option for the chat engine
+                    "local_model": local_model,           # the on-box model the local swap uses
                     "path": str(h.root)})
         return out
 
@@ -366,6 +373,20 @@ class Api:
         from ..core.hermes_skills import HermesSkillsReader
         r = HermesSkillsReader()
         return {"available": r.available, "dir": str(r.root), "skills": r.list_skills()}
+
+    def _set_brain(self, body: dict, user: str) -> Resp:
+        """Swap Hermes' brain cloud↔local (global; owner-gated). Audited as a config change."""
+        from ..core.hermes_brain import set_brain_mode
+        mode = (body.get("mode") or "").lower()
+        try:
+            state = set_brain_mode(mode)
+        except ValueError as e:
+            return Resp(400, {"error": str(e)})
+        except OSError as e:                              # config dir not writable by the service
+            return Resp(500, {"error": f"cannot write Hermes config: {e}"})
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"hermes_brain={mode} ({state.get('model')})")
+        return Resp(200, state)
 
     def _integration_fields(self, name: str) -> Resp:
         """The credential fields for an integration (which are set, fingerprints) — never raw."""
