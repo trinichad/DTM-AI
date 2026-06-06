@@ -267,6 +267,14 @@ def dispatch(cfg: Optional[Config] = None) -> dict:
     return _run_wrapper(["dispatch", "--max", "8"])
 
 
+def archive_task(task_id: str, cfg: Optional[Config] = None) -> dict:
+    """Archive a finished task (clears it from the active board)."""
+    task_id = (task_id or "").strip()
+    if not task_id:
+        raise ValueError("task_id required")
+    return _run_wrapper(["archive", task_id])
+
+
 def assign_task(task_id: str, profile: str, cfg: Optional[Config] = None) -> dict:
     """Re/assign an existing task to a specialist profile (or 'none' to unassign)."""
     task_id = (task_id or "").strip()

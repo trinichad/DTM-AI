@@ -27,7 +27,7 @@ die(){ echo "dtm-ai-kanban: $*" >&2; exit 2; }
 
 action="${1:-}"; shift || true
 case "$action" in
-  create|assign|dispatch) ;;
+  create|assign|dispatch|archive) ;;
   *) die "action not allowed: '${action}'";;
 esac
 
@@ -73,6 +73,14 @@ elif [[ "$action" == "assign" ]]; then
   [[ "$taskid" =~ $ID_RE && ${#taskid} -le 120 ]] || die "bad task id"
   [[ "$profile" == "none" || "$profile" =~ $NAME_RE ]] || die "bad profile"
   dx+=("$taskid" "$profile")
+
+elif [[ "$action" == "archive" ]]; then
+  # Archive one or more task ids (clears finished cards). Each id validated; no flags accepted.
+  [[ $# -ge 1 ]] || die "archive needs at least one task id"
+  for tid in "$@"; do
+    [[ "$tid" =~ $ID_RE && ${#tid} -le 120 ]] || die "bad task id: '$tid'"
+    dx+=("$tid")
+  done
 
 elif [[ "$action" == "dispatch" ]]; then
   # One dispatcher pass (reclaim stale, promote ready, spawn workers). Idempotent — only spawns

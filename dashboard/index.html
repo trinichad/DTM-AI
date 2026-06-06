@@ -726,9 +726,14 @@ const VIEWS={
     document.querySelectorAll('.board-card').forEach(el=>el.onclick=()=>openTask(el.dataset.id));
     $('#bRefresh').onclick=()=>VIEWS.board();
     $('#bDelegate').onclick=openDelegate;
-    // light auto-refresh while a worker may be running — self-clears when you navigate away
+    // Auto-refresh ONLY while (a) the board list is the visible subview — opening a card/form sets
+    // BOARD_LIVE=false so it won't wipe what you're reading — and (b) work is actually in flight.
+    // Once everything is terminal (done/blocked/archived) we stop polling entirely.
+    window.BOARD_LIVE=true;
     clearTimeout(window._boardPoll);
-    window._boardPoll=setTimeout(()=>{ if(current==='board') VIEWS.board(); }, 6000);
+    const ACTIVE=new Set(['triage','todo','ready','running','review','scheduled']);
+    const inFlight=data.columns.some(c=>ACTIVE.has(c.status)&&c.tasks.length);
+    if(inFlight) window._boardPoll=setTimeout(()=>{ if(current==='board'&&window.BOARD_LIVE) VIEWS.board(); }, 9000);
 
     async function agentOptions(sel){
       const ags=((await api('GET','/api/agents'))||{}).agents||[];
@@ -737,6 +742,7 @@ const VIEWS={
     function fmt(ms){ if(!ms) return ''; const d=new Date(ms); return d.toLocaleString(); }
 
     async function openTask(id){
+      window.BOARD_LIVE=false; clearTimeout(window._boardPoll);   // stop the list poll while reading a card
       const t=await api('GET','/api/kanban/tasks/'+encodeURIComponent(id));
       if(!t||t.error){ toast('Could not load task',false); return; }
       const col=COLORS[t.status]||'slate';
@@ -751,7 +757,8 @@ const VIEWS={
               <div class="text-xs text-slate-400 mt-0.5">${esc(t.status)} · <span class="font-mono">${esc(t.id)}</span> · created ${fmt(t.created_ms)} by ${esc(t.created_by||'?')}</div></div></div>
           <div class="flex items-center gap-2 mb-4 flex-wrap">${chip(t.assignee)}
             <select id="tProfile" class="bg-ink/70 border border-edge rounded-lg px-2 py-1 text-xs text-slate-200"></select>
-            <button id="tAssign" class="text-xs border border-edge rounded-lg px-2.5 py-1 hover:border-accent">Reassign</button></div>
+            <button id="tAssign" class="text-xs border border-edge rounded-lg px-2.5 py-1 hover:border-accent">Reassign</button>
+            <button id="tArchive" class="ml-auto text-xs border border-rose-500/40 text-rose-300 rounded-lg px-2.5 py-1 hover:bg-rose-500/10 inline-flex items-center gap-1"><i data-lucide="archive"></i> Archive</button></div>
           ${t.body?`<div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Task</div><div class="text-sm text-slate-300 whitespace-pre-wrap mb-4 bg-ink/50 border border-edge rounded-lg p-3">${esc(t.body)}</div>`:''}
           ${t.result?`<div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Result</div><pre class="text-xs text-slate-200 whitespace-pre-wrap bg-ink/60 border border-edge rounded-lg p-3 mb-4 max-h-72 overflow-auto">${esc(t.result)}</pre>`:''}
           <div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1.5 flex items-center gap-1"><i data-lucide="history"></i> Runs — who worked it & what they reported</div>
@@ -765,10 +772,15 @@ const VIEWS={
         const r=await api('POST','/api/kanban/tasks/'+encodeURIComponent(id)+'/assign',{profile:p});
         if(r&&!r.error){ toast(`Reassigned to ${p}`); openTask(id); }
         else toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can reassign':('Reassign failed: '+((r&&r.error)||'')),false); };
+      $('#tArchive').onclick=async()=>{
+        if(!confirm(`Archive "${t.title}"? It will be cleared from the active board.`)) return;
+        const r=await api('POST','/api/kanban/tasks/'+encodeURIComponent(id)+'/archive');
+        if(r&&!r.error){ toast('Task archived'); route('board'); }
+        else toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can archive':('Archive failed: '+((r&&r.error)||'')),false); };
     }
 
     async function openDelegate(){
-      clearTimeout(window._boardPoll);
+      window.BOARD_LIVE=false; clearTimeout(window._boardPoll);
       $('#view').innerHTML=`<div class="max-w-2xl mx-auto">
         <button id="dBack" class="text-xs text-slate-400 hover:text-accent inline-flex items-center gap-1 mb-3"><i data-lucide="arrow-left"></i> Board</button>
         <div class="card p-5">

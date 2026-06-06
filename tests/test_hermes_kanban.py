@@ -132,8 +132,14 @@ class Kanban(unittest.TestCase):
                 K.dispatch(self.cfg)
             with self.assertRaises(K.KanbanError):
                 K.assign_task("t1", "tenantsmith", self.cfg)
+            with self.assertRaises(K.KanbanError):
+                K.archive_task("t1", self.cfg)
         finally:
             K._WRAPPER = orig
+
+    def test_archive_requires_id(self):
+        with self.assertRaises(ValueError):
+            K.archive_task("  ", cfg=self.cfg)
 
 
 if __name__ == "__main__":

@@ -136,18 +136,24 @@ per-task runs/comments/events/links. Same pattern as reading profiles on disk.
 (would bypass Hermes' atomic-claim + event invariants). So delegation routes through a **locked-down
 privileged wrapper**, mirroring the `dtm-ai-mcp` sudo pattern:
 - `deploy/hermes/dtm-ai-kanban.sh` — installed **root-owned** at `/usr/local/sbin/` (so `dtm-ai` can't
-  tamper with it), whitelists **only** `create`/`assign`/`dispatch`, validates every arg (profile/tenant
-  regex, length caps), and **never uses a shell** — args go to `docker exec` as an argv array, so a task
-  title can't inject a command.
+  tamper with it), whitelists **only** `create`/`assign`/`dispatch`/`archive`, validates every arg
+  (profile/tenant regex, length caps; **title is positional**, not `--title`, and may not start with
+  `-`), and **never uses a shell** — args go to `docker exec` as an argv array, so a task title can't
+  inject a command.
 - `deploy/sudoers-dtm-ai-kanban.snippet` — `dtm-ai` may run **only** that one script as root.
 - `deploy/hermes/install-kanban.sh` — installs both (root-owned wrapper, 0440 sudoers, `visudo -c`).
 - `create_task()` creates then fires a **`dispatch` pass** so the worker starts immediately rather than
   waiting for the gateway's poll (idempotent — only spawns ready+unclaimed tasks).
 - API: `GET /api/kanban` (board), `GET /api/kanban/tasks/<id>`, `POST /api/kanban/tasks` (delegate),
-  `POST /api/kanban/tasks/<id>/assign`, `POST /api/kanban/dispatch`. **Reads** open to any authed user;
-  **writes owner-gated + audited** (`config_change`, `created-by=dtm-ai:<user>`).
+  `POST /api/kanban/tasks/<id>/assign`, `POST /api/kanban/tasks/<id>/archive`, `POST /api/kanban/dispatch`.
+  **Reads** open to any authed user; **writes owner-gated + audited** (`config_change`,
+  `created-by=dtm-ai:<user>`).
 - A created+assigned task lands directly in `ready` (no manual promote). `created_at` is **epoch
   seconds** (reader normalizes to ms).
+- **UI auto-refresh** polls the board (9s) ONLY while the board *list* is the visible subview
+  (`BOARD_LIVE` flag, cleared when a card/form opens so it can't wipe what you're reading) AND a task is
+  still in flight; it stops once everything is terminal. This fixed an early bug where the poll
+  re-rendered over an open card every few seconds.
 
 **Security notes.** (1) The wrapper is a controlled root escalation — locked down per above; it only ever
 touches the agent's own board, never client systems. (2) A delegated *worker's* toolset matters on this

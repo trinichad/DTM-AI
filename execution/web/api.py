@@ -154,6 +154,8 @@ class Api:
             return self._require_admin(role) or self._kanban_create(body, user)
         if method == "POST" and path.startswith("/api/kanban/tasks/") and path.endswith("/assign"):
             return self._require_admin(role) or self._kanban_assign(path.split("/")[4], body, user)
+        if method == "POST" and path.startswith("/api/kanban/tasks/") and path.endswith("/archive"):
+            return self._require_admin(role) or self._kanban_archive(path.split("/")[4], user)
         if method == "POST" and path == "/api/kanban/dispatch":
             return self._require_admin(role) or self._kanban_dispatch(user)
         if method == "POST" and path.startswith("/api/capabilities/"):
@@ -480,6 +482,19 @@ class Api:
             return Resp(502, {"error": str(e)})
         self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
                                 detail=f"kanban_assign={task_id}->{profile}")
+        return Resp(200, r if isinstance(r, dict) else {"ok": True})
+
+    def _kanban_archive(self, task_id: str, user: str) -> Resp:
+        """Archive a finished task — clears it from the active board (owner-gated; audited)."""
+        from ..core.hermes_kanban import KanbanError, archive_task
+        try:
+            r = archive_task(task_id)
+        except ValueError as e:
+            return Resp(400, {"error": str(e)})
+        except KanbanError as e:
+            return Resp(502, {"error": str(e)})
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"kanban_archive={task_id}")
         return Resp(200, r if isinstance(r, dict) else {"ok": True})
 
     def _kanban_dispatch(self, user: str) -> Resp:
