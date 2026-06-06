@@ -158,12 +158,72 @@ def set_soul(name: str, text: str, cfg: Optional[Config] = None) -> dict:
     if not pd.is_dir():
         raise FileNotFoundError(f"unknown agent '{name}'")
     (pd / "SOUL.md").write_text(text, encoding="utf-8")   # loaded fresh by Hermes next message
+    if name != "default":                 # a specialist's role/name may have changed → refresh roster
+        _sync_safe(cfg)
     return get_agent(name, cfg)
 
 
 def _yaml_str(s: str) -> str:
     """Single-quote a scalar for profile.yaml (YAML escapes ' by doubling it)."""
     return "'" + (s or "").replace("'", "''") + "'"
+
+
+# ── manager roster — keep AtlasOps' "Team I delegate to" list synced to the live profiles ─────────
+_ROSTER_BEGIN = "<!-- TEAM:AUTO — maintained by DTM AI; do not hand-edit between these markers -->"
+_ROSTER_END = "<!-- /TEAM:AUTO -->"
+_ROSTER_RE = re.compile(r"<!-- TEAM:AUTO.*?<!-- /TEAM:AUTO -->", re.S)
+# the hardcoded "## Team I delegate to" section (heading + body up to the next ## or EOF) — migrated once
+_ROSTER_SECTION_RE = re.compile(r"(?ms)^## Team I delegate to[^\n]*\n.*?(?=^## |\Z)")
+
+
+def _roster_block(cfg: Config) -> str:
+    """The marker-wrapped roster lines built from the live specialist profiles (manager excluded)."""
+    lines = []
+    for a in list_agents(cfg):
+        if a["is_manager"]:
+            continue
+        bits = [a["name"]]
+        if a.get("role"):
+            bits.append(a["role"])
+        d = (a.get("description") or "").strip()
+        if d:
+            bits.append(d[:120])
+        lines.append("- " + " — ".join(bits))
+    body = "\n".join(lines) if lines else "- (no specialists yet — add one in the Agents tab)"
+    return f"{_ROSTER_BEGIN}\n{body}\n{_ROSTER_END}"
+
+
+def sync_manager_roster(cfg: Optional[Config] = None) -> Optional[dict]:
+    """Rewrite the auto-maintained team roster inside AtlasOps' (default) SOUL from the live profiles
+    so the manager always knows the real team it can delegate to. Replaces the marker block in place
+    if present; otherwise migrates the hardcoded "## Team I delegate to" section; otherwise appends one.
+    No-op (returns None) if there's no manager SOUL.
+    """
+    cfg = cfg or get_config()
+    md = _profile_dir(cfg, "default") / "SOUL.md"
+    try:
+        soul = md.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    block = _roster_block(cfg)
+    if _ROSTER_RE.search(soul):
+        new = _ROSTER_RE.sub(lambda _m: block, soul)                       # swap block in place
+    elif _ROSTER_SECTION_RE.search(soul):
+        new = _ROSTER_SECTION_RE.sub(lambda _m: f"## Team I delegate to\n{block}\n\n", soul, count=1)
+    else:
+        new = soul.rstrip() + f"\n\n## Team I delegate to\n{block}\n"
+    if new != soul:
+        md.write_text(new, encoding="utf-8")
+    n = sum(1 for a in list_agents(cfg) if not a["is_manager"])
+    return {"ok": True, "count": n}
+
+
+def _sync_safe(cfg: Config) -> None:
+    """Best-effort roster sync — never let a sync failure break the primary add/delete/edit op."""
+    try:
+        sync_manager_roster(cfg)
+    except OSError:
+        pass
 
 
 def _default_soul(name: str, role: str) -> str:
@@ -214,6 +274,7 @@ def create_agent(name: str, soul: str = "", description: str = "", role: str = "
     descr = " ".join((description or "").split())
     (pd / "profile.yaml").write_text(
         f"description: {_yaml_str(descr)}\ndescription_auto: false\n", encoding="utf-8")
+    _sync_safe(cfg)                        # make AtlasOps aware of the new specialist
     return get_agent(name, cfg)
 
 
@@ -241,4 +302,5 @@ def delete_agent(name: str, cfg: Optional[Config] = None) -> dict:
                 extra.unlink()
         except OSError:
             pass
+    _sync_safe(cfg)                        # drop the deleted agent from AtlasOps' roster
     return {"id": name, "deleted": True}

@@ -613,11 +613,15 @@ const VIEWS={
         <div class="flex items-center gap-2 mt-3 flex-wrap">${bpill(a.brain)}<span class="text-[11px] text-slate-500">${a.skills} skills · ${a.memories} memories · ${a.sessions} sessions</span></div></div>`;
     $('#view').innerHTML=`<div class="max-w-5xl">
       <div class="flex items-center gap-2 text-sm text-slate-400 mb-4"><i data-lucide="users-round" class="text-accent"></i> ${agents.length} agents — AtlasOps Manager delegates to the specialists. Click one to view or edit its soul.
-        <button id="agentAdd" class="ml-auto grad text-white rounded-lg px-3 py-1.5 text-xs font-semibold inline-flex items-center gap-1.5"><i data-lucide="plus"></i> Add agent</button></div>
+        <button id="agentSync" class="ml-auto text-xs text-slate-400 hover:text-accent inline-flex items-center gap-1" title="Rewrite AtlasOps' team roster from the current agents, so the manager knows who it can delegate to."><i data-lucide="refresh-cw"></i> Sync roster</button>
+        <button id="agentAdd" class="grad text-white rounded-lg px-3 py-1.5 text-xs font-semibold inline-flex items-center gap-1.5"><i data-lucide="plus"></i> Add agent</button></div>
       <div class="grid gap-3 md:grid-cols-2 lg:grid-cols-3">${agents.map(card).join('')}</div></div>`;
     icons();
     document.querySelectorAll('.agent-card').forEach(el=>el.onclick=()=>openAgent(el.dataset.id));
     $('#agentAdd').onclick=openAddAgent;
+    $('#agentSync').onclick=async()=>{ const r=await api('POST','/api/agents/roster/sync',{});
+      if(r&&r.ok) toast(`AtlasOps roster synced — ${r.count} specialist${r.count===1?'':'s'}`);
+      else toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can sync':('Sync failed: '+((r&&r.error)||'')),false); };
     async function openAgent(id){
       const a=await api('GET','/api/agents/'+encodeURIComponent(id));
       if(!a||a.error){ toast('Could not load agent',false); return; }

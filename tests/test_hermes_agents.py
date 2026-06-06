@@ -5,6 +5,7 @@ from pathlib import Path
 
 from execution.core.hermes_agents import (
     create_agent, delete_agent, get_agent, list_agents, read_memory, set_soul,
+    sync_manager_roster,
 )
 
 
@@ -129,6 +130,47 @@ class Agents(unittest.TestCase):
     def test_delete_unknown_rejected(self):
         with self.assertRaises(FileNotFoundError):
             delete_agent("ghost", self.cfg)
+
+    def test_roster_migrates_hardcoded_section(self):
+        # manager SOUL with the OLD hardcoded team section + a following section to preserve
+        write(self.d / "SOUL.md",
+              "# AtlasOps\n## Identity\n- name: AtlasOps Manager\n- role: Director\n\n"
+              "## Team I delegate to\n- OldGuy — does stuff\n\n"
+              "## Metrics to watch\n- Client Risk\n")
+        r = sync_manager_roster(self.cfg)
+        self.assertEqual(r["count"], 1)                     # one specialist: patchwright
+        soul = (self.d / "SOUL.md").read_text()
+        self.assertIn("<!-- TEAM:AUTO", soul)
+        self.assertIn("- Patchwright — Kaseya Engineer — Kaseya ops", soul)
+        self.assertNotIn("OldGuy", soul)                    # hardcoded list replaced
+        self.assertIn("## Metrics to watch", soul)          # following section preserved
+        self.assertIn("- Client Risk", soul)
+
+    def test_roster_idempotent(self):
+        write(self.d / "SOUL.md", "# AtlasOps\n## Team I delegate to\n- Old\n")
+        sync_manager_roster(self.cfg)
+        once = (self.d / "SOUL.md").read_text()
+        sync_manager_roster(self.cfg)
+        self.assertEqual(once, (self.d / "SOUL.md").read_text())   # second run = no change
+
+    def test_roster_excludes_manager_and_appends_when_absent(self):
+        write(self.d / "SOUL.md", "# AtlasOps\n## Identity\n- name: AtlasOps Manager\n")
+        sync_manager_roster(self.cfg)
+        soul = (self.d / "SOUL.md").read_text()
+        self.assertIn("## Team I delegate to", soul)        # section appended
+        self.assertIn("Patchwright", soul)
+        self.assertNotIn("AtlasOps Manager —", soul)        # manager not listed as a delegatee
+
+    def test_create_and_delete_update_roster(self):
+        sync_manager_roster(self.cfg)                       # baseline
+        create_agent("reportwright", role="Reporter", description="Builds reports", cfg=self.cfg)
+        self.assertIn("Reportwright", (self.d / "SOUL.md").read_text())   # auto-added on create
+        delete_agent("reportwright", self.cfg)
+        self.assertNotIn("Reportwright", (self.d / "SOUL.md").read_text())  # auto-removed on delete
+
+    def test_roster_no_manager_soul_is_safe(self):
+        (self.d / "SOUL.md").unlink()
+        self.assertIsNone(sync_manager_roster(self.cfg))
 
     def test_delete_cleans_alias_and_logs(self):
         create_agent("withextras", cfg=self.cfg)

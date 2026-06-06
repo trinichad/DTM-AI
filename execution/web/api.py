@@ -123,6 +123,8 @@ class Api:
             return Resp(200, {"agents": list_agents()})
         if method == "POST" and path == "/api/agents":
             return self._require_admin(role) or self._create_agent(body, user)
+        if method == "POST" and path == "/api/agents/roster/sync":
+            return self._require_admin(role) or self._sync_roster(user)
         if method == "DELETE" and path.startswith("/api/agents/") and len(path.split("/")) == 4:
             return self._require_admin(role) or self._delete_agent(path.split("/")[3], user)
         if method == "GET" and path.startswith("/api/agents/") and path.endswith("/memory"):
@@ -432,6 +434,19 @@ class Api:
         self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
                                 detail=f"agent_create={name}")
         return Resp(200, a)
+
+    def _sync_roster(self, user: str) -> Resp:
+        """Rewrite AtlasOps' auto-maintained team roster from the live profiles (owner-gated; audited)."""
+        from ..core.hermes_agents import sync_manager_roster
+        try:
+            r = sync_manager_roster()
+        except OSError as e:
+            return Resp(500, {"error": f"cannot write manager SOUL: {e}"})
+        if r is None:
+            return Resp(404, {"error": "no manager (default) SOUL found"})
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"roster_sync ({r.get('count')} specialists)")
+        return Resp(200, r)
 
     def _delete_agent(self, name: str, user: str) -> Resp:
         """Remove a specialist agent (the AtlasOps manager is protected; owner-gated; audited)."""

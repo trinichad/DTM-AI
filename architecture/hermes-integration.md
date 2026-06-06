@@ -118,6 +118,15 @@ DTM AI reader picked it up immediately.
   `config_change`. UI: "+ Add agent" form; delete is gated behind a **type-the-profile-name** "ARE YOU
   SURE?" confirm (irreversible: soul + memory + learned skills are gone).
 
+**Manager awareness — auto-synced roster.** A profile is *mechanically* delegable the moment it exists
+(kanban routes to it by its `profile.yaml` description). But the **manager's judgment** of who to delegate
+to lives in AtlasOps' SOUL under `## Team I delegate to`. `sync_manager_roster()` keeps that list in sync
+with the live profiles: it rewrites a marked block (`<!-- TEAM:AUTO -->…<!-- /TEAM:AUTO -->`, migrating
+the old hardcoded section once) with each specialist's name + role + description. Called automatically
+from `create_agent`/`delete_agent`/`set_soul` (specialist only — never re-syncs from a manager edit), and
+on demand via `POST /api/agents/roster/sync` (owner-gated) / the **Sync roster** button on the Agents tab.
+So adding an agent makes AtlasOps aware of it for chat/decompose delegation, not just the UI dropdown.
+
 ## Delegation board — kanban (`core/hermes_kanban.py`)
 Hermes does **real cross-profile delegation** through `hermes kanban`: a durable **SQLite board shared
 by all profiles**. A task is assigned to a named profile and executed by a worker the gateway's
