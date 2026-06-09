@@ -146,15 +146,18 @@ const NAV=[['overview','Overview','layout-dashboard'],['chat','Chat','message-sq
   ['agents','Agents','users-round'],['board','Delegation','layout-grid'],
   ['integrations','Integrations','plug-zap'],['capabilities','Capabilities','sliders-horizontal'],
   ['skills','Skills','graduation-cap'],['memory','Memory','brain'],
-  ['approvals','Approvals','shield-alert'],['build','Build','hammer'],['audit','Audit','scroll-text']];
+  ['approvals','Approvals','shield-alert'],['build','Build','hammer'],
+  ['terminal','Terminal','terminal'],['audit','Audit','scroll-text']];
 const SUB={overview:'Live health across your clients',chat:'Ask about a client — read-only',
   agents:'Your specialist team — souls, roles & memory',
   board:'Watch & assign work across your specialist team',
   integrations:'Connections, knowledge & credentials',capabilities:'Primitives the AI may use',
   skills:'Reusable procedures the AI has saved',memory:'Knowledge base & per-client notes',
   approvals:'Write actions awaiting your sign-off',build:'Draft new tools — sandboxed, you approve',
+  terminal:'Run commands on the server — admin only, audited',
   audit:'Every action, logged',settings:'Account & users'};
 let ME=null, MODEL='';
+let TERM_CWD='', TERM_HIST=[], TERM_HI=0;   // admin terminal: working dir + command history
 let STREAM=null;   // in-flight chat turn, at module scope so it survives tab switches
 // Chat history lives on the SERVER now (per-user, multi-conversation) — it persists across
 // devices/browsers until a conversation is explicitly deleted, like ChatGPT/Claude.
@@ -406,7 +409,7 @@ async function loadClients(){ try{ const r=await api('GET','/api/clients'); fill
 function renderUser(){ if(!ME)return; $('#userName').textContent=ME.username;
   $('#userRole').textContent=ME.role; $('#userAvatar').textContent=(ME.username||'?')[0].toUpperCase(); }
 
-function renderNav(){$('#nav').innerHTML=NAV.filter(n=>n[0]!=='build'||(ME&&ME.role==='admin')).map(([id,label,ic])=>{
+function renderNav(){$('#nav').innerHTML=NAV.filter(n=>!(n[0]==='build'||n[0]==='terminal')||(ME&&ME.role==='admin')).map(([id,label,ic])=>{
   const badge=(id==='approvals'&&ME&&ME.pending_approvals)?`<span class="ml-auto pill bg-rose-500/20 text-rose-300">${ME.pending_approvals}</span>`:'';
   return `<a data-id="${id}" class="navi ${id===current?'active':''}"><i data-lucide="${ic}"></i><span>${label}</span>${badge}</a>`;}).join('');
   document.querySelectorAll('[data-id]').forEach(a=>a.onclick=()=>route(a.dataset.id));icons();}
@@ -425,6 +428,8 @@ function ring(pct,color='#6366f1',size=54){const r=22,c=2*Math.PI*r,off=c*(1-pct
     <circle cx="27" cy="27" r="${r}" fill="none" stroke="${color}" stroke-width="5" stroke-linecap="round"
       stroke-dasharray="${c}" stroke-dashoffset="${off}"/></svg>`;}
 
+// Append a chunk of terminal output. textContent (not innerHTML) → command output can never inject HTML.
+function termWrite(out,text,cls){const s=document.createElement('span');if(cls)s.className=cls;s.textContent=text;out.appendChild(s);out.scrollTop=out.scrollHeight;}
 const VIEWS={
   async overview(){
     const [tools,ints,aud]=await Promise.all([api('GET','/api/tools'),api('GET','/api/integrations'),
@@ -988,6 +993,48 @@ const VIEWS={
       const r=await api('DELETE','/api/kb?doc='+encodeURIComponent(doc));
       if(r&&r.deleted){ toast('Doc deleted'); route('memory'); } else toast((r&&r.error)?('Delete failed: '+r.error):'Delete failed',false);});
     $('#kbNew').onclick=()=>openKbEditor(null);
+  },
+
+  async terminal(){
+    if(!ME||ME.role!=='admin'){$('#view').innerHTML=`<div class="card p-5 max-w-2xl text-sm text-slate-400">The terminal is admin-only.</div>`;return;}
+    const st=await api('GET','/api/terminal');
+    if(!st||st.enabled===false){$('#view').innerHTML=`<div class="card p-5 max-w-2xl text-sm text-slate-400">The admin terminal is disabled on this server (<span class="font-mono">DTM_ADMIN_TERMINAL=0</span>).</div>`;return;}
+    const who=esc(st.user||'dtm-ai'); TERM_CWD=st.cwd||'/';
+    $('#view').innerHTML=`<div class="h-full flex flex-col min-h-0">
+        <div class="flex items-center gap-2 mb-2 flex-wrap">
+          <span class="pill bg-amber-500/15 text-amber-300 inline-flex items-center gap-1"><i data-lucide="triangle-alert" class="text-[12px]"></i> Admin · audited</span>
+          <span class="text-[11px] text-slate-500">Runs as <span class="text-slate-300 font-mono">${who}</span> on <span class="text-slate-300 font-mono">${esc(st.host||'server')}</span> — not root, no sudo. Every command is logged to the audit trail.</span>
+          <button id="termClear" class="ml-auto text-xs text-slate-400 hover:text-accent inline-flex items-center gap-1"><i data-lucide="eraser" class="text-[12px]"></i> Clear</button>
+        </div>
+        <div id="termOut" class="flex-1 min-h-0 overflow-auto bg-black/70 border border-edge rounded-xl p-3 font-mono text-[12.5px] leading-relaxed text-slate-200 whitespace-pre-wrap break-words"></div>
+        <div class="flex items-center gap-2 mt-2 bg-black/70 border border-edge rounded-xl px-3 py-2.5 font-mono text-[12.5px] focus-within:border-accent">
+          <span id="termPrompt" class="text-emerald-400 shrink-0 whitespace-nowrap"></span>
+          <input id="termIn" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Terminal command input" class="flex-1 min-w-0 bg-transparent border-0 outline-none text-slate-100" placeholder="type a command · Enter to run · ↑/↓ history"/>
+        </div></div>`;
+    icons();
+    const out=$('#termOut'),inp=$('#termIn'),pr=$('#termPrompt');
+    const setPrompt=()=>{pr.textContent=`${st.user||'dtm-ai'}:${TERM_CWD}$`;};
+    setPrompt();
+    termWrite(out,`DTM AI admin terminal — commands run as ${st.user||'dtm-ai'} (not root), confined by the systemd sandbox. Audited.\n\n`,'text-slate-500');
+    inp.focus();
+    $('#termClear').onclick=()=>{out.innerHTML='';inp.focus();};
+    inp.onkeydown=async e=>{
+      if(e.key==='ArrowUp'){e.preventDefault();if(TERM_HIST.length){TERM_HI=Math.max(0,TERM_HI-1);inp.value=TERM_HIST[TERM_HI]||'';}return;}
+      if(e.key==='ArrowDown'){e.preventDefault();if(TERM_HIST.length){TERM_HI=Math.min(TERM_HIST.length,TERM_HI+1);inp.value=TERM_HIST[TERM_HI]||'';}return;}
+      if(e.key!=='Enter')return;
+      const cmd=inp.value;if(!cmd.trim())return;
+      TERM_HIST.push(cmd);TERM_HI=TERM_HIST.length;inp.value='';
+      termWrite(out,`${st.user||'dtm-ai'}:${TERM_CWD}$ ${cmd}\n`,'text-emerald-300');
+      inp.disabled=true;
+      const r=await api('POST','/api/terminal',{command:cmd});
+      inp.disabled=false;inp.focus();
+      if(!r){termWrite(out,'(request failed)\n','text-rose-400');return;}
+      if(r.error){termWrite(out,r.error+'\n','text-rose-400');return;}
+      if(r.stdout)termWrite(out,r.stdout.endsWith('\n')?r.stdout:r.stdout+'\n');
+      if(r.stderr)termWrite(out,r.stderr.endsWith('\n')?r.stderr:r.stderr+'\n','text-rose-300');
+      if(r.cwd){TERM_CWD=r.cwd;setPrompt();}
+      if(typeof r.exit_code==='number'&&r.exit_code!==0&&!r.stderr)termWrite(out,`(exit ${r.exit_code})\n`,'text-rose-300');
+    };
   },
 
   async settings(){

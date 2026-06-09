@@ -1,5 +1,18 @@
 # progress.md — Work Log
 
+## 2026-06-09 (cont.) — UI restyle + admin terminal
+- **Dashboard restyle** (ui-ux-pro-max principles, by hand — no third-party skill installed/run; SEO skill
+  N/A for a private app): deeper palette, layered cards, global `:focus-visible` (keyboard focus was
+  invisible — 19× `focus:outline-none`), `prefers-reduced-motion`, aria-labels on icon buttons,
+  emoji→Lucide for local/cloud pills.
+- **Memory tab → full-width directory explorer:** searchable client folder-rail (scales to hundreds) ·
+  memory editor fills height · KB its own pane. Dropped `max-w-5xl`.
+- **Admin Terminal (D-21)** — owner-approved, human-only exception to Rule #6. `core/adminshell.py` +
+  `GET/POST /api/terminal` + a Terminal tab (admin-only nav). Admin-gated, audited-before-run, runs as
+  unprivileged `dtm-ai` (no sudo), systemd-sandboxed, 30s timeout + 100k cap, `DTM_ADMIN_TERMINAL=0` kill
+  switch. Not a PTY; `cd` persists per user. SOP architecture/admin-terminal.md; CLAUDE.md Rule #6 amended.
+  225 tests green.
+
 ## 2026-06-09 (cont.) — usable memory/KB + living-memory model
 - KB CRUD shipped (read modal, download, New/Upload, edit, **rename/move**, delete); bundled `reference/`
   stays view+download. Client **registry** (add/pick/delete) + searchable picker (top-right datalist +

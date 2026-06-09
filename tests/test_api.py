@@ -101,6 +101,23 @@ class WebApi(unittest.TestCase):
         self.assertEqual(captured["path"], "/api/kb")
         self.assertEqual(captured["query"], {"doc": "kb/test.md"})   # query reached the router
 
+    def test_terminal_admin_only_and_runs(self):
+        # admin terminal (D-21): non-admins are blocked on both verbs
+        self.auth.create_user("bob", "bobpass1", "user")
+        self.assertEqual(self.H("GET", "/api/terminal", user="bob").status, 403)
+        self.assertEqual(self.H("POST", "/api/terminal", {"command": "echo hi"}, user="bob").status, 403)
+        # admin can run a command and see its output
+        r = self.H("POST", "/api/terminal", {"command": "echo hello123"}, user="admin")
+        self.assertEqual(r.status, 200)
+        self.assertIn("hello123", r.payload["stdout"])
+        # empty command rejected
+        self.assertEqual(self.H("POST", "/api/terminal", {"command": "   "}, user="admin").status, 400)
+        # GET state is admin-only and reports enabled + cwd
+        st = self.H("GET", "/api/terminal", user="admin")
+        self.assertEqual(st.status, 200)
+        self.assertTrue(st.payload["enabled"])
+        self.assertTrue(st.payload["cwd"])
+
     def test_conversation_rename_and_delete(self):
         cid = self.H("POST", "/api/conversations", {"tenant": "acme"}, user="admin").payload["id"]
         self.assertEqual(self.H("POST", f"/api/conversations/{cid}/rename",

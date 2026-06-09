@@ -119,8 +119,12 @@ def run(ctx, **kwargs) -> dict | list   # ctx = {tenant_id, clients, actor}; ret
    construct clients for its own tenant. Cross-tenant calls are rejected before any client is built.
 5. **Local-first.** Tasks touching client data run on the local LLM by default; routing to a cloud model
    requires `allow_cloud=true` or an explicit non-sensitive flag (D-3).
-6. **No free-form shell, ever.** The agent runs only registered, parameterized tools. No LLM-emitted
-   command strings are executed.
+6. **No free-form shell for the AGENT, ever.** The agent runs only registered, parameterized tools.
+   No LLM-emitted command strings are executed. *(Exception — humans only, D-21):* an **admin-only,
+   audited** Terminal lets a logged-in admin run commands on the host (a convenience over SSH). It is
+   never reachable by the LLM/agent loop; it is admin-gated, every command is logged before it runs,
+   it executes as the unprivileged `dtm-ai` user (no sudo) inside the systemd sandbox, and
+   `DTM_ADMIN_TERMINAL=0` kills it instantly (I-4). The agent's no-shell rule is unchanged.
 7. **Decline + log.** On any destructive request, ambiguity, or missing approval: refuse, explain, log.
 8. **Fail closed.** Missing credential → no client built. Missing approval → no write. Auth/crypto error →
    deny. Never degrade to an anonymous or partial-privilege call.

@@ -45,6 +45,8 @@ class Api:
         self._fleet_inflight: set[str] = set()
         self._fleet_lock = threading.Lock()
         self._fleet_ttl = get_config().int("DTM_FLEET_TTL_SEC", 300)
+        from ..core.adminshell import AdminShell
+        self.shell = AdminShell()                 # admin-only terminal (D-21); gated + audited below
 
     def handle(self, method: str, path: str, query: dict, body: dict,
                user: Optional[str]) -> Resp:
@@ -87,6 +89,10 @@ class Api:
             return self._require_admin(role) or self._kb_delete(query.get("doc") or "", user)
         if method == "POST" and path == "/api/kb/rename":
             return self._require_admin(role) or self._kb_rename(body, user)
+        if method == "GET" and path == "/api/terminal":
+            return self._require_admin(role) or self._terminal_state(user)
+        if method == "POST" and path == "/api/terminal":
+            return self._require_admin(role) or self._terminal_run(body, user)
         if method == "GET" and path == "/api/clients":
             from ..core.memory import VaultStore
             return Resp(200, {"clients": VaultStore().list_clients()})
@@ -330,6 +336,32 @@ class Api:
         self.agent.audit.record(actor=user, tenant_id=tenant or "*", action="config_change",
                                 tool=tool, detail=detail)
         return Resp(200, r)
+
+    def _terminal_state(self, user: str) -> Resp:
+        """Initial state for the admin Terminal tab: enabled flag, working dir, run-as user + host."""
+        import getpass
+        import socket
+        from ..core.adminshell import terminal_enabled
+        en = terminal_enabled()
+        try:
+            who, host = getpass.getuser(), socket.gethostname()
+        except OSError:
+            who, host = "dtm-ai", "server"
+        return Resp(200, {"enabled": en, "cwd": self.shell.cwd(user) if en else None,
+                          "user": who, "host": host})
+
+    def _terminal_run(self, body: dict, user: str) -> Resp:
+        """Run one shell command as the service user (admin-only, D-21). AUDITED BEFORE it runs, so
+        even a command that kills the process leaves a record. Returns stdout/stderr/exit/cwd."""
+        from ..core.adminshell import terminal_enabled
+        if not terminal_enabled():
+            return Resp(403, {"error": "admin terminal is disabled (DTM_ADMIN_TERMINAL=0)"})
+        command = (body.get("command") or "").strip()
+        if not command:
+            return Resp(400, {"error": "command required"})
+        self.agent.audit.record(actor=user, tenant_id="*", action="terminal",
+                                detail=command[:500])
+        return Resp(200, self.shell.run(user, command))
 
     def _kb_doc(self, doc: str) -> Resp:
         """Read one knowledge-base / reference doc by its listed path (no traversal)."""

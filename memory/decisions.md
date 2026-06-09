@@ -45,6 +45,21 @@ write is audited. Dashboard Memory tab edits `memory.md` directly via an editabl
 floors unchanged:** tenant isolation, `*` rejected, internal-write-≠-client-write, Capability-Console
 toggle, full audit. _(locked by owner 2026-06-09; SOP: architecture/memory-vault.md.)_
 
+**D-21 — Admin-only Terminal tab: a fenced, human-only exception to Rule #6 ("no free-form shell").**
+A logged-in **admin** can run shell commands on the host from a dashboard Terminal tab, as a convenience
+over opening SSH. _Reason: owner wants quick command access on the box without SSH; basic users (future)
+won't see it. Owner made the call with the risk explained ("it's our thing — we make the rules")._
+**Scope of the exception:** it applies to HUMANS, not the AI — the agent loop still has zero shell access
+(Rule #6 for the agent is unchanged). **Guardrails (in code, not prose):** admin-gated route + nav item
+(non-admins can't see or call it); every command written to the append-only audit log (`action=terminal`)
+BEFORE it runs; executes as the unprivileged `dtm-ai` service user (no sudo wired) so root actions still
+need SSH-as-ross; real containment is the systemd sandbox (`ProtectSystem=strict` +
+`ReadWritePaths=/opt/dtm-ai`); per-command timeout (30s) + output cap (100k); instant kill switch
+`DTM_ADMIN_TERMINAL=0` (I-4). **Accepted residual risk:** a stolen admin session / XSS = command exec as
+`dtm-ai`, which can read the app + vault and write within `/opt/dtm-ai`. Not an interactive PTY (no
+vim/top); `cd` persists per user. Code: `core/adminshell.py`, routes `GET/POST /api/terminal`; SOP:
+architecture/admin-terminal.md. _(locked by owner 2026-06-09.)_
+
 ## Locked by user (2026-06-01 Blueprint discovery)
 
 **D-1 — Two-process split: Python FastAPI agent backend + TypeScript dashboard, joined by a typed
