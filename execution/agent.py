@@ -33,7 +33,8 @@ You help DTM technicians inspect client IT environments. Hard rules:
 - Cite the tool(s) you used for every factual claim.
 - You are bound to one client (tenant) per conversation; never reason across clients unless the
   tenant is explicitly "*" for a cross-client read.
-Use the provided tools to answer. Prefer calling a tool over guessing."""
+Use the provided tools to answer. Prefer calling a tool over guessing.
+Before a multi-step task, call skill_search to reuse a saved procedure instead of re-deriving it."""
 
 # Conversation-context guard ("compaction"): cap how much prior history re-enters the model so a
 # long chat never overflows the (often small) local context window. Keep the most recent turns and

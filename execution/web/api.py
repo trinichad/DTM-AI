@@ -113,6 +113,10 @@ class Api:
             return Resp(200, {"capabilities": self._tools()})  # tools carry their policy
         if method == "GET" and path == "/api/skills":
             return Resp(200, self._skills())
+        if method == "POST" and path == "/api/skills/learn":
+            return self._require_admin(role) or self._learn_skill(body, user)
+        if method == "DELETE" and path.startswith("/api/skills/") and len(path.split("/")) == 4:
+            return self._require_admin(role) or self._delete_skill(path.split("/")[3], user)
         if method == "GET" and path == "/api/hermes/brain":
             from ..core.hermes_brain import get_brain_mode
             return Resp(200, get_brain_mode())
@@ -409,10 +413,58 @@ class Api:
         return {**ent["data"], "cached": True, "age_sec": int(age), "ttl_sec": self._fleet_ttl}
 
     def _skills(self) -> dict:
-        """Hermes' learned skills (read-only). Empty + available=false until Hermes runs."""
-        from ..core.hermes_skills import HermesSkillsReader
-        r = HermesSkillsReader()
-        return {"available": r.available, "dir": str(r.root), "skills": r.list_skills()}
+        """Saved learned-skill playbooks (native; replaces the Hermes skills reader)."""
+        from ..core.playbooks import PlaybookStore
+        s = PlaybookStore()
+        return {"available": True, "dir": str(s.root), "skills": s.list_skills()}
+
+    def _learn_skill(self, body: dict, user: str) -> Resp:
+        """Save a multi-step turn as a reusable playbook (owner-confirmed; dedup'd; audited)."""
+        from ..core.playbooks import PlaybookStore
+        name = (body.get("name") or "").strip()
+        if not name:
+            return Resp(400, {"error": "skill name required"})
+        try:
+            r = PlaybookStore().save(
+                name, description=body.get("description") or "",
+                tools=body.get("tools") or [], when=body.get("when") or "",
+                steps=body.get("steps") or "", tags=body.get("tags") or [],
+                created_by=user, force=bool(body.get("force")))
+        except ValueError as e:
+            return Resp(400, {"error": str(e)})
+        except OSError as e:
+            return Resp(500, {"error": f"cannot write skill: {e}"})
+        if not r.get("ok"):                       # a near-duplicate exists — UI offers view/overwrite
+            self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                    detail=f"skill_learn_dup={name}")
+            return Resp(409, r)
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"skill_learn={r.get('slug')}")
+        return Resp(200, r)
+
+    def _delete_skill(self, slug: str, user: str) -> Resp:
+        """Delete a saved learned skill (owner-gated; audited)."""
+        from ..core.playbooks import PlaybookStore
+        try:
+            r = PlaybookStore().delete(slug)
+        except ValueError as e:
+            return Resp(404, {"error": str(e)})
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"skill_delete={slug}")
+        return Resp(200, r)
+
+    @staticmethod
+    def _suggest_skill(message: str, turn) -> Optional[dict]:
+        """After a multi-step turn (>=2 distinct successful tools, excluding the skill lookup),
+        suggest saving it as a reusable skill. The owner confirms/edits + saves via /api/skills/learn
+        (which dedups). Returns None when there's nothing worth saving."""
+        uniq = sorted({e["name"] for e in (getattr(turn, "tool_events", None) or [])
+                       if e.get("ok") and e.get("name") and e["name"] != "skill_search"})
+        if len(uniq) < 2:
+            return None
+        words = (message or "").strip().split()
+        return {"proposed_name": " ".join(words[:6])[:60] or "New skill",
+                "tools": uniq, "summary": (getattr(turn, "answer", "") or "")[:200]}
 
     def _create_agent(self, body: dict, user: str) -> Resp:
         """Add a new specialist agent = a fresh profile on disk (owner-gated; audited)."""
@@ -652,6 +704,7 @@ class Api:
             "tool_events": turn.tool_events, "provider": turn.provider,
             "model": turn.model, "rounds": turn.rounds, "tenant": tenant,
             "conversation_id": conv_id, "title": title,
+            "suggest_skill": self._suggest_skill(message, turn),
         })
 
     def stream_chat(self, body: dict, user: str) -> Iterator[dict]:
@@ -715,7 +768,8 @@ class Api:
         title = next((c["title"] for c in convs.list(user) if c["id"] == conv_id), "")
         yield {"type": "answer", "answer": turn.answer, "citations": turn.citations,
                "tool_events": turn.tool_events, "provider": turn.provider, "model": turn.model,
-               "rounds": turn.rounds, "tenant": tenant, "conversation_id": conv_id, "title": title}
+               "rounds": turn.rounds, "tenant": tenant, "conversation_id": conv_id, "title": title,
+               "suggest_skill": self._suggest_skill(message, turn)}
 
     def _stream_hermes(self, message: str, conv_id: str, tenant: str, user: str,
                        hermes_model: Optional[str] = None) -> Iterator[dict]:
