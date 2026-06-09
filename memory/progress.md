@@ -275,3 +275,30 @@ dtm-ai`. (NOTE: server reachable only when the maintainer Mac is on the 192.168.
 5. Refine OpenAI streaming (token + tool-call deltas); optional: stream over true WS for alerts.
 6. Scheduled audits/reports (cron installer); on-demand report framework.
 7. Later vendors (Google/Proofpoint/Datto-Veeam/SonicWall/…); Postgres+RLS for prod scale; stand up Hermes.
+
+## 2026-06-09 — Remove Hermes, go fully in-house (D-19) ✅
+Owner chose a wholly in-house build (no external runtime). Inventory showed the native brain already
+existed (`agent.py` loop) with Hermes only an alternate engine + delegation path. Executed in 6 tested
+phases — each committed + pushed to `main`; Phases 1–5 + the frontend tidy deployed live (8090 healthy):
+- **P1 Native profiles** — `hermes_agents.py`→`core/agents.py`; profiles DTM-AI-owned (`DTM_AGENTS_DIR`,
+  legacy `DTM_HERMES_*` fallback). Verified live: 8 agents (AtlasOps + 7 specialists) load.
+- **P2 Profile-aware loop** — `build_system_prompt(profile)` layers SOUL+memory below the safety base;
+  `chat`/`chat_stream` take `profile=`; per-profile chat now possible.
+- **P3 Native delegation** — `core/tasks.py` `TaskStore`+`Dispatcher` (a worker runs the loop AS the
+  profile); DELETED `hermes_kanban.py` + the root-owned sudo wrapper + sudoers + installer. Verified live.
+- **P4 Learning skills** — `core/playbooks.py` (dedup'd markdown playbooks) + `skill_search` tool +
+  `suggest_skill` on chat answers + `/api/skills/learn|/<slug>`. Owner-confirmed saves only (I-5).
+- **P5 Strip Hermes** — deleted `hermes_bridge`, `mcp_server`, `hermes_brain`, `hermes_skills` + 4 tests;
+  removed the `engine=='hermes'` branch, `_stream_hermes`, brain routes, Hermes integration card. 205
+  tests green. Retired the `dtm-ai-mcp` service on the box.
+- **P6 Dashboard + docs** — removed inert Hermes UI (engine/brain toggles), wired the "save as skill?"
+  prompt + native Skills view; updated CLAUDE.md §7b/I-5; SOP → `architecture/agents-delegation-skills.md`.
+- **Also retired the old Kaseya AI Link** (`kaseya-ai.service`, port 8088) — stopped + disabled.
+
+### Open / next
+1. **Migrate profiles** off `/srv/hermes-data` to a DTM-owned `DTM_AGENTS_DIR`, then drop the
+   `hermes-rw.conf` drop-in + the legacy env fallback.
+2. **Stop/remove the Hermes Docker container** on the box (nothing routes to it now).
+3. Optional: delete `/opt/kaseya-ai` (71 MB, owner's call).
+4. Delegation-worker quality: confirm the local model handles tool-calls well, or add a per-task cloud opt-in.
+5. (carried) M365/Entra read-only; encrypt secrets at rest; scheduled audits/reports.

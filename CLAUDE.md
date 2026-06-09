@@ -136,10 +136,12 @@ def run(ctx, **kwargs) -> dict | list   # ctx = {tenant_id, clients, actor}; ret
   surfaced only as `sha256[:7]` fingerprints. Boot refuses if the secret file is group/world-readable.
 - **I-4** Enable/disable is **config, not code** — flipping a tool off in config makes `dispatch()` refuse
   it even if the model names it. This is the instant kill switch.
-- **I-5** The **runtime agent cannot author or modify tools.** A separate sandboxed coding agent (no prod
-  creds, no prod DB, synthetic tenant) writes candidates to `skills_candidate/`; promotion to `skills/`
-  requires schema-lint + tests + security-scan + **human merge** (D-4/D-8). New tools default
-  `CATEGORY=read`, `ENABLED_BY_DEFAULT=False`.
+- **I-5** The runtime agent may **save learned-skill playbooks** (compositions of already-enabled tools,
+  no new code — D-15) but **cannot author or modify executable tool code.** A new executable primitive is
+  drafted into `skills_candidate/` (AST security-scan + schema-lint) and reaches live `skills/` only by
+  **human merge** (D-4) — LLM-written code touching live client systems is the highest-risk surface, so
+  this gate stays even though the build is now fully in-house (D-19). New tools default `CATEGORY=read`,
+  `ENABLED_BY_DEFAULT=False`.
 - **I-6** Everything under git. Tool promotions and config changes are commits → backup + rollback by design.
 - **I-7** If logic changes, the `/architecture/` SOP is updated **before** the code (A.N.T. golden rule).
 - **I-8** All intermediate/ephemeral file IO routes through `/.tmp/`. Deliverables land in the
@@ -190,19 +192,25 @@ DTM AI/
 └── .tmp/                # ephemeral workbench
 ```
 
-## 7b. The Brain layer — Hermes + memory + knowledge (D-11/12/13)
+## 7b. The Brain layer — native agent loop, profiles, memory, learned skills (D-19)
 
-- **Hermes Agent (Nous Research)** is the optional conversational brain, fenced behind our tools:
-  it reaches client systems ONLY through DTM AI's registry **exposed as an MCP server**, so every
-  dispatch() guardrail applies regardless of how autonomous Hermes is. Hermes' native toolsets
-  (terminal, code, file, browser, memory, web) are entries in the **Capability Console** and start
-  mostly off. *Distinct from the `ClaudeOS [Hermes] V2` folder, which is only a UI design donor.*
-- **Capability Console** = the owner's throttle. Per tool/toolset: `enabled`, `allow_write`,
-  `require_approval`. Backend: `core/capabilities.py` + `core/gates.py`. Safety floors (Rule #1) are
-  enforced in code, not in the console.
+- **Native agent loop (the brain).** `execution/agent.py` is DTM AI's own bounded tool-call loop —
+  no external runtime. It runs as a chosen **profile** (specialist), loading that profile's SOUL +
+  long-term memory as the system prompt and calling tools only through `dispatch()` (every guardrail
+  in Rule #1–#8 applies). **Profiles** = agent personas on disk (`core/agents.py`): AtlasOps Manager
+  (`default`) + specialists under `profiles/<name>/`, resolved from `DTM_AGENTS_DIR` (legacy
+  `DTM_HERMES_*` fallback until migrated) else `<vault>/agents`. **Delegation** = the native
+  `TaskStore` board + `Dispatcher` (`core/tasks.py`): a task assigned to a profile is run by a worker
+  that IS this loop, as that profile, bound to the task's tenant. **Learned skills** = reusable
+  PLAYBOOKS composing already-trusted tools (`core/playbooks.py`, the `skill_search` tool, D-15) — the
+  agent reuses one before re-deriving; the owner confirms saves; dedup'd. *(Hermes removed — D-19; the
+  `ClaudeOS [Hermes] V2` folder remains only a UI design donor.)*
+- **Capability Console** = the owner's throttle. Per tool: `enabled`, `allow_write`, `require_approval`.
+  Backend: `core/capabilities.py` + `core/gates.py`. Safety floors (Rule #1) are enforced in code, not
+  in the console.
 - **Obsidian vault** = knowledge base (per-client runbooks/SOPs → read-only `kb_search`) + the agent's
-  human-readable long-term memory (`Clients/<tenant>/memory.md`). Markdown on disk: git-tracked,
-  backup-able, human-editable. Modeled on Hermes' MEMORY.md/USER.md + FTS5 session recall.
+  human-readable long-term memory (`clients/<tenant>/memory.md`). Markdown on disk: git-tracked,
+  backup-able, human-editable. Per-profile MEMORY.md/USER.md feed the agent's system prompt.
 
 ## 8. Maintenance / Self-Annealing
 On any failure: (a) read the real error/stack — no guessing; (b) patch in `execution/`; (c) test the fix;
