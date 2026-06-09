@@ -47,8 +47,18 @@ class Shell(unittest.TestCase):
         self.assertEqual(r["exit_code"], 1)
 
     def test_output_is_capped(self):
-        r = self.sh.run("admin", "yes x | head -c 200000")
-        self.assertLessEqual(len(r["stdout"]), 100_000)    # huge output truncated, not unbounded
+        sh = AdminShell(base=self.tmp.name, max_output=1000)
+        r = sh.run("admin", "yes x | head -c 50000")
+        self.assertLessEqual(len(r["stdout"]), 1000)       # capped to configured max, not unbounded
+
+    def test_no_timeout_by_default(self):
+        self.assertIsNone(self.sh.timeout)                 # "no blocks" — no time limit unless configured
+
+    def test_timeout_is_configurable(self):
+        sh = AdminShell(base=self.tmp.name, timeout=1)
+        r = sh.run("admin", "sleep 5")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["exit_code"], 124)              # killed at the configured limit
 
     def test_kill_switch(self):
         env = Path(self.tmp.name) / ".env"

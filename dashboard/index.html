@@ -1003,7 +1003,7 @@ const VIEWS={
     $('#view').innerHTML=`<div class="h-full flex flex-col min-h-0">
         <div class="flex items-center gap-2 mb-2 flex-wrap">
           <span class="pill bg-amber-500/15 text-amber-300 inline-flex items-center gap-1"><i data-lucide="triangle-alert" class="text-[12px]"></i> Admin · audited</span>
-          <span class="text-[11px] text-slate-500">Runs as <span class="text-slate-300 font-mono">${who}</span> on <span class="text-slate-300 font-mono">${esc(st.host||'server')}</span> — not root, no sudo. Every command is logged to the audit trail.</span>
+          <span class="text-[11px] text-slate-500">Runs as <span class="text-slate-300 font-mono">${who}</span> on <span class="text-slate-300 font-mono">${esc(st.host||'server')}</span> — full access · every command is logged to the audit trail.</span>
           <button id="termClear" class="ml-auto text-xs text-slate-400 hover:text-accent inline-flex items-center gap-1"><i data-lucide="eraser" class="text-[12px]"></i> Clear</button>
         </div>
         <div id="termOut" class="flex-1 min-h-0 overflow-auto bg-black/70 border border-edge rounded-xl p-3 font-mono text-[12.5px] leading-relaxed text-slate-200 whitespace-pre-wrap break-words"></div>
@@ -1015,7 +1015,7 @@ const VIEWS={
     const out=$('#termOut'),inp=$('#termIn'),pr=$('#termPrompt');
     const setPrompt=()=>{pr.textContent=`${st.user||'dtm-ai'}:${TERM_CWD}$`;};
     setPrompt();
-    termWrite(out,`DTM AI admin terminal — commands run as ${st.user||'dtm-ai'} (not root), confined by the systemd sandbox. Audited.\n\n`,'text-slate-500');
+    termWrite(out,`DTM AI admin terminal — commands run as ${st.user||'dtm-ai'}. ${st.user==='root'?'Root shell.':'Prefix sudo for root (once enabled).'} Every command is audited.\n\n`,'text-slate-500');
     inp.focus();
     $('#termClear').onclick=()=>{out.innerHTML='';inp.focus();};
     inp.onkeydown=async e=>{

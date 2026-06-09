@@ -60,6 +60,30 @@ need SSH-as-ross; real containment is the systemd sandbox (`ProtectSystem=strict
 vim/top); `cd` persists per user. Code: `core/adminshell.py`, routes `GET/POST /api/terminal`; SOP:
 architecture/admin-terminal.md. _(locked by owner 2026-06-09.)_
 
+**D-22 — Widen the admin Terminal to FULL ROOT, add an independent recovery console on :8091.**
+Extends D-21 at the owner's explicit, informed direction ("full root access or whatever access... no
+blocks... and a second port so if the site goes down during an update I can switch over"). _Reason: it's
+the owner's own box and a necessary admin tool; risks were laid out twice and accepted._
+**What changed:**
+- **No blocks:** terminal timeout removed by default (`DTM_TERMINAL_TIMEOUT=0` → none); output still capped
+  (`DTM_TERMINAL_MAXOUT`, default 1 MB) only so a runaway command can't OOM the response. Audit logging
+  kept — it records, it doesn't block.
+- **Full root:** via `sudo`, granted by a `NOPASSWD: ALL` sudoers file for `dtm-ai`
+  (`deploy/sudoers-dtm-ai-terminal.snippet`) + a drop-in that relaxes the systemd sandbox so sudo can act
+  (`deploy/dtm-ai.service.d/10-full-access.conf` — turns off NoNewPrivileges / RestrictSUIDSGID /
+  ProtectSystem). The web app process itself stays `dtm-ai` (root is opt-in per `sudo` command).
+- **Failover:** an INDEPENDENT second instance on :8091 (`deploy/dtm-ai-recovery.service`, runs as root,
+  un-sandboxed). Separate process → survives the main app crashing/restarting; the deploy flow must NOT
+  restart it, so it keeps running old code during a broken update. Same login (shared `.session_secret` +
+  users DB).
+**Owner must apply the privileged parts** (sudoers / drop-in / unit install) as root — I can't take root.
+**Still true:** admin-only; the AI/agent loop has ZERO shell access (Rule #6 for the agent unchanged);
+every command audited; `DTM_ADMIN_TERMINAL=0` kill switch.
+**Accepted residual risk (explicit):** a stolen admin session, CSRF, or an XSS hole = full root + total
+server/all-client-data takeover — and the channel is currently plain HTTP on the LAN (no TLS on the box
+yet). Mitigations to revisit: put TLS in front; consider scoping sudo later; keep admin creds tight.
+_(locked by owner 2026-06-09; SOP architecture/admin-terminal.md.)_
+
 ## Locked by user (2026-06-01 Blueprint discovery)
 
 **D-1 — Two-process split: Python FastAPI agent backend + TypeScript dashboard, joined by a typed

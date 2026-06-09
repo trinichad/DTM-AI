@@ -1,17 +1,21 @@
 """AdminShell — run shell commands on the host for ADMIN users, from the dashboard Terminal tab.
 
 ⚠ This is the constitution's explicit, owner-approved exception to Rule #6 ("no free-form shell"),
-recorded as D-21. It exists so an admin can run quick commands on the box without opening SSH.
-The exception is fenced by guardrails enforced in code, not prose:
+recorded as D-21 and widened to FULL ROOT by D-22 (owner's decision). It exists so an admin can run
+commands on the box without opening SSH. The exception applies to HUMANS only — the agent loop still
+has zero shell access. What's left of the fence (all in code, not prose):
 
   • ADMIN-ONLY   — the route is admin-gated; non-admin users never see the tab or reach the endpoint.
   • AUDITED      — every command is written to the append-only audit log (actor + command) BEFORE it
-                   runs, so even a command that kills the process leaves a record.
-  • UNPRIVILEGED — runs as the dtm-ai service user, NOT root (no sudo wired). Real containment is the
-                   systemd sandbox: ProtectSystem=strict + ReadWritePaths=/opt/dtm-ai, so writes stay
-                   confined to the app dir and the rest of the FS is read-only.
+                   runs, so even a command that kills the process leaves a record. (Audit records; it
+                   does not block — kept deliberately as the "what did I run" trail.)
   • KILL SWITCH  — DTM_ADMIN_TERMINAL=0 disables it instantly (config, not code — invariant I-4).
-  • BOUNDED      — per-command timeout + output cap; one fresh process per command.
+  • OUTPUT CAP   — output is truncated (DTM_TERMINAL_MAXOUT, default 1 MB/stream) so a runaway command
+                   can't OOM the JSON response. No time limit by default (DTM_TERMINAL_TIMEOUT=0).
+
+ROOT (D-22): commands run as whatever user the process runs as. On the main app (:8090, user dtm-ai)
+root is reached via `sudo` once the NOPASSWD sudoers grant + sandbox-relax drop-in are installed
+(deploy/). The independent recovery console (:8091) runs as root, so it is a literal root shell.
 
 NOT an interactive PTY: no vim/top/long-running interactive programs, no persistent environment.
 `cd` is tracked per user so it FEELS like a session; every other command is a fresh `bash -c` run in
@@ -28,8 +32,6 @@ from typing import Any, Optional
 from .config import Config, get_config
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_TIMEOUT = 30           # seconds per command
-_MAX_OUTPUT = 100_000   # chars returned per stream (stdout / stderr each)
 _CD_BREAKERS = ("&&", "||", ";", "|", "\n")
 
 
@@ -43,8 +45,16 @@ def terminal_enabled(cfg: Optional[Config] = None) -> bool:
 class AdminShell:
     """Per-user command runner with a tracked working directory. Thread-safe (ThreadingHTTPServer)."""
 
-    def __init__(self, base: Optional[str] = None) -> None:
+    def __init__(self, base: Optional[str] = None, timeout: Optional[int] = None,
+                 max_output: Optional[int] = None, cfg: Optional[Config] = None) -> None:
+        cfg = cfg or get_config()
         self.base = str(base or _PROJECT_ROOT)
+        # "No blocks" (D-22): timeout 0/unset → None (no limit). Output is still capped so a
+        # multi-GB command can't OOM the browser/JSON response — generous, and configurable.
+        t = timeout if timeout is not None else cfg.int("DTM_TERMINAL_TIMEOUT", 0)
+        self.timeout: Optional[int] = None if (not t or t <= 0) else int(t)
+        self.max_output = int(max_output if max_output is not None
+                              else cfg.int("DTM_TERMINAL_MAXOUT", 1_000_000))
         self._cwd: dict[str, str] = {}
         self._lock = threading.Lock()
 
@@ -80,11 +90,11 @@ class AdminShell:
 
         try:
             p = subprocess.run(["bash", "-c", command], cwd=cwd, capture_output=True,
-                               text=True, timeout=_TIMEOUT)
-            return {"ok": p.returncode == 0, "stdout": p.stdout[:_MAX_OUTPUT],
-                    "stderr": p.stderr[:_MAX_OUTPUT], "exit_code": p.returncode, "cwd": cwd}
+                               text=True, timeout=self.timeout)
+            return {"ok": p.returncode == 0, "stdout": p.stdout[:self.max_output],
+                    "stderr": p.stderr[:self.max_output], "exit_code": p.returncode, "cwd": cwd}
         except subprocess.TimeoutExpired:
-            return {"ok": False, "stdout": "", "stderr": f"(timed out after {_TIMEOUT}s)",
+            return {"ok": False, "stdout": "", "stderr": f"(timed out after {self.timeout}s)",
                     "exit_code": 124, "cwd": cwd}
         except (OSError, subprocess.SubprocessError) as e:
             return {"ok": False, "stdout": "", "stderr": f"(failed to run: {e})",

@@ -1,0 +1,36 @@
+# D-22 — DTM AI recovery console: an INDEPENDENT second instance of the app on :8091, running as root.
+#
+# Why: if a deploy breaks the main app (:8090) or you `systemctl restart dtm-ai` into a crash, this
+# process keeps running (it is NOT touched by the normal deploy) so you can open :8091, see what
+# happened, and fix it — a full root terminal + the full dashboard as failover. Same login as :8090
+# (shared .session_secret + users DB).
+#
+# CRITICAL OPERATIONAL RULE: the deploy flow restarts ONLY dtm-ai, never dtm-ai-recovery. That is what
+# lets recovery keep running the OLD (working) code while a bad update is sorted out. Restart recovery
+# MANUALLY (sudo systemctl restart dtm-ai-recovery) only AFTER you've confirmed the main app is healthy.
+#
+# Install (run as root, ONE line at a time):
+#   sudo cp /opt/dtm-ai/deploy/dtm-ai-recovery.service /etc/systemd/system/dtm-ai-recovery.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now dtm-ai-recovery
+#   sudo systemctl status dtm-ai-recovery        # confirm active, listening on :8091
+#
+# ⚠ This is a root-privileged, un-sandboxed, network-listening web shell. Treat :8091 like SSH-as-root.
+[Unit]
+Description=DTM AI — recovery console (independent failover, :8091)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/dtm-ai
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m execution.web --host 0.0.0.0 --port 8091
+Restart=on-failure
+RestartSec=3
+# Intentionally NOT sandboxed and runs as root — this is the emergency full-control console.
+
+[Install]
+WantedBy=multi-user.target

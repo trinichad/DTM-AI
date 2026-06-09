@@ -1,0 +1,11 @@
+# D-22 — full passwordless root for the dtm-ai service user, so the admin Terminal can run `sudo <anything>`.
+#
+# Install (run as root, ONE line at a time):
+#   sudo cp /opt/dtm-ai/deploy/sudoers-dtm-ai-terminal.snippet /etc/sudoers.d/dtm-ai-terminal
+#   sudo chmod 0440 /etc/sudoers.d/dtm-ai-terminal
+#   sudo visudo -c            # must print: /etc/sudoers.d/dtm-ai-terminal: parsed OK
+#
+# ⚠ This grants the web-service user UNRESTRICTED root via sudo. Combined with the un-sandbox drop-in,
+#   the admin Terminal can change anything on the box. A stolen admin session = full server takeover.
+#   Remove with:  sudo rm /etc/sudoers.d/dtm-ai-terminal
+dtm-ai ALL=(ALL) NOPASSWD: ALL

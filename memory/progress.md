@@ -12,6 +12,14 @@
   unprivileged `dtm-ai` (no sudo), systemd-sandboxed, 30s timeout + 100k cap, `DTM_ADMIN_TERMINAL=0` kill
   switch. Not a PTY; `cd` persists per user. SOP architecture/admin-terminal.md; CLAUDE.md Rule #6 amended.
   225 tests green.
+- **Admin Terminal → FULL ROOT + failover (D-22)** per owner decision. Code (deployed): timeout removed by
+  default (`DTM_TERMINAL_TIMEOUT=0`), output cap configurable (`DTM_TERMINAL_MAXOUT`, 1 MB). Root via
+  owner-installed `deploy/sudoers-dtm-ai-terminal.snippet` (NOPASSWD: ALL) + `deploy/dtm-ai.service.d/
+  10-full-access.conf` (un-sandbox so sudo works). Independent recovery console on :8091 = root,
+  un-sandboxed, NOT restarted by deploys → survives a broken update (`deploy/dtm-ai-recovery.service`).
+  ⚠ OWNER must install the 3 privileged files as root (I can't take root). Risk accepted in D-22:
+  stolen admin session = full takeover; channel is still plain HTTP (no TLS) — add TLS later.
+  **Deploy flow change:** restart ONLY `dtm-ai`, never `dtm-ai-recovery`.
 
 ## 2026-06-09 (cont.) — usable memory/KB + living-memory model
 - KB CRUD shipped (read modal, download, New/Upload, edit, **rename/move**, delete); bundled `reference/`
