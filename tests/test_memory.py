@@ -66,6 +66,28 @@ class Vault(unittest.TestCase):
         self.assertIsNone(self.v.read_kb_doc("kb/does/not/exist.md"))
         self.assertIsNone(self.v.read_kb_doc("../../etc/passwd"))  # not enumerated → None, no traversal
 
+    def test_client_registry(self):
+        self.assertEqual(self.v.list_clients(), [])
+        self.assertTrue(self.v.add_client("acme")["ok"])
+        self.assertIn("acme", self.v.list_clients())               # registered with no memory yet
+        self.assertIn("error", self.v.add_client("*"))             # wildcard rejected
+        self.assertTrue(self.v.remove_client("acme")["ok"])
+        self.assertNotIn("acme", self.v.list_clients())
+        self.assertIn("error", self.v.remove_client("ghost"))
+
+    def test_kb_write_and_delete(self):
+        r = self.v.write_kb_doc("runbooks/onboarding", "# Onboarding\nstep 1")
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["doc"], "kb/runbooks/onboarding.md")    # .md appended, lands under kb/
+        self.assertIn("Onboarding", self.v.read_kb_doc("kb/runbooks/onboarding.md"))
+        self.assertIn("kb/runbooks/onboarding.md", self.v.list_kb())
+        self.assertTrue(self.v.delete_kb_doc("kb/runbooks/onboarding.md")["ok"])
+        self.assertIsNone(self.v.read_kb_doc("kb/runbooks/onboarding.md"))
+
+    def test_kb_write_traversal_and_reference_protected(self):
+        self.assertIn("error", self.v.write_kb_doc("../../etc/evil", "x"))      # traversal blocked
+        self.assertIn("error", self.v.delete_kb_doc("reference/anything.md"))    # bundled = read-only
+
 
 class MemorySkills(unittest.TestCase):
     def setUp(self):

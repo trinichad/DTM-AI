@@ -100,8 +100,9 @@
       <span class="pill bg-emerald-500/15 text-emerald-300 ml-1 flex items-center gap-1"><i data-lucide="shield-check" class="text-[13px]"></i> READ-ONLY</span>
       <div class="ml-auto flex items-center gap-2">
         <div class="relative"><i data-lucide="building-2" class="absolute left-3 top-2.5 text-slate-500 text-sm"></i>
-          <input id="tenant" value="*" title="Client / tenant"
-            class="w-36 bg-ink/70 border border-edge rounded-xl pl-9 pr-3 py-2 text-sm focus:border-accent focus:outline-none"/></div>
+          <input id="tenant" value="*" title="Client / tenant — type or pick" list="clientDL"
+            class="w-36 bg-ink/70 border border-edge rounded-xl pl-9 pr-3 py-2 text-sm focus:border-accent focus:outline-none"/>
+          <datalist id="clientDL"></datalist></div>
       </div>
     </header>
     <section id="view" class="flex-1 overflow-auto p-6"></section>
@@ -237,6 +238,45 @@ async function openKbDoc(doc){
   ov.onclick=e=>{ if(e.target===ov) close(); };
   document.addEventListener('keydown',function onEsc(e){ if(e.key==='Escape'){ close(); document.removeEventListener('keydown',onEsc); } });
 }
+// Download a KB doc as a .md file (client-side blob).
+async function downloadKbDoc(doc){
+  const r=await api('GET','/api/kb?doc='+encodeURIComponent(doc));
+  if(!r||r.content==null){ toast('Could not load doc',false); return; }
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([r.content],{type:'text/markdown'}));
+  a.download=doc.split('/').pop()||'doc.md'; document.body.appendChild(a); a.click();
+  a.remove(); URL.revokeObjectURL(a.href);
+}
+// Create / upload / edit a KB doc (saves under vault/kb/). doc=null => new.
+async function openKbEditor(doc){
+  let name='', content='';
+  if(doc){ const r=await api('GET','/api/kb?doc='+encodeURIComponent(doc)); if(r&&r.content!=null){ content=r.content; name=doc.replace(/^kb\//,''); } }
+  const ov=document.createElement('div');
+  ov.className='fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4';
+  ov.innerHTML=`<div class="card glass max-w-2xl w-full max-h-[88vh] flex flex-col">
+    <div class="flex items-center gap-2 p-4 border-b border-edge shrink-0"><i data-lucide="file-pen-line" class="text-accent"></i><span class="font-semibold">${doc?'Edit KB doc':'New / upload KB doc'}</span><button class="kbxclose ml-auto text-slate-400 hover:text-rose-300"><i data-lucide="x"></i></button></div>
+    <div class="p-4 space-y-3 overflow-auto flex-1 flex flex-col">
+      <div class="flex gap-2 items-center">
+        <input id="kbName" placeholder="filename, e.g. runbooks/onboarding.md" value="${esc(name)}" ${doc?'readonly':''} class="flex-1 bg-ink/70 border border-edge rounded-lg px-3 py-2 text-sm focus:border-accent focus:outline-none ${doc?'opacity-60':''}"/>
+        <label class="text-xs text-slate-400 hover:text-accent cursor-pointer inline-flex items-center gap-1 shrink-0"><i data-lucide="upload" class="text-[12px]"></i> Upload .md<input id="kbFile" type="file" accept=".md,.markdown,.txt" class="hidden"/></label>
+      </div>
+      <textarea id="kbBody" placeholder="# Markdown content…" class="flex-1 min-h-[40vh] bg-ink/70 border border-edge rounded-lg p-3 text-xs font-mono text-slate-200 focus:border-accent focus:outline-none" spellcheck="false">${esc(content)}</textarea>
+    </div>
+    <div class="flex gap-2 p-4 border-t border-edge shrink-0"><button id="kbSave" class="grad text-white rounded-lg px-4 py-2 text-sm font-semibold inline-flex items-center gap-1.5"><i data-lucide="save"></i> Save</button><span class="text-[11px] text-slate-500 self-center">Saved under vault/kb/ · searchable + readable by the AI</span></div></div>`;
+  document.body.appendChild(ov); icons();
+  const close=()=>ov.remove();
+  ov.querySelector('.kbxclose').onclick=close;
+  ov.onclick=e=>{ if(e.target===ov) close(); };
+  ov.querySelector('#kbFile').onchange=async e=>{ const f=e.target.files[0]; if(!f)return;
+    ov.querySelector('#kbBody').value=await f.text();
+    const nm=ov.querySelector('#kbName'); if(!nm.value && !nm.readOnly) nm.value=f.name; };
+  ov.querySelector('#kbSave').onclick=async()=>{
+    const nm=ov.querySelector('#kbName').value.trim(), bd=ov.querySelector('#kbBody').value;
+    if(!nm){ toast('Filename required',false); return; }
+    const r=await api('POST','/api/kb',{name:nm,content:bd});
+    if(r&&r.ok){ toast('Saved '+r.doc); close(); route('memory'); }
+    else toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can edit KB':('Save failed: '+((r&&r.error)||'')),false); };
+}
 function aiHtml(t){ let h=md(t.answer||'');
   if(t.answer&&hasTable(t.answer)){ const _n=parseTables(t.answer).length;
     h+=`<div class="mt-2.5"><button class="open-table inline-flex items-center gap-1.5 text-xs font-semibold grad text-white rounded-lg px-3.5 py-2 shadow-lg shadow-indigo-500/25 hover:brightness-110" data-answer="${encodeURIComponent(t.answer)}"><i data-lucide="table" class="text-[14px]"></i> Open formatted table${_n>1?`s (${_n})`:''}<span class="opacity-80 font-normal">· export CSV / Excel / PDF</span></button></div>`; }
@@ -314,12 +354,15 @@ const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt
 
 $('#loginForm').onsubmit=async e=>{e.preventDefault();
   try{const r=await api('POST','/api/login',{username:$('#u').value,password:$('#p').value});
-    if(r.ok){showApp();await loadMe();route('overview');}else $('#loginErr').textContent=r.error||'login failed';}
+    if(r.ok){showApp();await loadMe();loadClients();route('overview');}else $('#loginErr').textContent=r.error||'login failed';}
   catch(_){$('#loginErr').textContent='login failed';}};
 $('#logout').onclick=async()=>{await api('POST','/api/logout');showLogin();};
 $('#userCard').onclick=()=>route('settings');
 $('#tenant').onchange=e=>{TENANT=e.target.value.trim()||'*';route(current);};
 async function loadMe(){ try{ ME=await api('GET','/api/me'); renderUser(); }catch(_){} }
+function fillClientDL(clients){ const dl=$('#clientDL'); if(!dl)return;
+  dl.innerHTML='<option value="*">All clients</option>'+(clients||[]).map(c=>`<option value="${esc(c)}"></option>`).join(''); }
+async function loadClients(){ try{ const r=await api('GET','/api/clients'); fillClientDL(r.clients||[]); }catch(_){} }
 function renderUser(){ if(!ME)return; $('#userName').textContent=ME.username;
   $('#userRole').textContent=ME.role; $('#userAvatar').textContent=(ME.username||'?')[0].toUpperCase(); }
 
@@ -851,33 +894,56 @@ const VIEWS={
 
   async memory(){
     const d=await api('GET','/api/memory?tenant='+encodeURIComponent(TENANT));
-    const kb=d.kb.length
-      ? d.kb.map(k=>`<button class="kbdoc w-full text-left flex items-center gap-2 text-sm py-1.5 border-b border-edge/40 hover:text-accent" data-doc="${esc(k)}"><i data-lucide="file-text" class="text-slate-500 shrink-0"></i> <span class="truncate">${esc(k)}</span></button>`).join('')
-      : '<div class="text-slate-500 text-sm py-4">No KB docs yet. Add markdown under <span class="font-mono">vault/kb/</span> — bundled vendor references appear here too.</div>';
+    fillClientDL(d.clients);
+    // Clients — add / pick / delete
+    const chips=d.clients.length
+      ? d.clients.map(c=>`<span class="inline-flex items-center rounded-lg border ${c===TENANT?'border-accent bg-accent/10':'border-edge bg-white/5'}"><button class="memcli pl-2.5 pr-1 py-1 text-xs ${c===TENANT?'text-accent':'text-slate-300'}" data-c="${esc(c)}">${esc(c)}</button><button class="memdel pr-1.5 py-1 text-slate-500 hover:text-rose-400" data-c="${esc(c)}" title="Delete client + memory"><i data-lucide="x" class="text-[11px]"></i></button></span>`).join('')
+      : '<span class="text-xs text-slate-500">No clients yet — click “Add client”.</span>';
+    const clientsPanel=`<div class="card p-4 mb-4">
+        <div class="flex items-center gap-2 mb-2"><i data-lucide="building-2" class="text-accent text-sm"></i><span class="font-semibold text-sm">Clients</span>
+          <button id="cliAdd" class="ml-auto text-xs grad text-white rounded-lg px-2.5 py-1 inline-flex items-center gap-1"><i data-lucide="plus" class="text-[12px]"></i> Add client</button></div>
+        <div class="flex flex-wrap gap-2 items-center">${chips}</div></div>`;
+    // Per-client memory + add-note
     let mem;
     if(TENANT==='*'){
-      mem=`<div class="text-slate-400 text-sm">Memory is per-client. Pick a client in the top-right selector${d.clients.length?' (or below)':''} to view and add notes.</div>`;
+      mem='<div class="text-slate-400 text-sm">Pick a client above (or in the top-right box) to view and add its memory.</div>';
     } else {
       const body=d.memory.trim()
         ? `<pre class="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed font-sans mb-3 max-h-96 overflow-auto">${esc(d.memory)}</pre>`
-        : `<div class="text-slate-500 text-sm mb-3">No memory saved for <span class="text-slate-300">${esc(TENANT)}</span> yet. Add a note below — or the AI saves notes here as it learns about this client.</div>`;
-      mem=body+`<div class="flex gap-2"><input id="memNote" placeholder="Add a note about ${esc(TENANT)} (e.g. firewall model, recurring issue)…" class="flex-1 bg-ink/70 border border-edge rounded-lg px-3 py-2 text-sm focus:border-accent focus:outline-none"/><button id="memSave" class="grad text-white rounded-lg px-3 text-sm font-semibold inline-flex items-center gap-1"><i data-lucide="plus"></i> Save</button></div>`;
+        : `<div class="text-slate-500 text-sm mb-3">No memory saved for <span class="text-slate-300">${esc(TENANT)}</span> yet. Add a note below — or the AI saves notes as it learns.</div>`;
+      mem=body+`<div class="flex gap-2"><input id="memNote" placeholder="Add a note about ${esc(TENANT)}…" class="flex-1 bg-ink/70 border border-edge rounded-lg px-3 py-2 text-sm focus:border-accent focus:outline-none"/><button id="memSave" class="grad text-white rounded-lg px-3 text-sm font-semibold inline-flex items-center gap-1"><i data-lucide="plus"></i> Save</button></div>`;
     }
-    const chips=d.clients.length?`<div class="text-[11px] text-slate-500 mt-4 mb-1">Client notebooks:</div><div class="flex flex-wrap gap-2">${d.clients.map(c=>`<button class="memcli pill bg-white/5 hover:bg-white/10 border border-edge text-slate-300" data-c="${esc(c)}">${esc(c)}</button>`).join('')}</div>`:'';
-    $('#view').innerHTML=`<div class="grid gap-4 lg:grid-cols-3 max-w-5xl">
-      <div class="card p-5 lg:col-span-2"><div class="flex items-center gap-2 mb-3 font-semibold"><i data-lucide="brain" class="text-accent"></i> Memory — ${esc(TENANT==='*'?'all clients':TENANT)}</div>${mem}${chips}</div>
-      <div class="card p-5"><div class="flex items-center gap-2 mb-3 font-semibold"><i data-lucide="book-open" class="text-accent"></i> Knowledge base</div><div class="text-[11px] text-slate-500 mb-2">Click a doc to read it.</div>${kb}</div></div>`;
+    // KB list with CRUD (reference/ docs are bundled → view + download only)
+    const kbRow=k=>{const ref=k.indexOf('reference/')===0;return `<div class="flex items-center gap-1 text-sm py-1.5 border-b border-edge/40"><button class="kbdoc flex-1 text-left flex items-center gap-2 hover:text-accent min-w-0" data-doc="${esc(k)}"><i data-lucide="file-text" class="text-slate-500 shrink-0"></i> <span class="truncate">${esc(k)}</span>${ref?' <span class="pill bg-white/5 text-slate-500 text-[9px] shrink-0">bundled</span>':''}</button><button class="kbdl text-slate-500 hover:text-accent shrink-0" data-doc="${esc(k)}" title="Download"><i data-lucide="download" class="text-[12px]"></i></button>${ref?'':`<button class="kbedit text-slate-500 hover:text-accent shrink-0" data-doc="${esc(k)}" title="Edit"><i data-lucide="pencil" class="text-[12px]"></i></button><button class="kbdel text-slate-500 hover:text-rose-400 shrink-0" data-doc="${esc(k)}" title="Delete"><i data-lucide="trash-2" class="text-[12px]"></i></button>`}</div>`;};
+    const kb=d.kb.length?d.kb.map(kbRow).join(''):'<div class="text-slate-500 text-sm py-4">No KB docs yet.</div>';
+    $('#view').innerHTML=`<div class="max-w-5xl">${clientsPanel}
+      <div class="grid gap-4 lg:grid-cols-3">
+        <div class="card p-5 lg:col-span-2"><div class="flex items-center gap-2 mb-3 font-semibold"><i data-lucide="brain" class="text-accent"></i> Memory — ${esc(TENANT==='*'?'all clients':TENANT)}</div>${mem}</div>
+        <div class="card p-5"><div class="flex items-center gap-2 mb-3 font-semibold"><i data-lucide="book-open" class="text-accent"></i> Knowledge base<button id="kbNew" class="ml-auto text-xs grad text-white rounded-lg px-2.5 py-1 inline-flex items-center gap-1"><i data-lucide="plus" class="text-[12px]"></i> New / Upload</button></div><div class="text-[11px] text-slate-500 mb-2">Click to read · download · edit/delete your kb/ docs.</div>${kb}</div>
+      </div></div>`;
     icons();
     document.querySelectorAll('.memcli').forEach(b=>b.onclick=()=>{TENANT=b.dataset.c;$('#tenant').value=TENANT;route('memory');});
+    document.querySelectorAll('.memdel').forEach(b=>b.onclick=async()=>{const c=b.dataset.c;
+      if(!confirm(`Delete client “${c}” and its saved memory? This cannot be undone.`))return;
+      const r=await api('DELETE','/api/clients/'+encodeURIComponent(c));
+      if(r&&r.removed){ toast('Client removed'); if(TENANT===c){TENANT='*';$('#tenant').value='*';} loadClients(); route('memory'); }
+      else toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can manage clients':('Failed: '+((r&&r.error)||'')),false);});
+    $('#cliAdd').onclick=async()=>{const id=prompt('New client id (short slug, e.g. acme or northwind-co):'); if(id===null)return;
+      const r=await api('POST','/api/clients',{id});
+      if(r&&r.ok){ toast('Client added: '+r.id); TENANT=r.id; $('#tenant').value=r.id; loadClients(); route('memory'); }
+      else toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can add clients':('Failed: '+((r&&r.error)||'')),false);};
+    const ms=$('#memSave'); if(ms) ms.onclick=async()=>{const note=$('#memNote').value.trim(); if(!note){toast('Type a note first',false);return;}
+      ms.disabled=true; const r=await api('POST','/api/memory',{tenant:TENANT,note});
+      if(r&&r.ok){ toast('Note saved'); route('memory'); } else { toast((r&&r.error)?('Save failed: '+r.error):'Save failed',false); ms.disabled=false; }};
+    const mn=$('#memNote'); if(mn) mn.onkeydown=e=>{ if(e.key==='Enter'){e.preventDefault(); const b=$('#memSave'); if(b)b.click();} };
     document.querySelectorAll('.kbdoc').forEach(b=>b.onclick=()=>openKbDoc(b.dataset.doc));
-    const ms=$('#memSave'); if(ms) ms.onclick=async()=>{
-      const note=$('#memNote').value.trim(); if(!note){ toast('Type a note first',false); return; }
-      ms.disabled=true;
-      const r=await api('POST','/api/memory',{tenant:TENANT,note});
-      if(r&&r.ok){ toast('Note saved to '+TENANT+' memory'); route('memory'); }
-      else { toast((r&&r.error)?('Save failed: '+r.error):'Save failed',false); ms.disabled=false; }
-    };
-    const mn=$('#memNote'); if(mn) mn.onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); const b=$('#memSave'); if(b) b.click(); } };
+    document.querySelectorAll('.kbdl').forEach(b=>b.onclick=()=>downloadKbDoc(b.dataset.doc));
+    document.querySelectorAll('.kbedit').forEach(b=>b.onclick=()=>openKbEditor(b.dataset.doc));
+    document.querySelectorAll('.kbdel').forEach(b=>b.onclick=async()=>{const doc=b.dataset.doc;
+      if(!confirm(`Delete “${doc}”? This cannot be undone.`))return;
+      const r=await api('DELETE','/api/kb?doc='+encodeURIComponent(doc));
+      if(r&&r.deleted){ toast('Doc deleted'); route('memory'); } else toast((r&&r.error)?('Delete failed: '+r.error):'Delete failed',false);});
+    $('#kbNew').onclick=()=>openKbEditor(null);
   },
 
   async settings(){
@@ -1076,7 +1142,7 @@ function bubble(who,html,fixedId){const id=fixedId||('m'+Math.random().toString(
     ${avatar}<div id="${id}" class="${mine?'bg-accent/15 border-accent/20':'card glass'} border rounded-2xl px-4 py-2.5 max-w-[80%] text-sm leading-relaxed">${html}</div></div>`);
   $('#msgs').scrollTop=1e9;icons();return id;}
 
-(async()=>{try{await loadMe();if(!ME)throw 0;showApp();route('overview');}catch(_){showLogin();}})();
+(async()=>{try{await loadMe();if(!ME)throw 0;showApp();loadClients();route('overview');}catch(_){showLogin();}})();
 </script>
 </body>
 </html>

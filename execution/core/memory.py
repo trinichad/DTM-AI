@@ -16,6 +16,7 @@ Stdlib-only. Vault path from DTM_VAULT_PATH (default: <project>/vault).
 from __future__ import annotations
 
 import re
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -108,6 +109,40 @@ class VaultStore:
                 continue
         return None
 
+    def write_kb_doc(self, name: str, content: str) -> dict[str, Any]:
+        """Create/overwrite a KB doc under vault/kb/ (the owner's runbooks). Traversal-safe; always
+        lands under kb/. Bundled reference/ docs are NOT writable here (they ship with the app)."""
+        name = (name or "").strip().lstrip("/")
+        if not name or ".." in name:
+            return {"error": "invalid doc name"}
+        if not name.endswith(".md"):
+            name += ".md"
+        target = self.kb_dir / name
+        try:
+            kb = self.kb_dir.resolve()
+            rt = target.resolve()
+            if rt != kb and not str(rt).startswith(str(kb) + "/"):
+                return {"error": "doc must live under kb/"}
+        except OSError:
+            return {"error": "bad path"}
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content or "", encoding="utf-8")
+        return {"ok": True, "doc": str(target.relative_to(self.root))}
+
+    def delete_kb_doc(self, doc: str) -> dict[str, Any]:
+        """Delete one of the owner's kb/ docs. Refuses bundled reference/ docs (read-only)."""
+        if not doc or doc.startswith("reference/"):
+            return {"error": "only your own kb/ docs can be deleted (reference docs ship with the app)"}
+        try:
+            kb = self.kb_dir.resolve()
+            rt = (self.root / doc).resolve()
+            if not (rt.is_file() and str(rt).startswith(str(kb) + "/")):
+                return {"error": "doc not found under kb/"}
+        except OSError:
+            return {"error": "bad path"}
+        rt.unlink()
+        return {"ok": True, "deleted": doc}
+
     def list_client_memories(self) -> list[str]:
         try:
             if not self.clients_dir.exists():
@@ -115,6 +150,32 @@ class VaultStore:
             return [d.name for d in sorted(self.clients_dir.iterdir()) if (d / "memory.md").exists()]
         except OSError:
             return []
+
+    def list_clients(self) -> list[str]:
+        """All registered clients (every dir under clients/, with or without saved memory yet)."""
+        try:
+            return [d.name for d in sorted(self.clients_dir.iterdir()) if d.is_dir()]
+        except OSError:
+            return []
+
+    def add_client(self, client_id: str) -> dict[str, Any]:
+        """Register a client (tenant) so it can be selected. Creates clients/<id>/. Idempotent."""
+        if (client_id or "").strip() in ("", "*"):
+            return {"error": "invalid client id"}
+        cid = _safe_tenant(client_id)
+        if cid in ("", "_unknown"):
+            return {"error": "invalid client id"}
+        (self.clients_dir / cid).mkdir(parents=True, exist_ok=True)
+        return {"ok": True, "id": cid}
+
+    def remove_client(self, client_id: str) -> dict[str, Any]:
+        """Remove a client and its saved memory (clients/<id>/). Destructive."""
+        cid = _safe_tenant(client_id)
+        d = self.clients_dir / cid
+        if not d.is_dir():
+            return {"error": "unknown client"}
+        shutil.rmtree(d)
+        return {"ok": True, "removed": cid}
 
     def append_memory(self, tenant_id: str, note: str, actor: str) -> dict[str, Any]:
         if tenant_id in ("", "*"):

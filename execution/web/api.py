@@ -81,6 +81,17 @@ class Api:
             return self._memory_add(body, user)
         if method == "GET" and path == "/api/kb":
             return self._kb_doc(query.get("doc") or "")
+        if method == "POST" and path == "/api/kb":
+            return self._require_admin(role) or self._kb_write(body, user)
+        if method == "DELETE" and path == "/api/kb":
+            return self._require_admin(role) or self._kb_delete(query.get("doc") or "", user)
+        if method == "GET" and path == "/api/clients":
+            from ..core.memory import VaultStore
+            return Resp(200, {"clients": VaultStore().list_clients()})
+        if method == "POST" and path == "/api/clients":
+            return self._require_admin(role) or self._client_add(body, user)
+        if method == "DELETE" and path.startswith("/api/clients/") and len(path.split("/")) == 4:
+            return self._require_admin(role) or self._client_remove(path.split("/")[3], user)
         if method == "GET" and path == "/api/build/candidates":
             from ..core import builder
             return self._require_admin(role) or Resp(200, {"candidates": builder.list_candidates()})
@@ -295,7 +306,7 @@ class Api:
         v = VaultStore()
         text = "" if tenant in ("", "*") else v.read_memory(tenant)
         return Resp(200, {"tenant": tenant, "memory": text, "kb": v.list_kb(),
-                          "clients": v.list_client_memories()})
+                          "clients": v.list_clients()})
 
     def _memory_add(self, body: dict, user: str) -> Resp:
         """Append a note to a client's long-term memory (internal vault write; audited)."""
@@ -319,6 +330,46 @@ class Api:
         content = VaultStore().read_kb_doc(doc)
         return (Resp(200, {"doc": doc, "content": content}) if content is not None
                 else Resp(404, {"error": "doc not found"}))
+
+    def _kb_write(self, body: dict, user: str) -> Resp:
+        """Create/overwrite a KB doc under vault/kb/ (owner-gated; audited)."""
+        from ..core.memory import VaultStore
+        r = VaultStore().write_kb_doc(body.get("name") or "", body.get("content") or "")
+        if r.get("error"):
+            return Resp(400, r)
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"kb_write={r['doc']}")
+        return Resp(200, r)
+
+    def _kb_delete(self, doc: str, user: str) -> Resp:
+        """Delete an owner kb/ doc (reference/ docs are read-only). Owner-gated; audited."""
+        from ..core.memory import VaultStore
+        r = VaultStore().delete_kb_doc(doc)
+        if r.get("error"):
+            return Resp(400, r)
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"kb_delete={doc}")
+        return Resp(200, r)
+
+    def _client_add(self, body: dict, user: str) -> Resp:
+        """Register a client (tenant) so it can be selected. Owner-gated; audited."""
+        from ..core.memory import VaultStore
+        r = VaultStore().add_client(body.get("id") or "")
+        if r.get("error"):
+            return Resp(400, r)
+        self.agent.audit.record(actor=user, tenant_id=r["id"], action="config_change",
+                                detail=f"client_add={r['id']}")
+        return Resp(200, r)
+
+    def _client_remove(self, cid: str, user: str) -> Resp:
+        """Remove a client + its saved memory (destructive). Owner-gated; audited."""
+        from ..core.memory import VaultStore
+        r = VaultStore().remove_client(cid)
+        if r.get("error"):
+            return Resp(404, r)
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"client_remove={cid}")
+        return Resp(200, r)
 
     # ── user accounts ───────────────────────────────────────────────────────
     def _require_admin(self, role: str) -> Optional[Resp]:
