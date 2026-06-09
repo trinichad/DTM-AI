@@ -97,6 +97,17 @@ class VaultStore:
     def list_kb(self) -> list[str]:
         return [str(p.relative_to(base)) for p, base in self._kb_files()]
 
+    def read_kb_doc(self, doc: str) -> Optional[str]:
+        """Return a KB/reference doc's content by its listed id (the path list_kb returns).
+        Only serves files already enumerated by _kb_files() → no path traversal."""
+        for md, base in self._kb_files():
+            try:
+                if str(md.relative_to(base)) == doc:
+                    return md.read_text(encoding="utf-8")
+            except (OSError, ValueError):
+                continue
+        return None
+
     def list_client_memories(self) -> list[str]:
         try:
             if not self.clients_dir.exists():

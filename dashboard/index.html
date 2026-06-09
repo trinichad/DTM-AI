@@ -222,6 +222,21 @@ async function saveSkill(s){
   toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can save skills'
         :('Save failed: '+((r&&r.error)||'')),false);
 }
+// View a knowledge-base / reference doc in a modal (Memory tab).
+async function openKbDoc(doc){
+  const r=await api('GET','/api/kb?doc='+encodeURIComponent(doc));
+  if(!r||r.content==null){ toast('Could not load doc',false); return; }
+  const ov=document.createElement('div');
+  ov.className='fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4';
+  ov.innerHTML=`<div class="card glass max-w-3xl w-full max-h-[85vh] flex flex-col">
+      <div class="flex items-center gap-2 p-4 border-b border-edge shrink-0"><i data-lucide="file-text" class="text-accent"></i><span class="font-semibold truncate flex-1">${esc(doc)}</span><button class="kbclose text-slate-400 hover:text-rose-300"><i data-lucide="x"></i></button></div>
+      <div class="overflow-auto p-5 text-sm text-slate-200 leading-relaxed space-y-2">${md(r.content)}</div></div>`;
+  document.body.appendChild(ov); icons();
+  const close=()=>ov.remove();
+  ov.querySelector('.kbclose').onclick=close;
+  ov.onclick=e=>{ if(e.target===ov) close(); };
+  document.addEventListener('keydown',function onEsc(e){ if(e.key==='Escape'){ close(); document.removeEventListener('keydown',onEsc); } });
+}
 function aiHtml(t){ let h=md(t.answer||'');
   if(t.answer&&hasTable(t.answer)){ const _n=parseTables(t.answer).length;
     h+=`<div class="mt-2.5"><button class="open-table inline-flex items-center gap-1.5 text-xs font-semibold grad text-white rounded-lg px-3.5 py-2 shadow-lg shadow-indigo-500/25 hover:brightness-110" data-answer="${encodeURIComponent(t.answer)}"><i data-lucide="table" class="text-[14px]"></i> Open formatted table${_n>1?`s (${_n})`:''}<span class="opacity-80 font-normal">· export CSV / Excel / PDF</span></button></div>`; }
@@ -836,19 +851,33 @@ const VIEWS={
 
   async memory(){
     const d=await api('GET','/api/memory?tenant='+encodeURIComponent(TENANT));
-    const kb=d.kb.length?d.kb.map(k=>`<div class="flex items-center gap-2 text-sm py-1.5 border-b border-edge/40"><i data-lucide="file-text" class="text-slate-500"></i> ${esc(k.replace(/^kb\//,''))}</div>`).join('')
-      :'<div class="text-slate-500 text-sm py-4">No KB docs yet. Add markdown under <span class="font-mono">vault/kb/</span>.</div>';
-    const mem=TENANT==='*'
-      ? `<div class="text-slate-400 text-sm">Pick a client in the top-right selector to view its memory. Memory is per-client.</div>`
-      : (d.memory.trim()
-          ? `<pre class="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed font-sans">${esc(d.memory)}</pre>`
-          : `<div class="text-slate-500 text-sm">No memory saved for <span class="text-slate-300">${esc(TENANT)}</span> yet — the AI writes notes here as it learns about this client.</div>`);
+    const kb=d.kb.length
+      ? d.kb.map(k=>`<button class="kbdoc w-full text-left flex items-center gap-2 text-sm py-1.5 border-b border-edge/40 hover:text-accent" data-doc="${esc(k)}"><i data-lucide="file-text" class="text-slate-500 shrink-0"></i> <span class="truncate">${esc(k)}</span></button>`).join('')
+      : '<div class="text-slate-500 text-sm py-4">No KB docs yet. Add markdown under <span class="font-mono">vault/kb/</span> — bundled vendor references appear here too.</div>';
+    let mem;
+    if(TENANT==='*'){
+      mem=`<div class="text-slate-400 text-sm">Memory is per-client. Pick a client in the top-right selector${d.clients.length?' (or below)':''} to view and add notes.</div>`;
+    } else {
+      const body=d.memory.trim()
+        ? `<pre class="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed font-sans mb-3 max-h-96 overflow-auto">${esc(d.memory)}</pre>`
+        : `<div class="text-slate-500 text-sm mb-3">No memory saved for <span class="text-slate-300">${esc(TENANT)}</span> yet. Add a note below — or the AI saves notes here as it learns about this client.</div>`;
+      mem=body+`<div class="flex gap-2"><input id="memNote" placeholder="Add a note about ${esc(TENANT)} (e.g. firewall model, recurring issue)…" class="flex-1 bg-ink/70 border border-edge rounded-lg px-3 py-2 text-sm focus:border-accent focus:outline-none"/><button id="memSave" class="grad text-white rounded-lg px-3 text-sm font-semibold inline-flex items-center gap-1"><i data-lucide="plus"></i> Save</button></div>`;
+    }
     const chips=d.clients.length?`<div class="text-[11px] text-slate-500 mt-4 mb-1">Client notebooks:</div><div class="flex flex-wrap gap-2">${d.clients.map(c=>`<button class="memcli pill bg-white/5 hover:bg-white/10 border border-edge text-slate-300" data-c="${esc(c)}">${esc(c)}</button>`).join('')}</div>`:'';
     $('#view').innerHTML=`<div class="grid gap-4 lg:grid-cols-3 max-w-5xl">
-      <div class="card p-5 lg:col-span-2"><div class="flex items-center gap-2 mb-3 font-semibold"><i data-lucide="brain" class="text-accent"></i> Memory — ${esc(TENANT)}</div>${mem}${chips}</div>
-      <div class="card p-5"><div class="flex items-center gap-2 mb-3 font-semibold"><i data-lucide="book-open" class="text-accent"></i> Knowledge base</div>${kb}</div></div>`;
-    document.querySelectorAll('.memcli').forEach(b=>b.onclick=()=>{TENANT=b.dataset.c;$('#tenant').value=TENANT;route('memory');});
+      <div class="card p-5 lg:col-span-2"><div class="flex items-center gap-2 mb-3 font-semibold"><i data-lucide="brain" class="text-accent"></i> Memory — ${esc(TENANT==='*'?'all clients':TENANT)}</div>${mem}${chips}</div>
+      <div class="card p-5"><div class="flex items-center gap-2 mb-3 font-semibold"><i data-lucide="book-open" class="text-accent"></i> Knowledge base</div><div class="text-[11px] text-slate-500 mb-2">Click a doc to read it.</div>${kb}</div></div>`;
     icons();
+    document.querySelectorAll('.memcli').forEach(b=>b.onclick=()=>{TENANT=b.dataset.c;$('#tenant').value=TENANT;route('memory');});
+    document.querySelectorAll('.kbdoc').forEach(b=>b.onclick=()=>openKbDoc(b.dataset.doc));
+    const ms=$('#memSave'); if(ms) ms.onclick=async()=>{
+      const note=$('#memNote').value.trim(); if(!note){ toast('Type a note first',false); return; }
+      ms.disabled=true;
+      const r=await api('POST','/api/memory',{tenant:TENANT,note});
+      if(r&&r.ok){ toast('Note saved to '+TENANT+' memory'); route('memory'); }
+      else { toast((r&&r.error)?('Save failed: '+r.error):'Save failed',false); ms.disabled=false; }
+    };
+    const mn=$('#memNote'); if(mn) mn.onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); const b=$('#memSave'); if(b) b.click(); } };
   },
 
   async settings(){

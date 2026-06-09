@@ -56,6 +56,16 @@ class Vault(unittest.TestCase):
         self.assertNotIn("/", _safe_tenant("../../etc/passwd"))
         self.assertNotIn("..", _safe_tenant("..%2f.."))
 
+    def test_read_kb_doc(self):
+        doc = next(d for d in self.v.list_kb() if d.endswith("firewall.md"))
+        content = self.v.read_kb_doc(doc)
+        self.assertIn("SonicWall", content)
+        self.assertIn("reset", content.lower())
+
+    def test_read_kb_doc_unknown_or_traversal_is_none(self):
+        self.assertIsNone(self.v.read_kb_doc("kb/does/not/exist.md"))
+        self.assertIsNone(self.v.read_kb_doc("../../etc/passwd"))  # not enumerated → None, no traversal
+
 
 class MemorySkills(unittest.TestCase):
     def setUp(self):

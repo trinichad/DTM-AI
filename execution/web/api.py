@@ -77,6 +77,10 @@ class Api:
             return self._require_admin(role) or self._delete_user(path.split("/")[3], user)
         if method == "GET" and path == "/api/memory":
             return self._memory(query.get("tenant") or "*")
+        if method == "POST" and path == "/api/memory":
+            return self._memory_add(body, user)
+        if method == "GET" and path == "/api/kb":
+            return self._kb_doc(query.get("doc") or "")
         if method == "GET" and path == "/api/build/candidates":
             from ..core import builder
             return self._require_admin(role) or Resp(200, {"candidates": builder.list_candidates()})
@@ -292,6 +296,29 @@ class Api:
         text = "" if tenant in ("", "*") else v.read_memory(tenant)
         return Resp(200, {"tenant": tenant, "memory": text, "kb": v.list_kb(),
                           "clients": v.list_client_memories()})
+
+    def _memory_add(self, body: dict, user: str) -> Resp:
+        """Append a note to a client's long-term memory (internal vault write; audited)."""
+        from ..core.memory import VaultStore
+        tenant = (body.get("tenant") or "").strip()
+        note = (body.get("note") or "").strip()
+        if not note:
+            return Resp(400, {"error": "note required"})
+        r = VaultStore().append_memory(tenant, note, user)
+        if r.get("error"):
+            return Resp(400, r)
+        self.agent.audit.record(actor=user, tenant_id=tenant or "*", action="config_change",
+                                tool="memory_note", detail=f"memory_add: {note[:80]}")
+        return Resp(200, r)
+
+    def _kb_doc(self, doc: str) -> Resp:
+        """Read one knowledge-base / reference doc by its listed path (no traversal)."""
+        from ..core.memory import VaultStore
+        if not doc:
+            return Resp(400, {"error": "doc required"})
+        content = VaultStore().read_kb_doc(doc)
+        return (Resp(200, {"doc": doc, "content": content}) if content is not None
+                else Resp(404, {"error": "doc not found"}))
 
     # ── user accounts ───────────────────────────────────────────────────────
     def _require_admin(self, role: str) -> Optional[Resp]:
