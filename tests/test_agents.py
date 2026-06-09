@@ -1,10 +1,10 @@
-"""hermes_agents tests — read the profile team, counts, SOUL edit, path-safety."""
+"""agents tests — read the profile team, counts, SOUL edit, path-safety, data-dir resolution."""
 import tempfile
 import unittest
 from pathlib import Path
 
-from execution.core.hermes_agents import (
-    create_agent, delete_agent, get_agent, list_agents, read_memory, set_soul,
+from execution.core.agents import (
+    _data_dir, create_agent, delete_agent, get_agent, list_agents, read_memory, set_soul,
     sync_manager_roster,
 )
 
@@ -38,7 +38,7 @@ class Agents(unittest.TestCase):
         write(pp / "MEMORY.md", "# Memory\n- learned a thing\n- learned another\n")
         write(pp / "USER.md", "DTM Consulting MSP team.\n")
         write(pp / "skills" / "cat" / "s" / "SKILL.md", "x")
-        self.cfg = StubCfg({"DTM_HERMES_DATA_DIR": str(self.d)})
+        self.cfg = StubCfg({"DTM_AGENTS_DIR": str(self.d)})   # native key
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -181,6 +181,18 @@ class Agents(unittest.TestCase):
         delete_agent("withextras", self.cfg)
         self.assertFalse(alias.exists())
         self.assertFalse(glog.exists())
+
+    def test_data_dir_resolution(self):
+        # native key wins
+        self.assertEqual(_data_dir(StubCfg({"DTM_AGENTS_DIR": "/x/agents"})), Path("/x/agents"))
+        # legacy Hermes data dir still honored (deploy keeps working until migrated)
+        self.assertEqual(_data_dir(StubCfg({"DTM_HERMES_DATA_DIR": "/srv/hermes-data"})),
+                         Path("/srv/hermes-data"))
+        # legacy skills dir → its parent
+        self.assertEqual(_data_dir(StubCfg({"DTM_HERMES_SKILLS_DIR": "/srv/hermes-data/skills"})),
+                         Path("/srv/hermes-data"))
+        # nothing set → <vault>/agents
+        self.assertEqual(_data_dir(StubCfg({"DTM_VAULT_PATH": "/v"})), Path("/v/agents"))
 
 
 if __name__ == "__main__":

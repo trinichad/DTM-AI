@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config import Config, get_config
-from .hermes_agents import _data_dir, _safe  # shared volume root + profile-name validation
+from .agents import _data_dir, _safe  # agents dir root + profile-name validation
 
 # Columns we surface, in board order. `archived` is hidden unless explicitly requested.
 BOARD_ORDER = ["triage", "todo", "ready", "running", "review", "blocked", "scheduled", "done"]

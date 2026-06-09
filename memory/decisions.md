@@ -2,6 +2,36 @@
 
 > Format: **D-N — Decision** · _Reason_ · (status)
 
+## Pivot — fully in-house, Hermes removed (2026-06-09)
+
+**D-19 — Remove the Nous Hermes runtime entirely; build the brain, specialist profiles, memory,
+delegation, and learning skills NATIVELY inside DTM AI as one unified system.**
+_Reason: owner wants a wholly in-house build with no third-party agent runtime to depend on or trust
+("it's our thing — we make the rules"). Inventory showed the native brain already exists and is the
+default engine (`execution/agent.py` bounded tool-call loop + `router.py` + `dispatch.py` + `memory.py`
+VaultStore + `builder.py` sandbox); Hermes was only an alternate chat engine (`hermes_bridge.py`) + a
+delegation path (`hermes_kanban.py` + a root-owned sudo wrapper). So removal is mostly delete+repoint,
+not build-from-scratch. Net security/control win: deletes a third-party agent runtime with
+terminal/code/file/browser capability, the Docker fence whose sole purpose was containing that runtime,
+and the root-owned sudo kanban wrapper + docker-exec bridge. Native also unlocks per-profile chat
+(Hermes' api_server had no per-profile selector — the only reason delegation had to go through a kanban
+board, D-18)._
+**Supersedes:** D-12 (Hermes as the brain), D-17 (Docker fence for Hermes), D-18 (delegation via Hermes
+kanban + wrapper), and the "keep agent execution in a separate fenced process" part of D-1. **The
+FastAPI backend ⇄ TypeScript dashboard split (rest of D-1) stays.**
+**Preserved (these protect CLIENTS/TENANTS, never were about Hermes):** read-only by default; audit
+every call; tenant isolation absolute (Rule #4); validate tool args (Rule #3); no free-form shell
+(Rule #6); fail closed (Rule #8); secrets fingerprint-only (I-3); config kill-switch (I-4); git
+rollback (I-6); SOP-before-code (I-7).
+**I-5 stance:** the "separate sandboxed coding agent / no shared creds" framing was anti-Hermes and is
+relaxed; KEEP a one-click human-merge gate for brand-new EXECUTABLE primitives (LLM-written code that
+touches live client systems is the highest-risk surface). Learned skills = playbooks composing already-
+enabled primitives (no new code) → no merge gate, per D-4-reframed-by-D-15.
+**Defaults taken (owner dismissed the option prompts; chosen + stated, override anytime):** big-bang
+cutover (no parallel Hermes fallback); delegation store = native `TaskStore` following the existing
+SQLite-dev/Postgres-prod store pattern (not premature Postgres, not a standalone board file); learning
+skills = playbooks. _(locked by owner 2026-06-09; build in 6 phases — see task_plan.md CURRENT FOCUS.)_
+
 ## Locked by user (2026-06-01 Blueprint discovery)
 
 **D-1 — Two-process split: Python FastAPI agent backend + TypeScript dashboard, joined by a typed

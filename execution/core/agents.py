@@ -1,8 +1,15 @@
-"""Read/edit the DTM AI specialist agent team. Each agent is a Hermes profile on the shared
-volume: AtlasOps Manager is the `default` profile (the active one chat flows through); the
-specialists live under `profiles/<name>/`. Surfaces each agent's SOUL, role, kanban description,
-brain (cloud/local), and how it has "compounded" — memory entries, skills, session count — for
-the dashboard Agents tab. Edits write the profile's SOUL.md (loaded fresh by Hermes per message).
+"""Read/edit the DTM AI specialist agent team — native profiles, no external runtime.
+
+Each agent is a profile on disk under the DTM AI agents dir: the AtlasOps Manager is the `default`
+profile (the one chat flows through by default); specialists live under `profiles/<name>/`. A
+profile is a folder of human-editable markdown + yaml — SOUL.md (persona/role), profile.yaml
+(routing description), config.yaml (preferred model), memories/, sessions/, skills/ — so the team
+is git-trackable, backup-able, and editable by hand or in the dashboard Agents tab.
+
+Profiles resolve from (in order): DTM_AGENTS_DIR, the legacy DTM_HERMES_DATA_DIR /
+DTM_HERMES_SKILLS_DIR (so an existing deployment keeps reading its current profiles until migrated),
+else <vault>/agents (DTM_VAULT_PATH or <project>/vault). Edits write the profile's SOUL.md; the
+agent loop loads it fresh on the next turn.
 """
 from __future__ import annotations
 
@@ -12,7 +19,11 @@ from pathlib import Path
 from typing import Optional
 
 from .config import Config, get_config
-from .hermes_brain import _MODEL_RE
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Matches the top-level `model:` block in a profile's config.yaml (the `model:` line + indented body).
+_MODEL_RE = re.compile(r"(?m)^model:\n(?:[ \t]+.*\n)*")
 
 _NAME_RE = re.compile(r"^[a-z0-9_-]+$")
 
@@ -24,9 +35,18 @@ def _safe(name: str) -> str:
 
 
 def _data_dir(cfg: Config) -> Path:
-    skills = cfg.get("DTM_HERMES_SKILLS_DIR")
-    return Path(cfg.get("DTM_HERMES_DATA_DIR")
-                or (str(Path(skills).parent) if skills else str(Path.home() / ".hermes")))
+    """The agents dir holding the manager (at root) + specialists (under profiles/).
+    DTM_AGENTS_DIR wins; then legacy Hermes keys (DTM_HERMES_DATA_DIR, or the parent of
+    DTM_HERMES_SKILLS_DIR) so a not-yet-migrated deployment keeps reading its profiles;
+    else <vault>/agents (DTM_VAULT_PATH or <project>/vault)."""
+    explicit = cfg.get("DTM_AGENTS_DIR") or cfg.get("DTM_HERMES_DATA_DIR")
+    if explicit:
+        return Path(explicit)
+    skills = cfg.get("DTM_HERMES_SKILLS_DIR")          # legacy: infer the data root from skills/
+    if skills:
+        return Path(skills).parent
+    vault = cfg.get("DTM_VAULT_PATH") or str(_PROJECT_ROOT / "vault")
+    return Path(vault) / "agents"
 
 
 def _profile_dir(cfg: Config, name: str) -> Path:
@@ -157,7 +177,7 @@ def set_soul(name: str, text: str, cfg: Optional[Config] = None) -> dict:
     pd = _profile_dir(cfg, _safe(name))
     if not pd.is_dir():
         raise FileNotFoundError(f"unknown agent '{name}'")
-    (pd / "SOUL.md").write_text(text, encoding="utf-8")   # loaded fresh by Hermes next message
+    (pd / "SOUL.md").write_text(text, encoding="utf-8")   # the agent loop loads it fresh next turn
     if name != "default":                 # a specialist's role/name may have changed → refresh roster
         _sync_safe(cfg)
     return get_agent(name, cfg)
@@ -236,7 +256,7 @@ def _default_soul(name: str, role: str) -> str:
         "",
         "## Operating environment",
         "- You are a DTM AI specialist agent. Reach client systems ONLY through the registered",
-        "  DTM AI tools (the MCP fence) — never free-form shell, never invent identifiers or facts.",
+        "  DTM AI tools (the dispatch fence) — never free-form shell, never invent identifiers or facts.",
         "- Read-only by default. If a tool didn't return it, say you don't know and cite your sources.",
         "",
     ]
@@ -245,12 +265,11 @@ def _default_soul(name: str, role: str) -> str:
 
 def create_agent(name: str, soul: str = "", description: str = "", role: str = "",
                  cfg: Optional[Config] = None) -> dict:
-    """Add a new specialist agent = a fresh Hermes profile on disk under `profiles/<name>/`.
+    """Add a new specialist agent = a fresh profile on disk under `profiles/<name>/`.
 
-    Hermes discovers profiles by scanning that directory, so writing the files IS the create —
-    no `docker exec` needed (the web service has RW to the shared volume). The new profile inherits
-    the manager's full Hermes config (the same MCP fence + tools, cloud brain) so it can reach DTM
-    AI's tools immediately; its brain can be swapped to local per-agent afterward.
+    Profiles are discovered by scanning that directory, so writing the files IS the create. The new
+    profile inherits the manager's config.yaml (preferred model) so it answers immediately through
+    the same DTM AI tools; its model can be changed per-agent afterward.
     """
     cfg = cfg or get_config()
     name = _safe(name)
@@ -281,8 +300,8 @@ def create_agent(name: str, soul: str = "", description: str = "", role: str = "
 def delete_agent(name: str, cfg: Optional[Config] = None) -> dict:
     """Remove a specialist agent (its whole profile dir). The manager (`default`) is protected.
 
-    Best-effort cleanup of the per-profile alias + gateway logs Hermes may have created so a deleted
-    agent leaves nothing behind.
+    Best-effort cleanup of any per-profile alias + gateway logs a prior runtime may have created so a
+    deleted agent leaves nothing behind.
     """
     cfg = cfg or get_config()
     name = _safe(name)

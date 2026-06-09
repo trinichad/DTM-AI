@@ -13,7 +13,49 @@ Huntress). Recent: server-side multi-conversation chat, AuthStore concurrency fi
 (2026-06-03) for the authoritative current state + open list. Next big feature: Microsoft 365 / Entra.
 _(This phased list below is the original blueprint; many items are now ✅ — progress.md is the live log.)_
 
-## ► CURRENT FOCUS — Hermes brain on Docker (game plan, 2026-06-04)
+## ► CURRENT FOCUS — Remove Hermes, unify in-house (2026-06-09, D-19)
+
+**Decision:** Owner chose a fully in-house build — remove the Nous Hermes runtime entirely and build the
+brain, specialist profiles, memory, delegation, and learning skills natively inside DTM AI. Inventory
+realization: the native brain ALREADY exists and is the default chat engine (`execution/agent.py`
+bounded tool-call loop + `router.py` + `dispatch.py` + `memory.py` VaultStore + `builder.py` sandbox).
+Hermes is only an ALTERNATE engine (`hermes_bridge.py`) plus a delegation path (`hermes_kanban.py` +
+root-owned sudo wrapper). So this is mostly DELETE + repoint, not build-from-scratch. Native also unlocks
+per-profile chat (Hermes' api_server had no profile selector — the only reason delegation needed a kanban
+board, D-18) and deletes the sudo wrapper + docker-exec bridge.
+
+**Safety floors PRESERVED (protect clients/tenants, not "anti-Hermes"):** read-only default, audit every
+call, tenant isolation, validate tool args, no free-form shell, fail closed, secrets fingerprint-only,
+config kill-switch (I-4), git rollback (I-6), SOP-before-code (I-7).
+**Relaxed:** two-process "fenced untrusted brain" (D-1 brain part), Hermes Capability Console/native
+toolsets (§7b), Docker fence-for-the-brain (D-17), delegation-via-kanban (D-18). The FastAPI⇄TS split
+(D-1) stays. I-5: keep a one-click human-merge gate for NEW executable primitives; learned skills =
+playbooks composing enabled primitives → no merge gate (D-4 reframed by D-15).
+
+**Build order (each phase tested green before the next):**
+1. **Native profiles** — refactor `core/hermes_agents.py` → `core/agents.py`; profiles become
+   DTM-AI-owned data under our own dir (not `~/.hermes`). Preserve SOUL/role/description/memory + roster.
+2. **Profile-aware loop** — `agent.py` loads a profile's SOUL as system prompt + its memory + its
+   enabled-tool set; chat can target a specialist directly.
+3. **Native delegation** — new `TaskStore` (SQLite-dev/Postgres-prod, same pattern as Audit/Approval/
+   Conversation stores) + a worker that runs `agent.py` AS a profile; repoint the Delegation UI off the
+   kanban wrapper. DELETE `hermes_kanban.py` + `deploy/hermes/dtm-ai-kanban.sh` + the sudoers snippet.
+4. **Learning skills** — learned skill = saved PLAYBOOK composing already-trusted tools. After a
+   multi-step turn the AI offers "save this as a reusable skill?"; a DEDUP check searches existing skills
+   first; the agent RECALLS + reuses a matching skill before re-deriving. New executable primitives still
+   go through `builder.py` sandbox + human merge.
+5. **Strip Hermes** — remove `hermes_bridge.py`, `mcp_server.py`, `hermes_brain.py`, `hermes_skills.py`,
+   the `engine=="hermes"` chat branch, Hermes routes + their tests.
+6. **Rewrite the law** — update `CLAUDE.md` (§1/§7b/invariants), `architecture/` SOPs; decommission the
+   Hermes container on next deploy.
+
+**Defaults taken (owner dismissed the option prompts → chosen + stated):** big-bang cutover; delegation
+store = native `TaskStore`; learning skills = playbooks (executable-primitive authoring still gated).
+
+---
+
+## ► SUPERSEDED FOCUS — Hermes brain on Docker (game plan, 2026-06-04)
+> Superseded by **D-19 (2026-06-09)** — Hermes is being removed for a fully in-house build. Kept for history.
 
 Wire the **Nous Hermes Agent** in as the conversational brain, run inside **Docker** as the
 security fence (owner has NO root on the Ubuntu box → can't make a dedicated powerless user;
