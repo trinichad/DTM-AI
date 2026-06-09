@@ -8,43 +8,71 @@
   <script src="/vendor/lucide.js"></script>
   <script>
     tailwind.config = { darkMode: 'class', theme: { extend: {
-      colors: { ink:'#0a0e16', panel:'#0f1521', edge:'#1c2638', accent:'#6366f1', accent2:'#8b5cf6' },
+      colors: { ink:'#080b13', panel:'#0e141f', edge:'#202c40', accent:'#6366f1', accent2:'#8b5cf6',
+                ok:'#34d399', warn:'#fbbf24', danger:'#fb7185', info:'#38bdf8' },
       fontFamily: { sans: ['Inter','ui-sans-serif','system-ui','sans-serif'] },
       keyframes: {
         fadeup: { '0%':{opacity:0,transform:'translateY(8px)'}, '100%':{opacity:1,transform:'translateY(0)'} },
         pulseDot: { '0%,100%':{opacity:1}, '50%':{opacity:.3} },
         blink: { '0%,80%,100%':{opacity:.2}, '40%':{opacity:1} },
       },
-      animation: { fadeup:'fadeup .35s ease both', pulseDot:'pulseDot 1.8s ease-in-out infinite' },
+      animation: { fadeup:'fadeup .35s cubic-bezier(.4,0,.2,1) both', pulseDot:'pulseDot 1.8s ease-in-out infinite' },
     } } };
   </script>
   <link rel="stylesheet" href="/vendor/fonts.css">
   <style>
+    :root{--ease:cubic-bezier(.4,0,.2,1);--t:180ms}
+    html{color-scheme:dark}
     body{font-family:Inter,system-ui,sans-serif;background:
-      radial-gradient(1100px 600px at 12% -8%, rgba(99,102,241,.16), transparent 60%),
-      radial-gradient(900px 500px at 100% 0%, rgba(139,92,246,.12), transparent 55%),
-      #0a0e16; min-height:100vh;}
-    ::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:#26324a;border-radius:9px}
-    ::-webkit-scrollbar-thumb:hover{background:#33415c}
-    .glass{background:rgba(15,21,33,.72);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
-    .pill{font-size:11px;padding:2px 9px;border-radius:9999px;font-weight:600;letter-spacing:.02em}
-    .card{background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,0));
-      border:1px solid rgba(255,255,255,.07);border-radius:16px}
-    .card-hover{transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease}
-    .card-hover:hover{transform:translateY(-2px);border-color:rgba(99,102,241,.4);
-      box-shadow:0 12px 40px -12px rgba(99,102,241,.35)}
-    .grad{background:linear-gradient(135deg,#6366f1,#8b5cf6)}
+      radial-gradient(1150px 620px at 12% -8%, rgba(99,102,241,.15), transparent 60%),
+      radial-gradient(950px 520px at 100% 0%, rgba(139,92,246,.11), transparent 55%),
+      #080b13; min-height:100vh;}
+    .tnum{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+    h1,h2,.heading{letter-spacing:-.011em}
+    ::-webkit-scrollbar{width:10px;height:10px}
+    ::-webkit-scrollbar-track{background:transparent}
+    ::-webkit-scrollbar-thumb{background:#212d44;border-radius:9px;border:2px solid transparent;background-clip:padding-box}
+    ::-webkit-scrollbar-thumb:hover{background:#33415c;background-clip:padding-box}
+
+    /* lift the dimmest tertiary text to meet ~4.5:1 on the dark base */
+    .text-slate-600{color:#6e7d96 !important}
+
+    /* visible keyboard focus everywhere — wins over the blanket focus:outline-none utilities.
+       Inputs signal focus via their own border+ring instead (set below), so suppress the outline there. */
+    :focus-visible{outline:2px solid rgba(129,140,248,.95) !important;outline-offset:2px}
+    input:focus-visible,textarea:focus-visible,select:focus-visible{outline:none !important}
+    input:focus,textarea:focus,select:focus{border-color:#6366f1 !important;box-shadow:0 0 0 3px rgba(99,102,241,.20)}
+
+    .glass{background:rgba(13,19,30,.72);backdrop-filter:blur(16px) saturate(140%);-webkit-backdrop-filter:blur(16px) saturate(140%)}
+    .pill{font-size:11px;padding:2px 9px;border-radius:9999px;font-weight:600;letter-spacing:.02em;line-height:1.45}
+    .card{background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.012));
+      border:1px solid rgba(255,255,255,.08);border-radius:16px;
+      box-shadow:inset 0 1px 0 0 rgba(255,255,255,.045), 0 10px 30px -20px rgba(0,0,0,.7)}
+    .card-hover{transition:transform var(--t) var(--ease),border-color var(--t) var(--ease),box-shadow var(--t) var(--ease)}
+    .card-hover:hover{transform:translateY(-2px);border-color:rgba(99,102,241,.45);
+      box-shadow:0 14px 44px -14px rgba(99,102,241,.4)}
+    .grad{background:linear-gradient(135deg,#6d6cf6,#8b5cf6);transition:filter var(--t) var(--ease),transform var(--t) var(--ease),box-shadow var(--t) var(--ease)}
+    .grad:hover{filter:brightness(1.08)}
+    .grad:active{transform:translateY(1px)}
     .grad-text{background:linear-gradient(135deg,#a5b4fc,#c4b5fd);-webkit-background-clip:text;background-clip:text;color:transparent}
-    .switch{position:relative;width:40px;height:22px;border-radius:9999px;background:#26324a;transition:.2s;cursor:pointer;flex:none}
-    .switch::after{content:'';position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:.2s}
-    .switch.on{background:linear-gradient(135deg,#6366f1,#8b5cf6)}
+    button:not(:disabled),[role=button]{cursor:pointer}
+    button:disabled{cursor:not-allowed}
+    .switch{position:relative;width:40px;height:22px;border-radius:9999px;background:#26324a;transition:.2s var(--ease);cursor:pointer;flex:none}
+    .switch::after{content:'';position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:.2s var(--ease);box-shadow:0 1px 2px rgba(0,0,0,.45)}
+    .switch.on{background:linear-gradient(135deg,#6d6cf6,#8b5cf6)}
     .switch.on::after{transform:translateX(18px)}
     .switch.disabled{opacity:.35;cursor:not-allowed}
     [data-lucide]{width:1em;height:1em;display:inline-block;vertical-align:-.125em}
-    .navi{display:flex;align-items:center;gap:.6rem;padding:.55rem .7rem;border-radius:11px;cursor:pointer;color:#94a3b8;font-weight:500;font-size:.875rem;position:relative;transition:.15s}
-    .navi:hover{background:rgba(255,255,255,.04);color:#e2e8f0}
-    .navi.active{background:linear-gradient(90deg,rgba(99,102,241,.18),rgba(139,92,246,.06));color:#fff}
+    .navi{display:flex;align-items:center;gap:.6rem;padding:.55rem .7rem;border-radius:11px;cursor:pointer;color:#94a3b8;font-weight:500;font-size:.875rem;position:relative;transition:.15s var(--ease)}
+    .navi:hover{background:rgba(255,255,255,.05);color:#e2e8f0}
+    .navi.active{background:linear-gradient(90deg,rgba(99,102,241,.20),rgba(139,92,246,.06));color:#fff}
     .navi.active::before{content:'';position:absolute;left:0;top:18%;height:64%;width:3px;border-radius:3px;background:linear-gradient(180deg,#6366f1,#8b5cf6)}
+
+    /* respect reduced-motion: kill animation + transition + smooth scroll */
+    @media (prefers-reduced-motion: reduce){
+      *,*::before,*::after{animation-duration:.001ms !important;animation-iteration-count:1 !important;
+        transition-duration:.001ms !important;scroll-behavior:auto !important}
+    }
   </style>
 </head>
 <body class="text-slate-200 antialiased">
@@ -88,7 +116,7 @@
       </button>
       <div class="px-1 flex items-center gap-2 text-xs text-slate-400">
         <span class="h-2 w-2 rounded-full bg-emerald-400 animate-pulseDot"></span><span>System online</span>
-        <button id="logout" class="ml-auto hover:text-slate-200 flex items-center gap-1"><i data-lucide="log-out"></i></button>
+        <button id="logout" aria-label="Log out" title="Log out" class="ml-auto hover:text-slate-200 flex items-center gap-1"><i data-lucide="log-out"></i></button>
       </div>
     </div>
   </aside>
@@ -100,7 +128,7 @@
       <span class="pill bg-emerald-500/15 text-emerald-300 ml-1 flex items-center gap-1"><i data-lucide="shield-check" class="text-[13px]"></i> READ-ONLY</span>
       <div class="ml-auto flex items-center gap-2">
         <div class="relative"><i data-lucide="building-2" class="absolute left-3 top-2.5 text-slate-500 text-sm"></i>
-          <input id="tenant" value="*" title="Client / tenant — type or pick" list="clientDL"
+          <input id="tenant" value="*" aria-label="Client / tenant filter" title="Client / tenant — type or pick" list="clientDL"
             class="w-36 bg-ink/70 border border-edge rounded-xl pl-9 pr-3 py-2 text-sm focus:border-accent focus:outline-none"/>
           <datalist id="clientDL"></datalist></div>
       </div>
@@ -507,8 +535,8 @@ const VIEWS={
             <div class="text-[12px] truncate ${active?'text-slate-100':'text-slate-300'}">${esc(c.title||'New chat')}</div>
             <div class="text-[10px] text-slate-500 flex items-center gap-1"><span class="truncate">${esc(c.tenant_id==='*'?'all clients':c.tenant_id)}</span><span>·</span><span class="shrink-0">${esc(ago(c.updated_at))}</span></div>
           </div>
-          <button class="convRen opacity-60 hover:opacity-100 text-slate-500 hover:text-accent shrink-0" data-id="${esc(c.id)}" title="Rename"><i data-lucide="pencil" class="text-[11px]"></i></button>
-          <button class="convDel opacity-60 hover:opacity-100 text-slate-500 hover:text-rose-400 shrink-0" data-id="${esc(c.id)}" title="Delete chat"><i data-lucide="trash-2" class="text-[12px]"></i></button>
+          <button class="convRen opacity-60 hover:opacity-100 text-slate-500 hover:text-accent shrink-0" data-id="${esc(c.id)}" aria-label="Rename conversation" title="Rename"><i data-lucide="pencil" class="text-[11px]"></i></button>
+          <button class="convDel opacity-60 hover:opacity-100 text-slate-500 hover:text-rose-400 shrink-0" data-id="${esc(c.id)}" aria-label="Delete conversation" title="Delete chat"><i data-lucide="trash-2" class="text-[12px]"></i></button>
         </div>`; }).join('');
       el.querySelectorAll('.convItem').forEach(it=>it.onclick=e=>{ if(e.target.closest('.convDel')||e.target.closest('.convRen'))return; openConv(it.dataset.id); });
       el.querySelectorAll('.convDel').forEach(b=>b.onclick=e=>{ e.stopPropagation(); delConv(b.dataset.id); });
@@ -668,7 +696,7 @@ const VIEWS={
   async agents(){
     const {agents}=await api('GET','/api/agents');
     if(!agents||!agents.length){ $('#view').innerHTML=`<div class="card p-8 text-center text-slate-400 max-w-2xl mx-auto">No agents yet — add one with the <span class="text-slate-200">+ Add agent</span> button.</div>`; return; }
-    const bpill=b=>`<span class="pill ${(b&&b.mode==='local')?'bg-emerald-500/15 text-emerald-300':'bg-sky-500/15 text-sky-300'} inline-flex items-center gap-1">${(b&&b.mode==='local')?'🔒':'☁'} ${esc((b&&b.model)||'—')}</span>`;
+    const bpill=b=>`<span class="pill ${(b&&b.mode==='local')?'bg-emerald-500/15 text-emerald-300':'bg-sky-500/15 text-sky-300'} inline-flex items-center gap-1"><i data-lucide="${(b&&b.mode==='local')?'lock':'cloud'}" class="text-[11px]"></i> ${esc((b&&b.model)||'—')}</span>`;
     const card=a=>`<div class="card card-hover p-4 cursor-pointer agent-card" data-id="${esc(a.id)}">
         <div class="flex items-start gap-3">
           <div class="h-10 w-10 rounded-xl ${a.is_manager?'grad':'bg-edge'} grid place-items-center shrink-0 ${a.is_manager?'shadow-lg shadow-indigo-500/30':''}"><i data-lucide="${a.is_manager?'crown':'bot'}" class="${a.is_manager?'text-white':'text-accent'} text-sm"></i></div>
@@ -697,7 +725,7 @@ const VIEWS={
           <div class="flex items-center gap-3 mb-1">
             <div class="h-11 w-11 rounded-xl ${a.is_manager?'grad':'bg-edge'} grid place-items-center shrink-0"><i data-lucide="${a.is_manager?'crown':'bot'}" class="${a.is_manager?'text-white':'text-accent'}"></i></div>
             <div><div class="font-semibold text-lg">${esc(a.name)}</div><div class="text-xs text-slate-400">${esc(a.role||'')} · profile <span class="font-mono">${esc(a.id)}</span></div></div>
-            <span class="ml-auto pill ${b.mode==='local'?'bg-emerald-500/15 text-emerald-300':'bg-sky-500/15 text-sky-300'} inline-flex items-center gap-1" title="The model this agent runs on (from its config.yaml).">${b.mode==='local'?'🔒':'☁'} ${esc(b.model||'—')}</span></div>
+            <span class="ml-auto pill ${b.mode==='local'?'bg-emerald-500/15 text-emerald-300':'bg-sky-500/15 text-sky-300'} inline-flex items-center gap-1" title="The model this agent runs on (from its config.yaml)."><i data-lucide="${b.mode==='local'?'lock':'cloud'}" class="text-[11px]"></i> ${esc(b.model||'—')}</span></div>
           <div class="text-xs text-slate-400 mt-2 mb-3">${esc(a.description||'')}</div>
           <div class="flex gap-4 text-[11px] text-slate-500 mb-4"><span><b class="text-slate-300">${a.skills}</b> skills</span><span><b class="text-slate-300">${a.memories}</b> memory entries</span><span><b class="text-slate-300">${a.sessions}</b> sessions</span></div>
           <div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1.5">SOUL.md — personality, mission, hard nos (loaded fresh each message)</div>
@@ -892,7 +920,7 @@ const VIEWS={
         <div class="text-[11px] uppercase tracking-wide text-slate-500 mb-2 flex items-center gap-1.5"><i data-lucide="folder"></i> ${esc(cat)}</div>
         <div class="grid gap-3 md:grid-cols-2">${list.map(s=>`<div class="card card-hover p-4">
           <div class="flex items-center gap-2"><i data-lucide="wand-sparkles" class="text-accent2"></i><span class="font-medium">${esc(s.name)}</span>
-            <button class="skillDel ml-auto text-slate-500 hover:text-rose-400" data-slug="${esc(s.slug||s.path)}" title="Delete this skill"><i data-lucide="trash-2" class="text-[12px]"></i></button></div>
+            <button class="skillDel ml-auto text-slate-500 hover:text-rose-400" data-slug="${esc(s.slug||s.path)}" aria-label="Delete this skill" title="Delete this skill"><i data-lucide="trash-2" class="text-[12px]"></i></button></div>
           <div class="text-xs text-slate-400 mt-1.5 leading-relaxed">${esc(s.description)||'<span class="text-slate-600">no description</span>'}</div>
           ${(s.tools&&s.tools.length)?`<div class="mt-2 flex flex-wrap gap-1">${s.tools.map(t=>`<span class="pill bg-white/5 text-slate-400 border border-edge text-[10px]">${esc(t)}</span>`).join('')}</div>`:''}
           <div class="text-[10px] text-slate-600 mt-2 font-mono">${esc(s.path)}</div></div>`).join('')}</div></div>`).join('');
@@ -908,7 +936,7 @@ const VIEWS={
     const d=await api('GET','/api/memory?tenant='+encodeURIComponent(TENANT));
     fillClientDL(d.clients);
     // Clients — searchable add / pick / delete (scales to hundreds; top-right box is also searchable)
-    const clientRow=c=>`<div class="cli-row flex items-center gap-1 rounded-lg ${c===TENANT?'bg-accent/10':'hover:bg-white/5'}" data-name="${esc(c.toLowerCase())}"><button class="memcli flex-1 flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-left min-w-0 ${c===TENANT?'text-accent':'text-slate-300'}" data-c="${esc(c)}"><i data-lucide="${c===TENANT?'check':'building'}" class="text-[12px] shrink-0"></i><span class="truncate">${esc(c)}</span></button><button class="memdel px-2 py-1.5 text-slate-500 hover:text-rose-400 shrink-0" data-c="${esc(c)}" title="Delete client + memory"><i data-lucide="x" class="text-[11px]"></i></button></div>`;
+    const clientRow=c=>`<div class="cli-row flex items-center gap-1 rounded-lg ${c===TENANT?'bg-accent/10':'hover:bg-white/5'}" data-name="${esc(c.toLowerCase())}"><button class="memcli flex-1 flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-left min-w-0 ${c===TENANT?'text-accent':'text-slate-300'}" data-c="${esc(c)}"><i data-lucide="${c===TENANT?'check':'building'}" class="text-[12px] shrink-0"></i><span class="truncate">${esc(c)}</span></button><button class="memdel px-2 py-1.5 text-slate-500 hover:text-rose-400 shrink-0" data-c="${esc(c)}" aria-label="Delete client and its memory" title="Delete client + memory"><i data-lucide="x" class="text-[11px]"></i></button></div>`;
     const cliRows=d.clients.length?d.clients.map(clientRow).join(''):'<div class="text-xs text-slate-500 py-1">No clients yet — click “Add client”.</div>';
     const clientsPanel=`<div class="card p-4 mb-4">
         <div class="flex items-center gap-2 mb-2"><i data-lucide="building-2" class="text-accent text-sm"></i><span class="font-semibold text-sm">Clients</span><span class="text-[11px] text-slate-500">${d.clients.length}</span>
@@ -927,7 +955,7 @@ const VIEWS={
         <div class="flex gap-2 mt-2 items-center"><button id="memSave" class="grad text-white rounded-lg px-4 py-2 text-sm font-semibold inline-flex items-center gap-1.5"><i data-lucide="save"></i> Save memory</button><span class="text-[11px] text-slate-500">Overwrites the current memory · prior version kept as backup · audited.</span></div>`;
     }
     // KB list with CRUD (reference/ docs are bundled → view + download only)
-    const kbRow=k=>{const ref=k.indexOf('reference/')===0;return `<div class="flex items-center gap-1 text-sm py-1.5 border-b border-edge/40"><button class="kbdoc flex-1 text-left flex items-center gap-2 hover:text-accent min-w-0" data-doc="${esc(k)}"><i data-lucide="file-text" class="text-slate-500 shrink-0"></i> <span class="truncate">${esc(k)}</span>${ref?' <span class="pill bg-white/5 text-slate-500 text-[9px] shrink-0">bundled</span>':''}</button><button class="kbdl text-slate-500 hover:text-accent shrink-0" data-doc="${esc(k)}" title="Download"><i data-lucide="download" class="text-[12px]"></i></button>${ref?'':`<button class="kbedit text-slate-500 hover:text-accent shrink-0" data-doc="${esc(k)}" title="Edit"><i data-lucide="pencil" class="text-[12px]"></i></button><button class="kbren text-slate-500 hover:text-accent shrink-0" data-doc="${esc(k)}" title="Rename / move"><i data-lucide="text-cursor-input" class="text-[12px]"></i></button><button class="kbdel text-slate-500 hover:text-rose-400 shrink-0" data-doc="${esc(k)}" title="Delete"><i data-lucide="trash-2" class="text-[12px]"></i></button>`}</div>`;};
+    const kbRow=k=>{const ref=k.indexOf('reference/')===0;return `<div class="flex items-center gap-1 text-sm py-1.5 border-b border-edge/40"><button class="kbdoc flex-1 text-left flex items-center gap-2 hover:text-accent min-w-0" data-doc="${esc(k)}"><i data-lucide="file-text" class="text-slate-500 shrink-0"></i> <span class="truncate">${esc(k)}</span>${ref?' <span class="pill bg-white/5 text-slate-500 text-[9px] shrink-0">bundled</span>':''}</button><button class="kbdl text-slate-500 hover:text-accent shrink-0" data-doc="${esc(k)}" aria-label="Download ${esc(k)}" title="Download"><i data-lucide="download" class="text-[12px]"></i></button>${ref?'':`<button class="kbedit text-slate-500 hover:text-accent shrink-0" data-doc="${esc(k)}" aria-label="Edit ${esc(k)}" title="Edit"><i data-lucide="pencil" class="text-[12px]"></i></button><button class="kbren text-slate-500 hover:text-accent shrink-0" data-doc="${esc(k)}" aria-label="Rename or move ${esc(k)}" title="Rename / move"><i data-lucide="text-cursor-input" class="text-[12px]"></i></button><button class="kbdel text-slate-500 hover:text-rose-400 shrink-0" data-doc="${esc(k)}" aria-label="Delete ${esc(k)}" title="Delete"><i data-lucide="trash-2" class="text-[12px]"></i></button>`}</div>`;};
     const kb=d.kb.length?d.kb.map(kbRow).join(''):'<div class="text-slate-500 text-sm py-4">No KB docs yet.</div>';
     $('#view').innerHTML=`<div class="max-w-5xl">${clientsPanel}
       <div class="grid gap-4 lg:grid-cols-3">
@@ -1115,7 +1143,7 @@ async function toggleCreds(integration, box){
       <label class="text-xs text-slate-400 flex items-center gap-1">${esc(f.key)}${f.required?'<span class="text-rose-400">*</span>':''}
         ${f.shadowed?'<span class="text-[10px] text-amber-400">(.env)</span>':''}
         ${f.set?`<span class="ml-auto text-[10px] text-slate-600 font-mono">${esc(f.fingerprint)}</span>
-          <button data-clearkey="${esc(f.key)}" class="cred-clear text-slate-500 hover:text-rose-300" title="Clear this value"><i data-lucide="x" class="text-[12px]"></i></button>`:''}</label>
+          <button data-clearkey="${esc(f.key)}" class="cred-clear text-slate-500 hover:text-rose-300" aria-label="Clear this value" title="Clear this value"><i data-lucide="x" class="text-[12px]"></i></button>`:''}</label>
       <input data-key="${esc(f.key)}" type="password" autocomplete="new-password"
         placeholder="${f.set?'•••••• (set) — type to replace':'not set'}"
         class="cred-in w-full bg-ink/80 border border-edge rounded-lg px-3 py-1.5 text-sm mt-1 focus:border-accent focus:outline-none"/></div>`).join('')}
