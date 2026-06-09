@@ -294,11 +294,19 @@ phases — each committed + pushed to `main`; Phases 1–5 + the frontend tidy d
 - **P6 Dashboard + docs** — removed inert Hermes UI (engine/brain toggles), wired the "save as skill?"
   prompt + native Skills view; updated CLAUDE.md §7b/I-5; SOP → `architecture/agents-delegation-skills.md`.
 - **Also retired the old Kaseya AI Link** (`kaseya-ai.service`, port 8088) — stopped + disabled.
+- **Hermes Docker containers stopped** (`hermes` + `hermes-dashboard`, `--restart=no`).
+- **Profile migration done (2026-06-09)** — copied manager + 7 specialists `/srv/hermes-data` →
+  `/opt/dtm-ai/vault/agents` (DTM-owned, gitignored, inside the service's `ReadWritePaths=/opt/dtm-ai`);
+  set `DTM_AGENTS_DIR`, commented the legacy `DTM_HERMES_SKILLS_DIR`. Verified LIVE: resolves to the new
+  path, 8 agents load, a roster-sync WRITE succeeds there, service healthy. Removed the repo's obsolete
+  `deploy/dtm-ai.service.d/hermes-rw.conf`. `/srv/hermes-data` left intact as a backup.
 
 ### Open / next
-1. **Migrate profiles** off `/srv/hermes-data` to a DTM-owned `DTM_AGENTS_DIR`, then drop the
-   `hermes-rw.conf` drop-in + the legacy env fallback.
-2. **Stop/remove the Hermes Docker container** on the box (nothing routes to it now).
-3. Optional: delete `/opt/kaseya-ai` (71 MB, owner's call).
-4. Delegation-worker quality: confirm the local model handles tool-calls well, or add a per-task cloud opt-in.
+1. **(owner, root)** Drop the now-obsolete drop-in: `sudo rm /etc/systemd/system/dtm-ai.service.d/hermes-rw.conf`
+   → `daemon-reload` → restart. Profiles are now in the `ReadWritePaths` base, so the `/srv/hermes-data` RW
+   grant is unneeded. (Functionally optional — leaving it is harmless.)
+2. Optional disk reclaim (owner, root): delete `/srv/hermes-data` (old profile source, kept as backup) +
+   `/opt/kaseya-ai` (71 MB); `docker rm` the stopped Hermes containers/images.
+3. Broader repo housekeeping: retire the rest of `deploy/hermes/` (setup-agents.sh, souls/, config.snippet…).
+4. Delegation-worker quality: confirm the local model handles tool-calls well, or a per-task cloud opt-in.
 5. (carried) M365/Entra read-only; encrypt secrets at rest; scheduled audits/reports.
