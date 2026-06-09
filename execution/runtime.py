@@ -18,6 +18,7 @@ from .core.context import ToolContext
 from .core.gates import ConfigurableApprovalGate
 from .core.registry import Registry
 from .core.router import ModelRouter
+from .core.tasks import Dispatcher, TaskStore
 
 # Shared, caching client factory (tokens/rate-limiters live here across calls).
 _factory: Optional[ClientFactory] = None
@@ -37,6 +38,7 @@ def build_agent(cfg: Optional[Config] = None, db_path: Optional[Path] = None) ->
     caps = CapabilityStore(db_path)              # the Capability Console's policy store
     approvals = ApprovalStore(db_path)           # write-action approval workflow
     conversations = ConversationStore(db_path)   # per-user persistent chat history (multi-chat)
+    tasks = TaskStore(db_path)                    # native delegation board (D-19; replaces kanban)
     router = ModelRouter(cfg)
     # Read-only by DEFAULT (no capability rows -> allow_write False everywhere), but now
     # tunable per tool via the Capability Console as trust is earned. Safety floors live
@@ -53,6 +55,11 @@ def build_agent(cfg: Optional[Config] = None, db_path: Optional[Path] = None) ->
     agent.caps = caps                            # expose for the console/CLI
     agent.approvals = approvals                  # expose for the approval API + agent dispatch
     agent.conversations = conversations          # expose for the chat-history API
+    agent.tasks = tasks                          # expose for the delegation API
+    # Delegation worker: runs the agent loop AS the assigned profile, bound to the task's tenant,
+    # local-first (allow_cloud=False) per Rule #5. Same guarded loop → every call still audited.
+    agent.dispatcher = Dispatcher(
+        tasks, agent, lambda tenant, actor: make_context(tenant, actor, allow_cloud=False))
     return agent
 
 

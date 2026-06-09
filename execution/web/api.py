@@ -146,11 +146,9 @@ class Api:
         if method == "POST" and path.startswith("/api/agents/") and path.endswith("/brain"):
             return self._require_admin(role) or self._set_agent_brain(path.split("/")[3], body, user)
         if method == "GET" and path == "/api/kanban":
-            from ..core.hermes_kanban import board
-            return Resp(200, board())
+            return Resp(200, self.agent.tasks.board())
         if method == "GET" and path.startswith("/api/kanban/tasks/") and len(path.split("/")) == 5:
-            from ..core.hermes_kanban import get_task
-            t = get_task(path.split("/")[4])
+            t = self.agent.tasks.get(path.split("/")[4])
             return Resp(200, t) if t else Resp(404, {"error": "task not found"})
         if method == "POST" and path == "/api/kanban/tasks":
             return self._require_admin(role) or self._kanban_create(body, user)
@@ -464,64 +462,54 @@ class Api:
         return Resp(200, res)
 
     def _kanban_create(self, body: dict, user: str) -> Resp:
-        """Delegate: create a board task (optionally pre-assigned to a specialist). Owner-gated."""
-        from ..core.hermes_kanban import KanbanError, create_task
-        title = (body.get("title") or "").strip()
-        if not title:
-            return Resp(400, {"error": "task title required"})
+        """Delegate: create a board task (optionally pre-assigned to a specialist). Owner-gated.
+        An assigned task is dispatched immediately — a worker runs the agent loop AS that profile."""
         assignee = (body.get("assignee") or "").strip()
         tenant = (body.get("tenant") or "").strip()
         try:
-            t = create_task(title, body=body.get("body") or "", assignee=assignee,
-                            created_by=f"dtm-ai:{user}", tenant=tenant,
-                            idempotency_key=(body.get("idempotency_key") or "").strip())
+            t = self.agent.tasks.create(
+                body.get("title") or "", body=body.get("body") or "", assignee=assignee,
+                created_by=f"dtm-ai:{user}", tenant=tenant,
+                idempotency_key=(body.get("idempotency_key") or "").strip())
         except ValueError as e:
             return Resp(400, {"error": str(e)})
-        except KanbanError as e:
-            return Resp(502, {"error": str(e)})       # wrapper missing / not installed / rejected
+        if assignee:
+            self.agent.dispatcher.dispatch()          # start it running now, not on the next poll
         self.agent.audit.record(actor=user, tenant_id=tenant or "*", action="config_change",
-                                detail=f"kanban_delegate={assignee or 'unassigned'}:{title[:60]}")
+                                detail=f"delegate={assignee or 'unassigned'}:{t['title'][:60]}")
         return Resp(200, t)
 
     def _kanban_assign(self, task_id: str, body: dict, user: str) -> Resp:
-        """Re/assign a board task to a specialist profile (owner-gated; audited)."""
-        from ..core.hermes_kanban import KanbanError, assign_task
+        """Re/assign a task to a specialist profile ('none' to unassign). Owner-gated; audited."""
         profile = (body.get("profile") or "").strip()
         if not profile:
             return Resp(400, {"error": "profile required"})
         try:
-            r = assign_task(task_id, profile)
+            r = self.agent.tasks.assign(task_id, profile)
         except ValueError as e:
             return Resp(400, {"error": str(e)})
-        except KanbanError as e:
-            return Resp(502, {"error": str(e)})
+        if r.get("status") == "ready":                # newly dispatchable → kick a pass
+            self.agent.dispatcher.dispatch()
         self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
-                                detail=f"kanban_assign={task_id}->{profile}")
-        return Resp(200, r if isinstance(r, dict) else {"ok": True})
+                                detail=f"delegate_assign={task_id}->{profile}")
+        return Resp(200, r)
 
     def _kanban_archive(self, task_id: str, user: str) -> Resp:
         """Archive a finished task — clears it from the active board (owner-gated; audited)."""
-        from ..core.hermes_kanban import KanbanError, archive_task
         try:
-            r = archive_task(task_id)
+            r = self.agent.tasks.archive(task_id)
         except ValueError as e:
             return Resp(400, {"error": str(e)})
-        except KanbanError as e:
-            return Resp(502, {"error": str(e)})
         self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
-                                detail=f"kanban_archive={task_id}")
-        return Resp(200, r if isinstance(r, dict) else {"ok": True})
+                                detail=f"delegate_archive={task_id}")
+        return Resp(200, r)
 
     def _kanban_dispatch(self, user: str) -> Resp:
-        """Force one dispatcher pass (owner-gated). Idempotent — only spawns ready+unclaimed tasks."""
-        from ..core.hermes_kanban import KanbanError, dispatch
-        try:
-            r = dispatch()
-        except KanbanError as e:
-            return Resp(502, {"error": str(e)})
+        """Force one dispatcher pass (owner-gated). Idempotent — only claims ready tasks."""
+        r = self.agent.dispatcher.dispatch()
         self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
-                                detail="kanban_dispatch")
-        return Resp(200, r if isinstance(r, dict) else {"ok": True})
+                                detail=f"delegate_dispatch (spawned {r.get('spawned', 0)})")
+        return Resp(200, r)
 
     def _set_agent_brain(self, name: str, body: dict, user: str) -> Resp:
         """Swap ONE agent's brain cloud↔local (per-profile config; owner-gated; audited)."""

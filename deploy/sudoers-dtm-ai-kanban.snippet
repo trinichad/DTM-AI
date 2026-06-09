@@ -1,6 +1,0 @@
-# DTM AI → Hermes kanban delegation.
-# Lets the web service (user `dtm-ai`) run ONLY the locked-down delegation wrapper as root — it has
-# no other docker access. The wrapper is root-owned and whitelists create/assign with full arg
-# validation (see /usr/local/sbin/dtm-ai-kanban.sh). Install at /etc/sudoers.d/dtm-ai-kanban,
-# owner root:root, mode 0440. `install-kanban.sh` does this for you and runs `visudo -c` to verify.
-dtm-ai ALL=(root) NOPASSWD: /usr/local/sbin/dtm-ai-kanban.sh
