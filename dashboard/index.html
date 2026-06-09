@@ -907,14 +907,15 @@ const VIEWS={
   async memory(){
     const d=await api('GET','/api/memory?tenant='+encodeURIComponent(TENANT));
     fillClientDL(d.clients);
-    // Clients — add / pick / delete
-    const chips=d.clients.length
-      ? d.clients.map(c=>`<span class="inline-flex items-center rounded-lg border ${c===TENANT?'border-accent bg-accent/10':'border-edge bg-white/5'}"><button class="memcli pl-2.5 pr-1 py-1 text-xs ${c===TENANT?'text-accent':'text-slate-300'}" data-c="${esc(c)}">${esc(c)}</button><button class="memdel pr-1.5 py-1 text-slate-500 hover:text-rose-400" data-c="${esc(c)}" title="Delete client + memory"><i data-lucide="x" class="text-[11px]"></i></button></span>`).join('')
-      : '<span class="text-xs text-slate-500">No clients yet — click “Add client”.</span>';
+    // Clients — searchable add / pick / delete (scales to hundreds; top-right box is also searchable)
+    const clientRow=c=>`<div class="cli-row flex items-center gap-1 rounded-lg ${c===TENANT?'bg-accent/10':'hover:bg-white/5'}" data-name="${esc(c.toLowerCase())}"><button class="memcli flex-1 flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-left min-w-0 ${c===TENANT?'text-accent':'text-slate-300'}" data-c="${esc(c)}"><i data-lucide="${c===TENANT?'check':'building'}" class="text-[12px] shrink-0"></i><span class="truncate">${esc(c)}</span></button><button class="memdel px-2 py-1.5 text-slate-500 hover:text-rose-400 shrink-0" data-c="${esc(c)}" title="Delete client + memory"><i data-lucide="x" class="text-[11px]"></i></button></div>`;
+    const cliRows=d.clients.length?d.clients.map(clientRow).join(''):'<div class="text-xs text-slate-500 py-1">No clients yet — click “Add client”.</div>';
     const clientsPanel=`<div class="card p-4 mb-4">
-        <div class="flex items-center gap-2 mb-2"><i data-lucide="building-2" class="text-accent text-sm"></i><span class="font-semibold text-sm">Clients</span>
+        <div class="flex items-center gap-2 mb-2"><i data-lucide="building-2" class="text-accent text-sm"></i><span class="font-semibold text-sm">Clients</span><span class="text-[11px] text-slate-500">${d.clients.length}</span>
           <button id="cliAdd" class="ml-auto text-xs grad text-white rounded-lg px-2.5 py-1 inline-flex items-center gap-1"><i data-lucide="plus" class="text-[12px]"></i> Add client</button></div>
-        <div class="flex flex-wrap gap-2 items-center">${chips}</div></div>`;
+        ${d.clients.length>8?`<input id="cliSearch" placeholder="Search clients…" autocomplete="off" class="w-full mb-2 bg-ink/70 border border-edge rounded-lg px-3 py-1.5 text-xs focus:border-accent focus:outline-none"/>`:''}
+        <div id="cliList" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-1 ${d.clients.length>9?'max-h-60 overflow-auto pr-1':''}">${cliRows}</div>
+        <div id="cliEmpty" class="hidden text-xs text-slate-500 py-1">No clients match.</div></div>`;
     // Per-client memory + add-note
     let mem;
     if(TENANT==='*'){
@@ -934,6 +935,9 @@ const VIEWS={
         <div class="card p-5"><div class="flex items-center gap-2 mb-3 font-semibold"><i data-lucide="book-open" class="text-accent"></i> Knowledge base<button id="kbNew" class="ml-auto text-xs grad text-white rounded-lg px-2.5 py-1 inline-flex items-center gap-1"><i data-lucide="plus" class="text-[12px]"></i> New / Upload</button></div><div class="text-[11px] text-slate-500 mb-2">Click to read · download · edit/rename/delete your kb/ docs.</div>${kb}</div>
       </div></div>`;
     icons();
+    const cs=$('#cliSearch'); if(cs) cs.oninput=()=>{const q=cs.value.trim().toLowerCase(); let n=0;
+      document.querySelectorAll('#cliList .cli-row').forEach(r=>{const hit=!q||r.dataset.name.includes(q); r.style.display=hit?'':'none'; if(hit)n++;});
+      const e=$('#cliEmpty'); if(e) e.classList.toggle('hidden', n>0);};
     document.querySelectorAll('.memcli').forEach(b=>b.onclick=()=>{TENANT=b.dataset.c;$('#tenant').value=TENANT;route('memory');});
     document.querySelectorAll('.memdel').forEach(b=>b.onclick=async()=>{const c=b.dataset.c;
       if(!confirm(`Delete client “${c}” and its saved memory? This cannot be undone.`))return;
