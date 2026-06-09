@@ -122,10 +122,10 @@ const SUB={overview:'Live health across your clients',chat:'Ask about a client �
   agents:'Your specialist team — souls, roles & memory',
   board:'Watch & assign work across your specialist team',
   integrations:'Connections, knowledge & credentials',capabilities:'Primitives the AI may use',
-  skills:'What Hermes has learned',memory:'Knowledge base & per-client notes',
+  skills:'Reusable procedures the AI has saved',memory:'Knowledge base & per-client notes',
   approvals:'Write actions awaiting your sign-off',build:'Draft new tools — sandboxed, you approve',
   audit:'Every action, logged',settings:'Account & users'};
-let ME=null, MODEL='', ENGINE=null;   // ENGINE: null=auto, 'hermes'=brain, 'dtm'=direct
+let ME=null, MODEL='';
 let STREAM=null;   // in-flight chat turn, at module scope so it survives tab switches
 // Chat history lives on the SERVER now (per-user, multi-conversation) — it persists across
 // devices/browsers until a conversation is explicitly deleted, like ChatGPT/Claude.
@@ -135,7 +135,7 @@ let CONVS=[];    // cached sidebar list of the user's conversations
 // Map a stored message {role,content,meta} to the shape bubble()/aiHtml() expect.
 function normMsg(m){ if(m.role==='user') return {role:'user',text:m.content};
   const meta=m.meta||{}; return {role:'assistant',answer:m.content||'',tools:meta.tools||[],
-    citations:meta.citations||[],new_skills:meta.new_skills||[],meta:meta.label||'',error:!!meta.error}; }
+    citations:meta.citations||[],suggest_skill:meta.suggest_skill||null,meta:meta.label||'',error:!!meta.error}; }
 const ago=iso=>{ if(!iso)return''; const s=(Date.now()-new Date(iso).getTime())/1000;
   if(s<60)return'just now'; if(s<3600)return Math.floor(s/60)+'m ago';
   if(s<86400)return Math.floor(s/3600)+'h ago'; if(s<604800)return Math.floor(s/86400)+'d ago';
@@ -203,6 +203,25 @@ function openTablePopup(text){
   w.document.close();
 }
 function prettyJson(s){ if(s==null)return''; try{ return JSON.stringify(JSON.parse(s),null,2); }catch(_){ return String(s); } }
+// Offer to save a multi-step turn as a reusable learned skill (Phase 4). Dedups server-side (409).
+async function saveSkill(s){
+  const name=prompt('Save this as a reusable skill.\n\nName it:', s.proposed_name||'');
+  if(name===null||!name.trim()) return;
+  const desc=prompt('One-line description — when should this skill be used?', s.summary||'');
+  if(desc===null) return;
+  const payload={name:name.trim(),description:desc.trim(),tools:s.tools||[],
+                 steps:'Tools used, in order: '+(s.tools||[]).join(' → ')};
+  let r=await api('POST','/api/skills/learn',payload);
+  if(r&&r.ok){ toast('Skill saved — see the Skills tab'); return; }
+  if(r&&r.duplicate){
+    if(confirm(`A similar skill already exists: "${r.duplicate.name}".\n\nOverwrite it?`)){
+      r=await api('POST','/api/skills/learn',{...payload,force:true});
+      if(r&&r.ok){ toast('Skill updated'); return; }
+    } else { toast('Kept the existing skill'); return; }
+  }
+  toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can save skills'
+        :('Save failed: '+((r&&r.error)||'')),false);
+}
 function aiHtml(t){ let h=md(t.answer||'');
   if(t.answer&&hasTable(t.answer)){ const _n=parseTables(t.answer).length;
     h+=`<div class="mt-2.5"><button class="open-table inline-flex items-center gap-1.5 text-xs font-semibold grad text-white rounded-lg px-3.5 py-2 shadow-lg shadow-indigo-500/25 hover:brightness-110" data-answer="${encodeURIComponent(t.answer)}"><i data-lucide="table" class="text-[14px]"></i> Open formatted table${_n>1?`s (${_n})`:''}<span class="opacity-80 font-normal">· export CSV / Excel / PDF</span></button></div>`; }
@@ -211,7 +230,7 @@ function aiHtml(t){ let h=md(t.answer||'');
   if(t.tools) h+=t.tools.filter(x=>x.data).map(x=>
     `<details class="mt-1"><summary class="cursor-pointer text-[11px] text-slate-400 hover:text-slate-200 select-none inline-flex items-center gap-1"><i data-lucide="braces" class="text-[11px]"></i>${esc(x.name)} — returned data</summary><pre class="text-[11px] text-slate-300 bg-ink/60 border border-edge rounded-lg p-2 mt-1 overflow-auto max-h-72 whitespace-pre-wrap">${esc(prettyJson(x.data))}</pre></details>`).join('');
   if(t.citations&&t.citations.length) h+=`<div class="text-[11px] text-slate-500 mt-1.5 flex items-center gap-1"><i data-lucide="link"></i>${t.citations.map(esc).join(', ')}</div>`;
-  if(t.new_skills&&t.new_skills.length) h+=`<div class="text-[11px] text-emerald-300 mt-1.5 inline-flex items-center gap-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-2 py-1"><i data-lucide="sparkles" class="text-[12px]"></i>Hermes saved a new skill: <span class="font-semibold">${t.new_skills.map(esc).join(', ')}</span> — see the Skills tab</div>`;
+  if(t.suggest_skill&&t.suggest_skill.tools&&t.suggest_skill.tools.length>=2) h+=`<div class="mt-1.5"><button class="save-skill text-[11px] inline-flex items-center gap-1.5 bg-accent/10 border border-accent/30 text-accent rounded-lg px-2.5 py-1 hover:bg-accent/20" data-sk="${encodeURIComponent(JSON.stringify(t.suggest_skill))}"><i data-lucide="sparkles" class="text-[12px]"></i>Save these ${t.suggest_skill.tools.length} steps as a reusable skill</button></div>`;
   if(t.meta) h+=`<div class="text-[11px] text-slate-600 mt-1">${esc(t.meta)}</div>`;
   return h; }
 // ── live chat streaming, decoupled from the view so it keeps painting across tab switches ──
@@ -367,13 +386,7 @@ const VIEWS={
   async chat(){
     const mm=await api('GET','/api/models'); const models=mm.models||[];
     if(!MODEL||!models.find(m=>m.id===MODEL)) MODEL=(models.find(m=>m.default)||models[0]||{}).id||'';
-    // Discover whether we can chat THROUGH Hermes (the brain) + which model it's driving.
-    let HBRAIN=null, HCHAT=false, HLOCAL=null, HMODE=null;
-    try{ const ig=(await api('GET','/api/integrations')).integrations||[];
-         const h=ig.find(x=>x.integration==='hermes'); if(h){ HCHAT=!!h.chat_engine; HBRAIN=h.brain||null; HLOCAL=h.local_model||null; HMODE=h.brain_mode||null; } }catch(_){}
-    if(ENGINE===null) ENGINE = HCHAT ? 'hermes' : 'dtm';   // default to the brain when available
-    if(ENGINE!=='dtm' && !HCHAT) ENGINE='dtm';             // can't use a brain that isn't wired
-    const HBMODEL = (HBRAIN&&HBRAIN.split(' · ')[0]) || (HMODE==='local'?(HLOCAL||'local'):'gpt-5.5');
+    // Chat runs on DTM AI's own agent loop; the model is chosen below.
     try{ CONVS=(await api('GET','/api/conversations')).conversations||[]; }catch(_){ CONVS=[]; }
     // Choose which conversation to open: keep the current one if still valid; else the newest for
     // this client; else start a fresh (unsaved) chat.
@@ -386,15 +399,9 @@ const VIEWS={
       </aside>
       <div class="flex-1 flex flex-col min-w-0 max-w-3xl mx-auto w-full">
         <div class="flex items-center gap-2 mb-3">
-          ${HCHAT?`<i data-lucide="bot" class="text-slate-500 text-sm" title="Who you're chatting with"></i>
-          <select id="engine" class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none" title="Hermes = the brain (memory, skills, delegation). DTM AI = the built-in model router.">
-            <option value="hermes" ${ENGINE==='hermes'?'selected':''}>Hermes</option>
-            <option value="dtm" ${ENGINE==='dtm'?'selected':''}>DTM AI direct</option>
-          </select>
-          ${HMODE?`<button id="brainToggle" class="${ENGINE==='hermes'?'':'hidden'} text-[11px] px-2.5 py-1.5 rounded-lg border border-edge text-slate-300 hover:border-accent inline-flex items-center gap-1.5 shrink-0" title="Hermes' brain — GLOBAL setting. 🔒 local = on-box ${esc(HLOCAL||'')}, nothing leaves the server; ☁ cloud = gpt-5.5. Switch is instant and does NOT re-login.">${HMODE==='local'?'🔒':'☁'} ${esc(HBMODEL)} <span class="text-slate-500">· switch</span></button>`:''}`:''}
-          <span id="modelCtl" class="${ENGINE==='dtm'?'':'hidden'} inline-flex items-center gap-2">
+          <span id="modelCtl" class="inline-flex items-center gap-2">
             <i data-lucide="cpu" class="text-slate-500 text-sm"></i>
-            <select id="model" class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none" title="Model for the DTM AI direct engine">
+            <select id="model" class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none" title="Model for this chat">
               ${models.map(m=>`<option value="${esc(m.id)}" ${m.id===MODEL?'selected':''}>${esc(m.label)}${m.local?'':' ☁'}</option>`).join('')}
             </select>
             ${models.length<2?`<a class="text-[11px] text-slate-500 hover:text-slate-300 cursor-pointer" id="addModel">+ add a cloud model</a>`:''}
@@ -453,18 +460,6 @@ const VIEWS={
       if(c)c.title=(t.trim()||'New chat'); renderRail(); };
     const refreshConvs=async()=>{ try{ CONVS=(await api('GET','/api/conversations')).conversations||[]; }catch(_){} renderRail(); };
     $('#model').onchange=e=>{MODEL=e.target.value; updateMeter();};
-    if($('#engine'))$('#engine').onchange=e=>{ENGINE=e.target.value;
-      const bt=$('#brainToggle'), mc=$('#modelCtl');   // show only the control for the chosen engine
-      if(bt)bt.classList.toggle('hidden',ENGINE!=='hermes');
-      if(mc)mc.classList.toggle('hidden',ENGINE!=='dtm');};
-    if($('#brainToggle'))$('#brainToggle').onclick=async()=>{
-      const target=HMODE==='local'?'cloud':'local';
-      if(!confirm(`Switch Hermes' brain to ${target==='local'?'LOCAL (on-box '+(HLOCAL||'qwen')+', private)':'CLOUD (gpt-5.5)'}? This is global — it affects every Hermes chat.`))return;
-      const btn=$('#brainToggle'); if(btn){btn.disabled=true; btn.textContent='switching…';}
-      const r=await api('POST','/api/hermes/brain',{mode:target});   // api() returns the body (even on 4xx/5xx)
-      if(r&&r.mode){ toast(`Hermes brain → ${r.mode==='local'?'local 🔒':'cloud ☁'} (${esc(r.model||'')})`); route('chat'); }
-      else { const e=(r&&r.error)||''; toast(e.includes('admin')?'Owner only — admin can switch the brain':(e.includes('cannot write')?'Config not writable yet — see setup note':('Switch failed: '+e)),false); if(btn){btn.disabled=false; btn.textContent='retry';} }
-    };
     if($('#addModel'))$('#addModel').onclick=()=>route('integrations');
     if($('#newChat'))$('#newChat').onclick=newChat;
     if($('#newChatTop'))$('#newChatTop').onclick=newChat;
@@ -474,7 +469,8 @@ const VIEWS={
       let r; try{ r=await api('POST','/api/conversations/'+CONV+'/compact',{model:MODEL}); }catch(_){ toast('compact failed',false); return; }
       if(!r||!r.messages){ toast('compact failed',false); return; }
       MSGS=r.messages.map(normMsg); renderChatLog(); showSuggest(); updateMeter(); toast('Conversation compacted'); };
-    $('#msgs').addEventListener('click',e=>{ const b=e.target.closest('.open-table'); if(b) openTablePopup(decodeURIComponent(b.dataset.answer)); });
+    $('#msgs').addEventListener('click',e=>{ const b=e.target.closest('.open-table'); if(b){ openTablePopup(decodeURIComponent(b.dataset.answer)); return; }
+      const sk=e.target.closest('.save-skill'); if(sk) saveSkill(JSON.parse(decodeURIComponent(sk.dataset.sk))); });
     $('#chatForm').onsubmit=async e=>{e.preventDefault();const m=$('#msg').value.trim();if(!m)return;$('#msg').value='';
       MSGS.push({role:'user',text:m}); showSuggest(); updateMeter();
       bubble('you',esc(m));
@@ -485,8 +481,7 @@ const VIEWS={
       try{
         const resp=await fetch('/api/chat/stream',{method:'POST',credentials:'same-origin',
           headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({conversation_id:CONV,tenant:TENANT,message:m,model:MODEL,
-            engine:(ENGINE==='dtm'?'dtm':'hermes')})});
+          body:JSON.stringify({conversation_id:CONV,tenant:TENANT,message:m,model:MODEL})});
         if(resp.status===401){ showLogin(); throw new Error('auth'); }
         if(!resp.body) throw new Error('no stream');
         const reader=resp.body.getReader(), dec=new TextDecoder(); let buf='';
@@ -499,7 +494,7 @@ const VIEWS={
             else if(ev.type==='delta'){ STREAM.acc+=ev.text; paintStream(); }
             else if(ev.type==='tool_call'){ STREAM.tools.push({name:ev.name,ok:null}); paintStream(); }
             else if(ev.type==='tool_result'){ const t=STREAM.tools.find(x=>x.name===ev.name&&x.ok===null); if(t)t.ok=ev.ok; else STREAM.tools.push({name:ev.name,ok:ev.ok}); paintStream(); }
-            else if(ev.type==='answer'){ STREAM.turn={role:'assistant',answer:ev.answer||STREAM.acc,tools:ev.tool_events||[],citations:ev.citations||[],new_skills:ev.new_skills||[],meta:`${ev.provider}/${ev.model} · ${ev.rounds} round(s)`}; }
+            else if(ev.type==='answer'){ STREAM.turn={role:'assistant',answer:ev.answer||STREAM.acc,tools:ev.tool_events||[],citations:ev.citations||[],suggest_skill:ev.suggest_skill||null,meta:`${ev.provider}/${ev.model} · ${ev.rounds} round(s)`}; }
             else if(ev.type==='error'){ throw new Error(ev.error||'stream error'); }
           }
         }
@@ -517,7 +512,7 @@ const VIEWS={
 
   async integrations(){
     const {integrations}=await api('GET','/api/integrations');
-    const ico={kaseya:'monitor-dot',cylance:'shield',huntress:'radar',obsidian:'notebook-pen',hermes:'bot',anthropic:'sparkles',openai:'bot'};
+    const ico={kaseya:'monitor-dot',cylance:'shield',huntress:'radar',obsidian:'notebook-pen',skills:'graduation-cap',anthropic:'sparkles',openai:'bot'};
     const apiCards=integrations.filter(i=>i.kind==='api'), local=integrations.filter(i=>i.kind==='local'),
           llm=integrations.filter(i=>i.kind==='llm');
     const head=t=>`<div class="text-[11px] uppercase tracking-wide text-slate-500 mb-2 mt-1">${t}</div>`;
@@ -602,7 +597,7 @@ const VIEWS={
 
   async agents(){
     const {agents}=await api('GET','/api/agents');
-    if(!agents||!agents.length){ $('#view').innerHTML=`<div class="card p-8 text-center text-slate-400 max-w-2xl mx-auto">No agents yet. Run <span class="font-mono">deploy/hermes/setup-agents.sh</span> on the server.</div>`; return; }
+    if(!agents||!agents.length){ $('#view').innerHTML=`<div class="card p-8 text-center text-slate-400 max-w-2xl mx-auto">No agents yet — add one with the <span class="text-slate-200">+ Add agent</span> button.</div>`; return; }
     const bpill=b=>`<span class="pill ${(b&&b.mode==='local')?'bg-emerald-500/15 text-emerald-300':'bg-sky-500/15 text-sky-300'} inline-flex items-center gap-1">${(b&&b.mode==='local')?'🔒':'☁'} ${esc((b&&b.model)||'—')}</span>`;
     const card=a=>`<div class="card card-hover p-4 cursor-pointer agent-card" data-id="${esc(a.id)}">
         <div class="flex items-start gap-3">
@@ -632,7 +627,7 @@ const VIEWS={
           <div class="flex items-center gap-3 mb-1">
             <div class="h-11 w-11 rounded-xl ${a.is_manager?'grad':'bg-edge'} grid place-items-center shrink-0"><i data-lucide="${a.is_manager?'crown':'bot'}" class="${a.is_manager?'text-white':'text-accent'}"></i></div>
             <div><div class="font-semibold text-lg">${esc(a.name)}</div><div class="text-xs text-slate-400">${esc(a.role||'')} · profile <span class="font-mono">${esc(a.id)}</span></div></div>
-            <button id="agentBrain" class="ml-auto pill ${b.mode==='local'?'bg-emerald-500/15 text-emerald-300':'bg-sky-500/15 text-sky-300'} hover:brightness-125 inline-flex items-center gap-1" title="This agent's brain. 🔒 local = on-box/private; ☁ cloud = gpt-5.5. Per-agent, instant, no re-login.">${b.mode==='local'?'🔒':'☁'} ${esc(b.model||'—')} <span class="opacity-60">· switch</span></button></div>
+            <span class="ml-auto pill ${b.mode==='local'?'bg-emerald-500/15 text-emerald-300':'bg-sky-500/15 text-sky-300'} inline-flex items-center gap-1" title="The model this agent runs on (from its config.yaml).">${b.mode==='local'?'🔒':'☁'} ${esc(b.model||'—')}</span></div>
           <div class="text-xs text-slate-400 mt-2 mb-3">${esc(a.description||'')}</div>
           <div class="flex gap-4 text-[11px] text-slate-500 mb-4"><span><b class="text-slate-300">${a.skills}</b> skills</span><span><b class="text-slate-300">${a.memories}</b> memory entries</span><span><b class="text-slate-300">${a.sessions}</b> sessions</span></div>
           <div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1.5">SOUL.md — personality, mission, hard nos (loaded fresh each message)</div>
@@ -646,14 +641,9 @@ const VIEWS={
       $('#agentBack').onclick=()=>route('agents');
       $('#soulSave').onclick=async()=>{ const btn=$('#soulSave'); btn.disabled=true;
         const r=await api('POST','/api/agents/'+encodeURIComponent(id)+'/soul',{soul:$('#soulEdit').value});
-        if(r&&!r.error) toast('Soul saved — Hermes uses it on the next message');
+        if(r&&!r.error) toast("Soul saved — used on the agent's next turn");
         else toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can edit souls':('Save failed: '+((r&&r.error)||'')),false);
         btn.disabled=false; };
-      $('#agentBrain').onclick=async()=>{ const target=(b.mode==='local')?'cloud':'local';
-        if(!confirm(`Switch ${a.name}'s brain to ${target==='local'?'LOCAL (on-box, private)':'CLOUD (gpt-5.5)'}? Takes effect on its next turn.`))return;
-        const r=await api('POST','/api/agents/'+encodeURIComponent(id)+'/brain',{mode:target});
-        if(r&&r.mode){ toast(`${a.name} → ${r.mode==='local'?'local 🔒':'cloud ☁'} (${esc(r.model||'')})`); openAgent(id); }
-        else toast((r&&r.error&&r.error.includes('admin'))?'Owner only':('Switch failed: '+((r&&r.error)||'')),false); };
       const del=$('#agentDelete');
       if(del) del.onclick=async()=>{
         const typed=prompt(`⚠ ARE YOU SURE?\n\nThis permanently deletes the "${a.name}" agent — its soul, memory, and learned skills. This cannot be undone.\n\nType the profile name "${id}" to confirm:`);
@@ -673,7 +663,7 @@ const VIEWS={
         <button id="addBack" class="text-xs text-slate-400 hover:text-accent inline-flex items-center gap-1 mb-3"><i data-lucide="arrow-left"></i> All agents</button>
         <div class="card p-5">
           <div class="flex items-center gap-3 mb-4"><div class="h-11 w-11 rounded-xl grad grid place-items-center shrink-0"><i data-lucide="user-plus" class="text-white"></i></div>
-            <div><div class="font-semibold text-lg">New specialist agent</div><div class="text-xs text-slate-400">A fresh Hermes profile — inherits the same tool fence + cloud brain (swap to local later).</div></div></div>
+            <div><div class="font-semibold text-lg">New specialist agent</div><div class="text-xs text-slate-400">A fresh agent profile — inherits the same tools + model as the manager.</div></div></div>
           <label class="block text-[11px] uppercase tracking-wide text-slate-500 mb-1">Profile id <span class="text-slate-600 normal-case">— lowercase, letters/numbers/-/_ only</span></label>
           <input id="agName" class="w-full bg-ink/70 border border-edge rounded-lg p-2.5 text-sm font-mono text-slate-200 focus:border-accent focus:outline-none mb-3" placeholder="reportwright" spellcheck="false">
           <label class="block text-[11px] uppercase tracking-wide text-slate-500 mb-1">Role <span class="text-slate-600 normal-case">— short title</span></label>
@@ -817,25 +807,31 @@ const VIEWS={
 
   async skills(){
     const d=await api('GET','/api/skills');
-    if(!d.available){
+    const skills=d.skills||[];
+    if(!skills.length){
       $('#view').innerHTML=`<div class="card glass p-10 max-w-2xl mx-auto text-center animate-fadeup">
         <div class="h-14 w-14 rounded-2xl grad grid place-items-center mx-auto mb-4 shadow-lg shadow-indigo-500/30"><i data-lucide="graduation-cap" class="text-white text-2xl"></i></div>
         <div class="font-semibold text-lg">No learned skills yet</div>
-        <div class="text-sm text-slate-400 mt-2 max-w-md mx-auto">Hermes saves reusable skills here as it works — compositions of your guarded capabilities. Connect Hermes on the server and they'll appear automatically.</div>
-        <div class="text-[11px] text-slate-600 mt-4 font-mono">reading: ${esc(d.dir)}</div>
-        <div class="text-xs text-slate-500 mt-3">Setup: <span class="font-mono">deploy/hermes/SETUP_HERMES.md</span></div></div>`;icons();return;}
-    if(!d.skills.length){
-      $('#view').innerHTML=`<div class="card p-8 text-center text-slate-400 max-w-2xl mx-auto">Hermes is connected, but hasn't saved any skills yet.<div class="text-[11px] text-slate-600 mt-2 font-mono">${esc(d.dir)}</div></div>`;return;}
-    const cats={}; d.skills.forEach(s=>{(cats[s.category]=cats[s.category]||[]).push(s);});
+        <div class="text-sm text-slate-400 mt-2 max-w-md mx-auto">Learned skills are reusable procedures built from tools you already trust. After the assistant does a multi-step task in <button class="link-chat text-accent hover:underline">Chat</button>, it offers to <span class="text-slate-300">save it as a skill</span> — saved ones appear here and the agent reuses them automatically.</div>
+        <div class="text-[11px] text-slate-600 mt-4 font-mono">${esc(d.dir)}</div></div>`;
+      icons(); const lc=document.querySelector('.link-chat'); if(lc)lc.onclick=()=>route('chat'); return;}
+    const cats={}; skills.forEach(s=>{(cats[s.category]=cats[s.category]||[]).push(s);});
     $('#view').innerHTML=`<div class="flex items-center gap-2 text-sm text-slate-400 mb-4 max-w-5xl">
-        <i data-lucide="sparkles" class="text-accent"></i> ${d.skills.length} learned skill${d.skills.length>1?'s':''} across ${Object.keys(cats).length} categor${Object.keys(cats).length>1?'ies':'y'} — compositions of your guarded primitives.</div>`+
+        <i data-lucide="sparkles" class="text-accent"></i> ${skills.length} learned skill${skills.length>1?'s':''} across ${Object.keys(cats).length} categor${Object.keys(cats).length>1?'ies':'y'} — reusable procedures composed from your trusted tools.</div>`+
       Object.entries(cats).map(([cat,list])=>`<div class="max-w-5xl mb-5">
         <div class="text-[11px] uppercase tracking-wide text-slate-500 mb-2 flex items-center gap-1.5"><i data-lucide="folder"></i> ${esc(cat)}</div>
         <div class="grid gap-3 md:grid-cols-2">${list.map(s=>`<div class="card card-hover p-4">
-          <div class="flex items-center gap-2"><i data-lucide="wand-sparkles" class="text-accent2"></i><span class="font-medium">${esc(s.name)}</span></div>
+          <div class="flex items-center gap-2"><i data-lucide="wand-sparkles" class="text-accent2"></i><span class="font-medium">${esc(s.name)}</span>
+            <button class="skillDel ml-auto text-slate-500 hover:text-rose-400" data-slug="${esc(s.slug||s.path)}" title="Delete this skill"><i data-lucide="trash-2" class="text-[12px]"></i></button></div>
           <div class="text-xs text-slate-400 mt-1.5 leading-relaxed">${esc(s.description)||'<span class="text-slate-600">no description</span>'}</div>
+          ${(s.tools&&s.tools.length)?`<div class="mt-2 flex flex-wrap gap-1">${s.tools.map(t=>`<span class="pill bg-white/5 text-slate-400 border border-edge text-[10px]">${esc(t)}</span>`).join('')}</div>`:''}
           <div class="text-[10px] text-slate-600 mt-2 font-mono">${esc(s.path)}</div></div>`).join('')}</div></div>`).join('');
     icons();
+    document.querySelectorAll('.skillDel').forEach(b=>b.onclick=async()=>{
+      if(!confirm('Delete this learned skill? This cannot be undone.'))return;
+      const r=await api('DELETE','/api/skills/'+encodeURIComponent(b.dataset.slug));
+      if(r&&r.deleted){ toast('Skill deleted'); route('skills'); }
+      else toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can delete skills':('Delete failed: '+((r&&r.error)||'')),false); });
   },
 
   async memory(){
