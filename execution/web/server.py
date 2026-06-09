@@ -98,6 +98,11 @@ def _make_handler(api: Api, signer: SessionSigner, secure_cookie: bool):
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            # The dashboard HTML is read fresh from disk on every request, so a UI edit is live
+            # immediately — but only if the browser actually refetches it. BaseHTTPServer sends no
+            # validators, so browsers heuristically cache and serve a stale page even on reload.
+            # Forbid caching the shell outright; vendored assets under /vendor/ are still cacheable.
+            self.send_header("Cache-Control", "no-store, must-revalidate")
             self.end_headers()
             self.wfile.write(body)
 
