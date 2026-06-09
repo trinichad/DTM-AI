@@ -17,7 +17,6 @@ from ..core import credentials
 from ..core.config import get_config
 from ..core.context import ToolContext
 from ..core.dispatch import dispatch
-from ..core.hermes_bridge import HermesBridge
 from ..runtime import get_client_factory
 from .auth import AuthStore, SessionSigner
 
@@ -117,11 +116,6 @@ class Api:
             return self._require_admin(role) or self._learn_skill(body, user)
         if method == "DELETE" and path.startswith("/api/skills/") and len(path.split("/")) == 4:
             return self._require_admin(role) or self._delete_skill(path.split("/")[3], user)
-        if method == "GET" and path == "/api/hermes/brain":
-            from ..core.hermes_brain import get_brain_mode
-            return Resp(200, get_brain_mode())
-        if method == "POST" and path == "/api/hermes/brain":
-            return self._require_admin(role) or self._set_brain(body, user)
         if method == "GET" and path == "/api/agents":
             from ..core.agents import list_agents
             return Resp(200, {"agents": list_agents()})
@@ -147,8 +141,6 @@ class Api:
             return Resp(200, a) if a else Resp(404, {"error": "unknown agent"})
         if method == "POST" and path.startswith("/api/agents/") and path.endswith("/soul"):
             return self._require_admin(role) or self._set_agent_soul(path.split("/")[3], body, user)
-        if method == "POST" and path.startswith("/api/agents/") and path.endswith("/brain"):
-            return self._require_admin(role) or self._set_agent_brain(path.split("/")[3], body, user)
         if method == "GET" and path == "/api/kanban":
             return Resp(200, self.agent.tasks.board())
         if method == "GET" and path.startswith("/api/kanban/tasks/") and len(path.split("/")) == 5:
@@ -224,9 +216,9 @@ class Api:
                 "kind": ("llm" if s.group == "llm" else "api"), "group": s.group,
                 "configured": s.configured, "missing": s.missing, "fingerprints": s.fingerprints}
                for s in credentials.status()]
-        # local (non-credential) integrations — Obsidian vault + Hermes Agent
+        # local (non-credential) integrations — Obsidian vault + learned skills
         from ..core.memory import VaultStore
-        from ..core.hermes_skills import HermesSkillsReader
+        from ..core.playbooks import PlaybookStore
         v = VaultStore()
         kb, mems = v.list_kb(), v.list_client_memories()
         out.append({"integration": "obsidian", "label": "Obsidian Vault", "kind": "local",
@@ -234,27 +226,12 @@ class Api:
                     "detail": (f"{len(kb)} KB docs · {len(mems)} client notebooks" if v.root.exists()
                                else "vault not created yet"),
                     "path": str(v.root)})
-        h = HermesSkillsReader()
-        bridge = HermesBridge(get_config())
-        mi = bridge.model_info() if h.available else None
-        # The brain Hermes drives is a SEPARATE connection from DTM AI's own OpenAI/Claude keys
-        # (Hermes uses its own OAuth/provider), so we surface it on the Hermes card, not theirs.
-        brain = (f"{mi['model']} · {mi['provider_label']}" if mi and mi.get("model") else None)
-        n_skills = len(h.list_skills()) if h.available else 0
-        if h.available:
-            detail = f"{n_skills} learned skills" + (f" · brain: {brain}" if brain else "")
-        else:
-            detail = "not connected"
-        local_model = get_config().get("HERMES_LOCAL_MODEL") or "qwen3.5:27b"
-        brain_mode = ("local" if (mi and mi.get("provider") == "custom") else "cloud") if mi else None
-        out.append({"integration": "hermes", "label": "Hermes Agent", "kind": "local",
-                    "configured": h.available,
-                    "detail": detail,
-                    "brain": brain,                       # e.g. "gpt-5.5 · OpenAI Codex" or null
-                    "brain_mode": brain_mode,             # "cloud" | "local" — current Hermes brain
-                    "chat_engine": bridge.available,      # can the dashboard chat THROUGH Hermes?
-                    "local_model": local_model,           # the on-box model the local swap uses
-                    "path": str(h.root)})
+        pb = PlaybookStore()
+        skills = pb.list_skills()
+        out.append({"integration": "skills", "label": "Learned Skills", "kind": "local",
+                    "configured": True,
+                    "detail": (f"{len(skills)} saved skill(s)" if skills else "no skills saved yet"),
+                    "path": str(pb.root)})
         return out
 
     def _approve(self, approval_id: int, user: str) -> Resp:
@@ -563,20 +540,6 @@ class Api:
                                 detail=f"delegate_dispatch (spawned {r.get('spawned', 0)})")
         return Resp(200, r)
 
-    def _set_agent_brain(self, name: str, body: dict, user: str) -> Resp:
-        """Swap ONE agent's brain cloud↔local (per-profile config; owner-gated; audited)."""
-        from ..core.hermes_brain import set_brain_mode
-        mode = (body.get("mode") or "").lower()
-        try:
-            state = set_brain_mode(mode, profile=name)
-        except ValueError as e:
-            return Resp(400, {"error": str(e)})
-        except OSError as e:
-            return Resp(500, {"error": f"cannot write agent config: {e}"})
-        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
-                                detail=f"agent_brain[{name}]={mode} ({state.get('model')})")
-        return Resp(200, state)
-
     def _set_agent_soul(self, name: str, body: dict, user: str) -> Resp:
         """Edit an agent's SOUL.md (owner-gated; audited). The agent loop loads it fresh next turn."""
         from ..core.agents import set_soul
@@ -594,20 +557,6 @@ class Api:
         self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
                                 detail=f"agent_soul={name}")
         return Resp(200, a)
-
-    def _set_brain(self, body: dict, user: str) -> Resp:
-        """Swap Hermes' brain cloud↔local (global; owner-gated). Audited as a config change."""
-        from ..core.hermes_brain import set_brain_mode
-        mode = (body.get("mode") or "").lower()
-        try:
-            state = set_brain_mode(mode)
-        except ValueError as e:
-            return Resp(400, {"error": str(e)})
-        except OSError as e:                              # config dir not writable by the service
-            return Resp(500, {"error": f"cannot write Hermes config: {e}"})
-        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
-                                detail=f"hermes_brain={mode} ({state.get('model')})")
-        return Resp(200, state)
 
     def _integration_fields(self, name: str) -> Resp:
         """The credential fields for an integration (which are set, fingerprints) — never raw."""
@@ -677,22 +626,6 @@ class Api:
         # Server-side history is authoritative (the browser no longer holds the transcript).
         history = convs.history(user, conv_id)
         convs.add_message(user, conv_id, "user", message)
-        # Engine select: "hermes" relays to the Hermes brain (it keeps its own session memory
-        # and reaches our tools back through the MCP fence); default "dtm" = our own agent loop.
-        if (body.get("engine") or "dtm").lower() == "hermes":
-            bridge = HermesBridge(get_config())
-            if not bridge.available:
-                return Resp(400, {"error": "Hermes engine not configured (HERMES_API_KEY missing)"})
-            try:
-                answer = bridge.complete(message, conv_id, model=body.get("hermes_model"))
-            except Exception as e:                       # unreachable / API error → fail closed
-                return Resp(502, {"error": str(e)})
-            model = (bridge.model_info() or {}).get("model") or "hermes-agent"
-            convs.add_message(user, conv_id, "assistant", answer, meta={"label": f"hermes/{model}"})
-            title = next((c["title"] for c in convs.list(user) if c["id"] == conv_id), "")
-            return Resp(200, {"answer": answer, "citations": [], "tool_events": [],
-                              "provider": "hermes", "model": model, "rounds": 1, "tenant": tenant,
-                              "conversation_id": conv_id, "title": title})
         turn = self.agent.chat(ctx, message, model_id=model_id, history=history,
                                profile=body.get("agent") or body.get("profile"))
         convs.add_message(user, conv_id, "assistant", turn.answer, meta={
@@ -727,11 +660,6 @@ class Api:
         prior = convs.history(user, conv_id)
         convs.add_message(user, conv_id, "user", message)
         yield {"type": "start", "conversation_id": conv_id, "tenant": tenant}
-
-        engine = (body.get("engine") or "dtm").lower()
-        if engine == "hermes":
-            yield from self._stream_hermes(message, conv_id, tenant, user, body.get("hermes_model"))
-            return
 
         q: "queue.Queue" = queue.Queue()
         DONE = object()
@@ -770,79 +698,6 @@ class Api:
                "tool_events": turn.tool_events, "provider": turn.provider, "model": turn.model,
                "rounds": turn.rounds, "tenant": tenant, "conversation_id": conv_id, "title": title,
                "suggest_skill": self._suggest_skill(message, turn)}
-
-    def _stream_hermes(self, message: str, conv_id: str, tenant: str, user: str,
-                       hermes_model: Optional[str] = None) -> Iterator[dict]:
-        """Stream a turn through the Hermes brain (IN channel). Bridges the bridge's blocking
-        SSE read to this generator via a queue + worker thread, mirroring stream_chat's pattern.
-        Hermes' own tool calls are audited separately (actor=hermes) via the MCP fence.
-
-        Surfaces, for the transcript: deduped tool pills with the returned data (pulled from the
-        MCP result cache for this turn's window), citations (tool@tenant), and a new-skills badge
-        when the turn caused Hermes to author a skill (the skills folder is read live, diffed).
-
-        hermes_model overrides the brain's underlying LLM (e.g. a local Ollama model for privacy)."""
-        import time
-        from ..core.hermes_skills import HermesSkillsReader
-        bridge = HermesBridge(get_config())
-        if not bridge.available:
-            yield {"type": "error", "error": "Hermes engine not configured (HERMES_API_KEY missing)"}
-            return
-        convs = self.agent.conversations
-        skills_before = {s["name"] for s in HermesSkillsReader().list_skills()}
-        turn_start_ms = int(time.time() * 1000)
-        q: "queue.Queue" = queue.Queue()
-        DONE = object()
-        result: dict = {}
-        tools: dict[str, dict] = {}          # name -> {name, category, ok}  (deduped, one per tool)
-
-        def run():
-            try:
-                result["answer"] = bridge.stream(message, conv_id, lambda e: q.put(e),
-                                                 model=hermes_model)
-            except Exception as e:                        # contained → surfaced as an error frame
-                result["error"] = str(e)
-            finally:
-                q.put(DONE)
-
-        threading.Thread(target=run, daemon=True).start()
-        while True:
-            ev = q.get()
-            if ev is DONE:
-                break
-            t = ev.get("type")
-            if t == "tool_call":
-                tools.setdefault(ev["name"], {"name": ev["name"],
-                                              "category": ev.get("category", "read"), "ok": None})
-            elif t == "tool_result":
-                tools.setdefault(ev["name"], {"name": ev["name"], "category": "read", "ok": None})
-                tools[ev["name"]]["ok"] = ev.get("ok", True)
-            yield ev
-
-        if "error" in result:
-            yield {"type": "error", "error": result["error"]}
-            return
-        answer = result.get("answer", "")
-        model = hermes_model or (bridge.model_info() or {}).get("model") or "hermes-agent"
-        tool_list = list(tools.values())
-        # Attach the returned data each tool produced this turn, from the MCP result cache
-        # (actor=hermes, since the turn began). Match by tool name, consuming in arrival order.
-        cached = self.agent.audit.recent_results("hermes", turn_start_ms)
-        for tp in tool_list:
-            hit = next((c for c in cached if c["tool"] == tp["name"] and not c.get("_used")), None)
-            if hit:
-                hit["_used"] = True
-                tp["data"] = hit.get("data")
-        citations = [f"{t['name']}@{tenant}" for t in tool_list]   # sourced-answer trail
-        new_skills = sorted({s["name"] for s in HermesSkillsReader().list_skills()} - skills_before)
-        convs.add_message(user, conv_id, "assistant", answer,
-                          meta={"tools": tool_list, "citations": citations,
-                                "new_skills": new_skills, "label": f"hermes/{model}"})
-        title = next((c["title"] for c in convs.list(user) if c["id"] == conv_id), "")
-        yield {"type": "answer", "answer": answer, "citations": citations,
-               "tool_events": tool_list, "new_skills": new_skills,
-               "provider": "hermes", "model": model, "rounds": 1, "tenant": tenant,
-               "conversation_id": conv_id, "title": title}
 
     def _compact_conversation(self, conv_id: str, body: dict, user: str) -> Resp:
         convs = self.agent.conversations
