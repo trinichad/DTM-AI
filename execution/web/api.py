@@ -78,7 +78,7 @@ class Api:
         if method == "GET" and path == "/api/memory":
             return self._memory(query.get("tenant") or "*")
         if method == "POST" and path == "/api/memory":
-            return self._memory_add(body, user)
+            return self._memory_save(body, user)
         if method == "GET" and path == "/api/kb":
             return self._kb_doc(query.get("doc") or "")
         if method == "POST" and path == "/api/kb":
@@ -310,18 +310,25 @@ class Api:
         return Resp(200, {"tenant": tenant, "memory": text, "kb": v.list_kb(),
                           "clients": v.list_clients()})
 
-    def _memory_add(self, body: dict, user: str) -> Resp:
-        """Append a note to a client's long-term memory (internal vault write; audited)."""
+    def _memory_save(self, body: dict, user: str) -> Resp:
+        """Update a client's long-term memory (internal vault write; audited).
+        `content` overwrites the whole memory (the living, editable record); `note` appends one fact."""
         from ..core.memory import VaultStore
         tenant = (body.get("tenant") or "").strip()
-        note = (body.get("note") or "").strip()
-        if not note:
-            return Resp(400, {"error": "note required"})
-        r = VaultStore().append_memory(tenant, note, user)
+        v = VaultStore()
+        if "content" in body:                              # full overwrite (edit / correct / prune)
+            r = v.write_memory(tenant, body.get("content") or "", user)
+            tool, detail = "memory_update", "memory_update (overwrite)"
+        else:                                              # append a single new fact
+            note = (body.get("note") or "").strip()
+            if not note:
+                return Resp(400, {"error": "note or content required"})
+            r = v.append_memory(tenant, note, user)
+            tool, detail = "memory_note", f"memory_add: {note[:80]}"
         if r.get("error"):
             return Resp(400, r)
         self.agent.audit.record(actor=user, tenant_id=tenant or "*", action="config_change",
-                                tool="memory_note", detail=f"memory_add: {note[:80]}")
+                                tool=tool, detail=detail)
         return Resp(200, r)
 
     def _kb_doc(self, doc: str) -> Resp:

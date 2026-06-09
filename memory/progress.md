@@ -1,5 +1,18 @@
 # progress.md — Work Log
 
+## 2026-06-09 (cont.) — usable memory/KB + living-memory model
+- KB CRUD shipped (read modal, download, New/Upload, edit, **rename/move**, delete); bundled `reference/`
+  stays view+download. Client **registry** (add/pick/delete) + searchable picker (top-right datalist +
+  Memory-tab search list — scales past hundreds, no more one-chip-per-client).
+- **Fixed:** `do_DELETE` dropped the query string → `DELETE /api/kb?doc=…` arrived `doc=""` → "can't delete".
+  Now parses query like `do_GET`; added a server-routing regression test (api.handle-level tests passed
+  query explicitly, so they never caught it).
+- **D-20 — per-client memory is now a LIVING, EDITABLE doc**, not append-only. New `memory_update(content)`
+  tool (write/internal, enabled, no approval) overwrites after a `memory_read`; `memory_note` still adds.
+  `write_memory` keeps `memory.md.bak` rollback; all audited. Memory tab = editable textarea → overwrite.
+  Updated SOP memory-vault.md, CLAUDE.md §7b, decisions.md. 217 tests green.
+- Open: optionally seed an empty `memory.md` on client-create (currently lazy on first note).
+
 ## 2026-06-01
 - Ran parallel recon workflow over `Kaseya Link` + `ClaudeOS [Hermes] V2` (4 readers + synthesis).
   Result: reuse/replace matrix + architecture brief → findings.md.

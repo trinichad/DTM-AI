@@ -11,8 +11,9 @@ from typing import Any
 from execution.core.memory import VaultStore
 
 NAME = "memory_note"
-DESCRIPTION = ("Save a short, durable note about this client to long-term memory "
-               "(e.g. a recurring issue, a preference, something learned). One fact per note.")
+DESCRIPTION = ("Add a NEW durable fact about this client to long-term memory (a recurring issue, an "
+               "environment detail, a preference). One fact per note. To CHANGE or REMOVE an existing "
+               "fact (something in the environment changed, or a fact was wrong), use memory_update.")
 SOURCE = "dtm_ai"
 CATEGORY = "write"
 RISK_LEVEL = "low"

@@ -5,7 +5,9 @@ human-editable (open the folder as an Obsidian vault), git-trackable, backup-abl
 auditable. Two roles:
 
   kb/                          knowledge base — runbooks/SOPs/docs.  Read via kb_search.
-  clients/<tenant>/memory.md   per-client long-term memory the agent keeps (employee notebook).
+  clients/<tenant>/memory.md   per-client long-term memory — a LIVING record of the client's
+                               current environment. Read AND updated (corrected/edited/pruned) as
+                               things change; not an append-only log. One-step backup on overwrite.
 
 IMPORTANT distinction: the "read-only by default" floor is about CLIENT SYSTEMS. Writing to
 DTM AI's OWN vault is an internal, low-risk, reversible, audited action — so memory writes are
@@ -219,3 +221,22 @@ class VaultStore:
         with path.open("a", encoding="utf-8") as f:
             f.write(f"- {ts} ({actor}): {note}\n")
         return {"ok": True, "appended": note, "doc": str(path.relative_to(self.root))}
+
+    def write_memory(self, tenant_id: str, content: str, actor: str) -> dict[str, Any]:
+        """Overwrite a client's long-term memory with a revised version. Memory is a LIVING record
+        of the client's current environment, not an append-only log: facts get corrected, updated,
+        or removed as things change (firewall swapped, machines replaced, a contact leaves). The
+        prior version is kept as memory.md.bak for one-step rollback. Internal vault write — never a
+        client-system change. Rejects '*' (a single client only)."""
+        if tenant_id in ("", "*"):
+            return {"error": "memory requires a specific client (tenant), not '*'"}
+        path = self._memory_path(tenant_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():                                  # rolling one-step backup before overwrite
+            try:
+                shutil.copy2(path, path.parent / (path.name + ".bak"))
+            except OSError:
+                pass
+        body = (content or "").rstrip() + "\n"
+        path.write_text(body, encoding="utf-8")
+        return {"ok": True, "doc": str(path.relative_to(self.root)), "bytes": len(body)}

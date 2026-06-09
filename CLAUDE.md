@@ -209,8 +209,11 @@ DTM AI/
   Backend: `core/capabilities.py` + `core/gates.py`. Safety floors (Rule #1) are enforced in code, not
   in the console.
 - **Obsidian vault** = knowledge base (per-client runbooks/SOPs → read-only `kb_search`) + the agent's
-  human-readable long-term memory (`clients/<tenant>/memory.md`). Markdown on disk: git-tracked,
-  backup-able, human-editable. Per-profile MEMORY.md/USER.md feed the agent's system prompt.
+  human-readable long-term memory (`clients/<tenant>/memory.md`). Memory is a **living, editable record**
+  of the client's current environment (D-20): both agent and owner READ + UPDATE it (`memory_read` /
+  `memory_note` to add / `memory_update` to correct/prune; `.bak` rollback on overwrite) — not an
+  append-only log. Markdown on disk: git-trackable, backup-able, human-editable. Per-profile
+  MEMORY.md/USER.md feed the agent's system prompt.
 
 ## 8. Maintenance / Self-Annealing
 On any failure: (a) read the real error/stack — no guessing; (b) patch in `execution/`; (c) test the fix;

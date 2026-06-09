@@ -32,6 +32,19 @@ cutover (no parallel Hermes fallback); delegation store = native `TaskStore` fol
 SQLite-dev/Postgres-prod store pattern (not premature Postgres, not a standalone board file); learning
 skills = playbooks. _(locked by owner 2026-06-09; build in 6 phases — see task_plan.md CURRENT FOCUS.)_
 
+**D-20 — Per-client memory is a LIVING, EDITABLE document, not an append-only log.** Both the agent
+and the owner can READ and OVERWRITE `clients/<tenant>/memory.md` to correct/update/prune facts as the
+environment changes (firewall upgraded, computers swapped, a contact leaves, a fact was wrong).
+_Reason: owner — "it should not be append only, it should be updatable as things change." An MSP
+environment is mutable; a timestamped append log accumulates stale, contradictory facts and the agent
+would carry them forever. A current-state doc the agent maintains is what "remembers context like an
+employee" actually means._ **How:** new `memory_update(content)` tool (write/internal, enabled by
+default, no approval — vault-only, never a client system) overwrites the whole doc after a `memory_read`;
+`memory_note(note)` still ADDS a fact. `write_memory` keeps `memory.md.bak` (one-step rollback) and every
+write is audited. Dashboard Memory tab edits `memory.md` directly via an editable textarea. **Safety
+floors unchanged:** tenant isolation, `*` rejected, internal-write-≠-client-write, Capability-Console
+toggle, full audit. _(locked by owner 2026-06-09; SOP: architecture/memory-vault.md.)_
+
 ## Locked by user (2026-06-01 Blueprint discovery)
 
 **D-1 — Two-process split: Python FastAPI agent backend + TypeScript dashboard, joined by a typed

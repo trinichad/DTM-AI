@@ -52,6 +52,22 @@ class Vault(unittest.TestCase):
     def test_memory_rejects_wildcard_tenant(self):
         self.assertIn("error", self.v.append_memory("*", "x", "t"))
 
+    def test_write_memory_overwrites_and_backs_up(self):
+        # memory is a LIVING doc: writing a revised version REPLACES the old facts (not append)
+        self.v.append_memory("acme", "Firewall: SonicWall TZ470", "tech1")
+        self.assertIn("TZ470", self.v.read_memory("acme"))
+        r = self.v.write_memory("acme", "# acme\n## Network\n- Firewall: SonicWall TZ670 (upgraded)", "tech1")
+        self.assertTrue(r["ok"], r)
+        text = self.v.read_memory("acme")
+        self.assertIn("TZ670", text)
+        self.assertNotIn("TZ470", text)                                  # corrected, not duplicated
+        bak = self.v.clients_dir / "acme" / "memory.md.bak"
+        self.assertTrue(bak.exists())
+        self.assertIn("TZ470", bak.read_text(encoding="utf-8"))          # prior version recoverable
+
+    def test_write_memory_rejects_wildcard_tenant(self):
+        self.assertIn("error", self.v.write_memory("*", "x", "t"))
+
     def test_path_traversal_sanitized(self):
         self.assertNotIn("/", _safe_tenant("../../etc/passwd"))
         self.assertNotIn("..", _safe_tenant("..%2f.."))
@@ -135,6 +151,14 @@ class MemorySkills(unittest.TestCase):
         r = self._d("memory_read")
         self.assertTrue(r["ok"])
         self.assertIn("VPN renewal", r["data"]["memory"])
+
+    def test_memory_update_replaces_via_dispatch(self):
+        self._d("memory_note", {"note": "Firewall: TZ470"})
+        w = self._d("memory_update", {"content": "# acme\n- Firewall: TZ670 (upgraded)"})
+        self.assertTrue(w["ok"], w)
+        r = self._d("memory_read")
+        self.assertIn("TZ670", r["data"]["memory"])
+        self.assertNotIn("TZ470", r["data"]["memory"])      # replaced the stale fact, not appended
 
     def test_memory_note_blocked_for_wildcard_tenant(self):
         ctx = ToolContext(tenant_id="*", actor="t")

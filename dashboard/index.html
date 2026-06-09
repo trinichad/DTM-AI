@@ -916,15 +916,15 @@ const VIEWS={
         ${d.clients.length>8?`<input id="cliSearch" placeholder="Search clients…" autocomplete="off" class="w-full mb-2 bg-ink/70 border border-edge rounded-lg px-3 py-1.5 text-xs focus:border-accent focus:outline-none"/>`:''}
         <div id="cliList" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-1 ${d.clients.length>9?'max-h-60 overflow-auto pr-1':''}">${cliRows}</div>
         <div id="cliEmpty" class="hidden text-xs text-slate-500 py-1">No clients match.</div></div>`;
-    // Per-client memory + add-note
+    // Per-client memory — a living, editable document (you and the AI both read + update it)
     let mem;
     if(TENANT==='*'){
-      mem='<div class="text-slate-400 text-sm">Pick a client above (or in the top-right box) to view and add its memory.</div>';
+      mem='<div class="text-slate-400 text-sm">Pick a client above (or in the top-right box) to view and edit its memory.</div>';
     } else {
-      const body=d.memory.trim()
-        ? `<pre class="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed font-sans mb-3 max-h-96 overflow-auto">${esc(d.memory)}</pre>`
-        : `<div class="text-slate-500 text-sm mb-3">No memory saved for <span class="text-slate-300">${esc(TENANT)}</span> yet. Add a note below — or the AI saves notes as it learns.</div>`;
-      mem=body+`<div class="flex gap-2"><input id="memNote" placeholder="Add a note about ${esc(TENANT)}…" class="flex-1 bg-ink/70 border border-edge rounded-lg px-3 py-2 text-sm focus:border-accent focus:outline-none"/><button id="memSave" class="grad text-white rounded-lg px-3 text-sm font-semibold inline-flex items-center gap-1"><i data-lucide="plus"></i> Save</button></div>`;
+      const ph=`# ${TENANT} — environment\n\n## Network\n- Firewall: …\n\n## Endpoints\n- …\n\n## Backups\n- …`;
+      mem=`<div class="text-[11px] text-slate-500 mb-2">Living record of <span class="text-slate-300">${esc(TENANT)}</span>'s environment — edit freely. The AI reads this and updates it as things change (firewall swapped, machines replaced, etc.).</div>
+        <textarea id="memBody" spellcheck="false" placeholder="${esc(ph)}" class="w-full min-h-[18rem] bg-ink/70 border border-edge rounded-lg p-3 text-sm font-mono text-slate-200 leading-relaxed focus:border-accent focus:outline-none">${esc(d.memory)}</textarea>
+        <div class="flex gap-2 mt-2 items-center"><button id="memSave" class="grad text-white rounded-lg px-4 py-2 text-sm font-semibold inline-flex items-center gap-1.5"><i data-lucide="save"></i> Save memory</button><span class="text-[11px] text-slate-500">Overwrites the current memory · prior version kept as backup · audited.</span></div>`;
     }
     // KB list with CRUD (reference/ docs are bundled → view + download only)
     const kbRow=k=>{const ref=k.indexOf('reference/')===0;return `<div class="flex items-center gap-1 text-sm py-1.5 border-b border-edge/40"><button class="kbdoc flex-1 text-left flex items-center gap-2 hover:text-accent min-w-0" data-doc="${esc(k)}"><i data-lucide="file-text" class="text-slate-500 shrink-0"></i> <span class="truncate">${esc(k)}</span>${ref?' <span class="pill bg-white/5 text-slate-500 text-[9px] shrink-0">bundled</span>':''}</button><button class="kbdl text-slate-500 hover:text-accent shrink-0" data-doc="${esc(k)}" title="Download"><i data-lucide="download" class="text-[12px]"></i></button>${ref?'':`<button class="kbedit text-slate-500 hover:text-accent shrink-0" data-doc="${esc(k)}" title="Edit"><i data-lucide="pencil" class="text-[12px]"></i></button><button class="kbren text-slate-500 hover:text-accent shrink-0" data-doc="${esc(k)}" title="Rename / move"><i data-lucide="text-cursor-input" class="text-[12px]"></i></button><button class="kbdel text-slate-500 hover:text-rose-400 shrink-0" data-doc="${esc(k)}" title="Delete"><i data-lucide="trash-2" class="text-[12px]"></i></button>`}</div>`;};
@@ -948,10 +948,10 @@ const VIEWS={
       const r=await api('POST','/api/clients',{id});
       if(r&&r.ok){ toast('Client added: '+r.id); TENANT=r.id; $('#tenant').value=r.id; loadClients(); route('memory'); }
       else toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can add clients':('Failed: '+((r&&r.error)||'')),false);};
-    const ms=$('#memSave'); if(ms) ms.onclick=async()=>{const note=$('#memNote').value.trim(); if(!note){toast('Type a note first',false);return;}
-      ms.disabled=true; const r=await api('POST','/api/memory',{tenant:TENANT,note});
-      if(r&&r.ok){ toast('Note saved'); route('memory'); } else { toast((r&&r.error)?('Save failed: '+r.error):'Save failed',false); ms.disabled=false; }};
-    const mn=$('#memNote'); if(mn) mn.onkeydown=e=>{ if(e.key==='Enter'){e.preventDefault(); const b=$('#memSave'); if(b)b.click();} };
+    const ms=$('#memSave'); if(ms) ms.onclick=async()=>{const content=$('#memBody').value;
+      ms.disabled=true; const r=await api('POST','/api/memory',{tenant:TENANT,content});
+      if(r&&r.ok){ toast('Memory saved'); } else { toast((r&&r.error)?('Save failed: '+r.error):'Save failed',false); }
+      ms.disabled=false;};
     document.querySelectorAll('.kbdoc').forEach(b=>b.onclick=()=>openKbDoc(b.dataset.doc));
     document.querySelectorAll('.kbdl').forEach(b=>b.onclick=()=>downloadKbDoc(b.dataset.doc));
     document.querySelectorAll('.kbedit').forEach(b=>b.onclick=()=>openKbEditor(b.dataset.doc));

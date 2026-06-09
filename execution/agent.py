@@ -36,7 +36,9 @@ You help DTM technicians inspect client IT environments. Hard rules:
 Use the provided tools to answer. Prefer calling a tool over guessing.
 Before a multi-step task, call skill_search to reuse a saved procedure instead of re-deriving it.
 When you learn a durable fact about a client (a recurring issue, an environment detail, a preference),
-save it with memory_note so it's remembered next time."""
+save it with memory_note. Client memory is a LIVING record of the current environment, not a log:
+when something CHANGES (a firewall upgraded, computers swapped, a contact left) or a saved fact is
+wrong, read the memory, revise it, and save the corrected version with memory_update."""
 
 # Conversation-context guard ("compaction"): cap how much prior history re-enters the model so a
 # long chat never overflows the (often small) local context window. Keep the most recent turns and
@@ -83,7 +85,8 @@ def build_system_prompt(profile: Optional[str] = None, cfg=None,
                 if len(cm) > 4000:
                     cm = cm[:4000] + "\n…(memory truncated)"
                 parts.append(f"# What you already know about client '{tenant_id}' (your saved memory "
-                             "— trust it; update it with memory_note when you learn something new)\n" + cm)
+                             "— trust it; add new facts with memory_note, and when something changes or "
+                             "is wrong, correct it with memory_update)\n" + cm)
         except Exception:                   # vault unreadable → just skip client memory
             pass
     return "\n\n".join(parts) if len(parts) > 1 else SYSTEM_PROMPT
