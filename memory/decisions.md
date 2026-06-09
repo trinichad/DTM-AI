@@ -72,10 +72,10 @@ the owner's own box and a necessary admin tool; risks were laid out twice and ac
   (`deploy/sudoers-dtm-ai-terminal.snippet`) + a drop-in that relaxes the systemd sandbox so sudo can act
   (`deploy/dtm-ai.service.d/10-full-access.conf` — turns off NoNewPrivileges / RestrictSUIDSGID /
   ProtectSystem). The web app process itself stays `dtm-ai` (root is opt-in per `sudo` command).
-- **Failover:** an INDEPENDENT second instance on :8091 (`deploy/dtm-ai-recovery.service`, runs as root,
-  un-sandboxed). Separate process → survives the main app crashing/restarting; the deploy flow must NOT
-  restart it, so it keeps running old code during a broken update. Same login (shared `.session_secret` +
-  users DB).
+- **Failover:** an INDEPENDENT, **terminal-only** root console on :8091 (`execution/web/recovery.py` +
+  `deploy/dtm-ai-recovery.service`, runs as root). Serves ONLY a login page + a terminal — no dashboard,
+  no app APIs. Separate process → survives the main app crashing/restarting; the deploy flow must NOT
+  restart it, so it keeps running during a broken update. Same login (shared `.session_secret` + users DB).
 **Owner must apply the privileged parts** (sudoers / drop-in / unit install) as root — I can't take root.
 **Still true:** admin-only; the AI/agent loop has ZERO shell access (Rule #6 for the agent unchanged);
 every command audited; `DTM_ADMIN_TERMINAL=0` kill switch.

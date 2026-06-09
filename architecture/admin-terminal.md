@@ -42,13 +42,14 @@ command via `sudo`**, enabled by two owner-installed pieces:
   Optional: skip it to keep the main app hardened and do root work only via the :8091 console.
 
 ## Failover / recovery console (:8091)
-`deploy/dtm-ai-recovery.service` runs a **second, independent instance** of the same app on :8091, as
-**root**, un-sandboxed. Same login (shared `.session_secret` + users DB → one admin login works on both
-ports). Purpose: when a deploy breaks :8090 or `restart` crashes it, :8091 is still up so you can get in,
-see how far the update got, and fix it — full dashboard + a literal root terminal as failover.
+`deploy/dtm-ai-recovery.service` runs `execution/web/recovery.py` — a **standalone, terminal-only** root
+console on :8091 (login page + terminal only; **no dashboard, no app APIs**), as **root**. It reuses the
+same `AuthStore` / `SessionSigner` (shared `.session_secret`) / `AdminShell` / `AuditStore`, so the same
+admin login works and commands land in the same audit log. The page is fully self-contained (no `/vendor`
+assets) so it works even if the main app is broken. Purpose: when a deploy breaks :8090 or `restart`
+crashes it, :8091 is still up so you can log in and fix the box from a browser instead of SSH.
 **Operational rule:** the deploy flow restarts ONLY `dtm-ai`, **never** `dtm-ai-recovery` — that is what
-lets recovery keep running the old, working code during a bad update. Restart it manually only after the
-main app is confirmed healthy.
+lets recovery keep running during a bad update. Restart it manually only after the main app is healthy.
 
 ## Behaviour / limits
 - **Not an interactive PTY** — no `vim`, `top`, pagers, or programs that read stdin. Each command is a
