@@ -88,6 +88,19 @@ class Vault(unittest.TestCase):
         self.assertIn("error", self.v.write_kb_doc("../../etc/evil", "x"))      # traversal blocked
         self.assertIn("error", self.v.delete_kb_doc("reference/anything.md"))    # bundled = read-only
 
+    def test_kb_rename(self):
+        self.v.write_kb_doc("runbooks/old", "# Old\nbody")
+        r = self.v.rename_kb_doc("kb/runbooks/old.md", "runbooks/new")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["to"], "kb/runbooks/new.md")                          # .md appended, under kb/
+        self.assertIsNone(self.v.read_kb_doc("kb/runbooks/old.md"))             # old path gone
+        self.assertIn("Old", self.v.read_kb_doc("kb/runbooks/new.md"))         # content preserved
+        # protections: bundled read-only, traversal, and no clobber
+        self.assertIn("error", self.v.rename_kb_doc("reference/x.md", "y"))
+        self.assertIn("error", self.v.rename_kb_doc("kb/runbooks/new.md", "../../etc/evil"))
+        self.v.write_kb_doc("runbooks/taken", "x")
+        self.assertIn("error", self.v.rename_kb_doc("kb/runbooks/new.md", "runbooks/taken"))  # no clobber
+
 
 class MemorySkills(unittest.TestCase):
     def setUp(self):

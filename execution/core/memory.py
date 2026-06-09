@@ -143,6 +143,34 @@ class VaultStore:
         rt.unlink()
         return {"ok": True, "deleted": doc}
 
+    def rename_kb_doc(self, src: str, dst: str) -> dict[str, Any]:
+        """Rename/move one of the owner's kb/ docs. Refuses bundled reference/ docs (read-only),
+        traversal, and clobbering an existing doc. Atomic (os.rename)."""
+        if not src or src.startswith("reference/"):
+            return {"error": "only your own kb/ docs can be renamed (reference docs ship with the app)"}
+        dst = (dst or "").strip().lstrip("/")
+        if not dst or ".." in dst:
+            return {"error": "invalid new name"}
+        if not dst.endswith(".md"):
+            dst += ".md"
+        src_path = self.root / src
+        dst_path = self.kb_dir / dst
+        try:
+            kb = self.kb_dir.resolve()
+            s = src_path.resolve()
+            d = dst_path.resolve()
+            if not (s.is_file() and str(s).startswith(str(kb) + "/")):
+                return {"error": "doc not found under kb/"}
+            if d != kb and not str(d).startswith(str(kb) + "/"):
+                return {"error": "doc must live under kb/"}
+            if d.exists():
+                return {"error": "a doc with that name already exists"}
+        except OSError:
+            return {"error": "bad path"}
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        src_path.rename(dst_path)
+        return {"ok": True, "from": src, "to": str(dst_path.relative_to(self.root))}
+
     def list_client_memories(self) -> list[str]:
         try:
             if not self.clients_dir.exists():

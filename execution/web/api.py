@@ -85,6 +85,8 @@ class Api:
             return self._require_admin(role) or self._kb_write(body, user)
         if method == "DELETE" and path == "/api/kb":
             return self._require_admin(role) or self._kb_delete(query.get("doc") or "", user)
+        if method == "POST" and path == "/api/kb/rename":
+            return self._require_admin(role) or self._kb_rename(body, user)
         if method == "GET" and path == "/api/clients":
             from ..core.memory import VaultStore
             return Resp(200, {"clients": VaultStore().list_clients()})
@@ -349,6 +351,16 @@ class Api:
             return Resp(400, r)
         self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
                                 detail=f"kb_delete={doc}")
+        return Resp(200, r)
+
+    def _kb_rename(self, body: dict, user: str) -> Resp:
+        """Rename/move an owner kb/ doc (reference/ docs are read-only). Owner-gated; audited."""
+        from ..core.memory import VaultStore
+        r = VaultStore().rename_kb_doc(body.get("from") or "", body.get("to") or "")
+        if r.get("error"):
+            return Resp(400, r)
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"kb_rename={r['from']}->{r['to']}")
         return Resp(200, r)
 
     def _client_add(self, body: dict, user: str) -> Resp:

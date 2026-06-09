@@ -277,6 +277,18 @@ async function openKbEditor(doc){
     if(r&&r.ok){ toast('Saved '+r.doc); close(); route('memory'); }
     else toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can edit KB':('Save failed: '+((r&&r.error)||'')),false); };
 }
+// Rename / move one of the owner's kb/ docs (bundled reference docs can't be renamed).
+async function renameKbDoc(doc){
+  const cur=doc.replace(/^kb\//,'');
+  const to=prompt('New filename (under kb/, subfolders ok — e.g. runbooks/onboarding.md):',cur);
+  if(to===null) return;
+  const nm=to.trim();
+  if(!nm){ toast('Filename required',false); return; }
+  if(nm===cur){ return; }
+  const r=await api('POST','/api/kb/rename',{from:doc,to:nm});
+  if(r&&r.ok){ toast('Renamed → '+r.to); route('memory'); }
+  else toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can rename KB':('Rename failed: '+((r&&r.error)||'')),false);
+}
 function aiHtml(t){ let h=md(t.answer||'');
   if(t.answer&&hasTable(t.answer)){ const _n=parseTables(t.answer).length;
     h+=`<div class="mt-2.5"><button class="open-table inline-flex items-center gap-1.5 text-xs font-semibold grad text-white rounded-lg px-3.5 py-2 shadow-lg shadow-indigo-500/25 hover:brightness-110" data-answer="${encodeURIComponent(t.answer)}"><i data-lucide="table" class="text-[14px]"></i> Open formatted table${_n>1?`s (${_n})`:''}<span class="opacity-80 font-normal">· export CSV / Excel / PDF</span></button></div>`; }
@@ -914,12 +926,12 @@ const VIEWS={
       mem=body+`<div class="flex gap-2"><input id="memNote" placeholder="Add a note about ${esc(TENANT)}…" class="flex-1 bg-ink/70 border border-edge rounded-lg px-3 py-2 text-sm focus:border-accent focus:outline-none"/><button id="memSave" class="grad text-white rounded-lg px-3 text-sm font-semibold inline-flex items-center gap-1"><i data-lucide="plus"></i> Save</button></div>`;
     }
     // KB list with CRUD (reference/ docs are bundled → view + download only)
-    const kbRow=k=>{const ref=k.indexOf('reference/')===0;return `<div class="flex items-center gap-1 text-sm py-1.5 border-b border-edge/40"><button class="kbdoc flex-1 text-left flex items-center gap-2 hover:text-accent min-w-0" data-doc="${esc(k)}"><i data-lucide="file-text" class="text-slate-500 shrink-0"></i> <span class="truncate">${esc(k)}</span>${ref?' <span class="pill bg-white/5 text-slate-500 text-[9px] shrink-0">bundled</span>':''}</button><button class="kbdl text-slate-500 hover:text-accent shrink-0" data-doc="${esc(k)}" title="Download"><i data-lucide="download" class="text-[12px]"></i></button>${ref?'':`<button class="kbedit text-slate-500 hover:text-accent shrink-0" data-doc="${esc(k)}" title="Edit"><i data-lucide="pencil" class="text-[12px]"></i></button><button class="kbdel text-slate-500 hover:text-rose-400 shrink-0" data-doc="${esc(k)}" title="Delete"><i data-lucide="trash-2" class="text-[12px]"></i></button>`}</div>`;};
+    const kbRow=k=>{const ref=k.indexOf('reference/')===0;return `<div class="flex items-center gap-1 text-sm py-1.5 border-b border-edge/40"><button class="kbdoc flex-1 text-left flex items-center gap-2 hover:text-accent min-w-0" data-doc="${esc(k)}"><i data-lucide="file-text" class="text-slate-500 shrink-0"></i> <span class="truncate">${esc(k)}</span>${ref?' <span class="pill bg-white/5 text-slate-500 text-[9px] shrink-0">bundled</span>':''}</button><button class="kbdl text-slate-500 hover:text-accent shrink-0" data-doc="${esc(k)}" title="Download"><i data-lucide="download" class="text-[12px]"></i></button>${ref?'':`<button class="kbedit text-slate-500 hover:text-accent shrink-0" data-doc="${esc(k)}" title="Edit"><i data-lucide="pencil" class="text-[12px]"></i></button><button class="kbren text-slate-500 hover:text-accent shrink-0" data-doc="${esc(k)}" title="Rename / move"><i data-lucide="text-cursor-input" class="text-[12px]"></i></button><button class="kbdel text-slate-500 hover:text-rose-400 shrink-0" data-doc="${esc(k)}" title="Delete"><i data-lucide="trash-2" class="text-[12px]"></i></button>`}</div>`;};
     const kb=d.kb.length?d.kb.map(kbRow).join(''):'<div class="text-slate-500 text-sm py-4">No KB docs yet.</div>';
     $('#view').innerHTML=`<div class="max-w-5xl">${clientsPanel}
       <div class="grid gap-4 lg:grid-cols-3">
         <div class="card p-5 lg:col-span-2"><div class="flex items-center gap-2 mb-3 font-semibold"><i data-lucide="brain" class="text-accent"></i> Memory — ${esc(TENANT==='*'?'all clients':TENANT)}</div>${mem}</div>
-        <div class="card p-5"><div class="flex items-center gap-2 mb-3 font-semibold"><i data-lucide="book-open" class="text-accent"></i> Knowledge base<button id="kbNew" class="ml-auto text-xs grad text-white rounded-lg px-2.5 py-1 inline-flex items-center gap-1"><i data-lucide="plus" class="text-[12px]"></i> New / Upload</button></div><div class="text-[11px] text-slate-500 mb-2">Click to read · download · edit/delete your kb/ docs.</div>${kb}</div>
+        <div class="card p-5"><div class="flex items-center gap-2 mb-3 font-semibold"><i data-lucide="book-open" class="text-accent"></i> Knowledge base<button id="kbNew" class="ml-auto text-xs grad text-white rounded-lg px-2.5 py-1 inline-flex items-center gap-1"><i data-lucide="plus" class="text-[12px]"></i> New / Upload</button></div><div class="text-[11px] text-slate-500 mb-2">Click to read · download · edit/rename/delete your kb/ docs.</div>${kb}</div>
       </div></div>`;
     icons();
     document.querySelectorAll('.memcli').forEach(b=>b.onclick=()=>{TENANT=b.dataset.c;$('#tenant').value=TENANT;route('memory');});
@@ -939,6 +951,7 @@ const VIEWS={
     document.querySelectorAll('.kbdoc').forEach(b=>b.onclick=()=>openKbDoc(b.dataset.doc));
     document.querySelectorAll('.kbdl').forEach(b=>b.onclick=()=>downloadKbDoc(b.dataset.doc));
     document.querySelectorAll('.kbedit').forEach(b=>b.onclick=()=>openKbEditor(b.dataset.doc));
+    document.querySelectorAll('.kbren').forEach(b=>b.onclick=()=>renameKbDoc(b.dataset.doc));
     document.querySelectorAll('.kbdel').forEach(b=>b.onclick=async()=>{const doc=b.dataset.doc;
       if(!confirm(`Delete “${doc}”? This cannot be undone.`))return;
       const r=await api('DELETE','/api/kb?doc='+encodeURIComponent(doc));
