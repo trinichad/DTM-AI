@@ -49,7 +49,7 @@ def build_agent(cfg: Optional[Config] = None, db_path: Optional[Path] = None) ->
         if t.source == "dtm_ai" and t.is_write and t.name not in existing:
             caps.set(t.name, allow_write=True, require_approval=t.requires_approval)
     gate = ConfigurableApprovalGate(caps, registry, approvals=approvals)
-    agent = Agent(registry, audit, router, gate=gate)
+    agent = Agent(registry, audit, router, gate=gate, cfg=cfg)   # cfg → profile-aware prompts
     agent.caps = caps                            # expose for the console/CLI
     agent.approvals = approvals                  # expose for the approval API + agent dispatch
     agent.conversations = conversations          # expose for the chat-history API

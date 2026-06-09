@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from execution.agent import Agent, clean_history, tool_payload
+from execution.agent import SYSTEM_PROMPT, Agent, build_system_prompt, clean_history, tool_payload
 from execution.core.audit import AuditStore
 from execution.core.context import ToolContext
 from execution.core.dispatch import DenyAllApprovals
@@ -146,6 +146,64 @@ class HistoryGuard(unittest.TestCase):
     def test_empty_is_safe(self):
         self.assertEqual(clean_history(None), [])
         self.assertEqual(clean_history([]), [])
+
+
+class ProfileAware(unittest.TestCase):
+    """Phase 2 — the loop can run AS a profile: its SOUL + memory shape the system prompt,
+    layered BELOW the immutable safety contract."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        d = Path(self.tmp.name)
+        pp = d / "profiles" / "sentinelops"
+        pp.mkdir(parents=True)
+        (pp / "SOUL.md").write_text(
+            "# SentinelOps\n## Identity\n- name: SentinelOps\n- role: Security Analyst\n")
+        (pp / "MEMORY.md").write_text("# Memory\n- acme uses Huntress for EDR\n")
+        (pp / "USER.md").write_text("DTM Consulting — IT MSP.\n")
+        env = d / ".env"
+        env.write_text(f"DTM_ENV=dev\nDTM_AGENTS_DIR={d}\n")
+        env.chmod(0o600)
+        self.cfg = Config(env_path=env)
+        self.audit = AuditStore(d / "a.db")
+        self.agent = Agent(Registry(), self.audit, ModelRouter(self.cfg),
+                           gate=DenyAllApprovals(), cfg=self.cfg)
+
+    def tearDown(self):
+        self.audit.close()
+        self.tmp.cleanup()
+
+    def test_profile_persona_and_memory_in_system_prompt(self):
+        rec = _Recorder()
+        ctx = ToolContext(tenant_id="acme", actor="t")
+        self.agent.chat(ctx, "status?", provider=rec, profile="sentinelops")
+        sysmsg = rec.seen[0]["content"]
+        self.assertIn("READ-ONLY", sysmsg)            # safety base still leads
+        self.assertIn("SentinelOps", sysmsg)          # persona
+        self.assertIn("Security Analyst", sysmsg)     # role from SOUL
+        self.assertIn("Huntress", sysmsg)             # long-term memory injected
+        self.assertIn("DTM Consulting", sysmsg)       # USER.md (about the team)
+
+    def test_no_profile_is_plain_base_prompt(self):
+        rec = _Recorder()
+        ctx = ToolContext(tenant_id="acme", actor="t")
+        self.agent.chat(ctx, "hi", provider=rec)
+        self.assertEqual(rec.seen[0]["content"], SYSTEM_PROMPT)
+
+    def test_unknown_profile_falls_back_safely(self):
+        rec = _Recorder()
+        ctx = ToolContext(tenant_id="acme", actor="t")
+        self.agent.chat(ctx, "hi", provider=rec, profile="ghost")
+        self.assertEqual(rec.seen[0]["content"], SYSTEM_PROMPT)
+
+    def test_invalid_profile_name_does_not_crash(self):
+        rec = _Recorder()                              # path-traversal name → fail safe, no raise
+        ctx = ToolContext(tenant_id="acme", actor="t")
+        self.agent.chat(ctx, "hi", provider=rec, profile="../etc")
+        self.assertEqual(rec.seen[0]["content"], SYSTEM_PROMPT)
+
+    def test_build_system_prompt_direct(self):
+        self.assertEqual(build_system_prompt(None, self.cfg), SYSTEM_PROMPT)
+        self.assertIn("SentinelOps", build_system_prompt("sentinelops", self.cfg))
 
 
 if __name__ == "__main__":

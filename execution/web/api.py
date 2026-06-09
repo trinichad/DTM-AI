@@ -653,7 +653,8 @@ class Api:
             return Resp(200, {"answer": answer, "citations": [], "tool_events": [],
                               "provider": "hermes", "model": model, "rounds": 1, "tenant": tenant,
                               "conversation_id": conv_id, "title": title})
-        turn = self.agent.chat(ctx, message, model_id=model_id, history=history)
+        turn = self.agent.chat(ctx, message, model_id=model_id, history=history,
+                               profile=body.get("agent") or body.get("profile"))
         convs.add_message(user, conv_id, "assistant", turn.answer, meta={
             "tools": turn.tool_events, "citations": turn.citations,
             "label": f"{turn.provider}/{turn.model} · {turn.rounds} round(s)"})
@@ -702,7 +703,8 @@ class Api:
                     allow_cloud=bool(model_id and not model_id.startswith("ollama:")),
                     client_factory=get_client_factory())
                 result["turn"] = self.agent.chat_stream(
-                    ctx, message, lambda e: q.put(e), model_id=model_id, history=prior)
+                    ctx, message, lambda e: q.put(e), model_id=model_id, history=prior,
+                    profile=body.get("agent") or body.get("profile"))
             except Exception as e:                       # contained; surfaced as an SSE error frame
                 result["error"] = str(e)
             finally:

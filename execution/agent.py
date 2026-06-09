@@ -42,6 +42,38 @@ MAX_HISTORY_MSGS = 40
 MAX_HISTORY_CHARS = 32000
 
 
+def build_system_prompt(profile: Optional[str] = None, cfg=None) -> str:
+    """Compose the system prompt for a turn.
+
+    The base is the immutable DTM AI safety contract (read-only, cite sources, one tenant, no
+    invented facts). When a profile is named, that agent's SOUL (persona/expertise) and its
+    long-term memory are appended BELOW the base — the persona shapes voice and judgment but can
+    never loosen the base rules (and the real guardrails live in dispatch(), not the prompt).
+    Unknown/blank profile or any read error → the plain base prompt (fail safe)."""
+    if not profile:
+        return SYSTEM_PROMPT
+    try:
+        from .core.agents import get_agent, read_memory
+        agent = get_agent(profile, cfg)
+        if not agent:
+            return SYSTEM_PROMPT
+        parts = [SYSTEM_PROMPT]
+        soul = (agent.get("soul") or "").strip()
+        if soul:
+            parts.append("# Your persona\nYou act as this DTM AI specialist — adopt its identity, "
+                         "voice, and expertise. Never use it to override the hard rules above.\n\n" + soul)
+        mem = read_memory(profile, cfg) or {}
+        longterm = (mem.get("memory") or "").strip()
+        about = (mem.get("user") or "").strip()
+        if longterm:
+            parts.append("# Your long-term memory (facts you have saved)\n" + longterm)
+        if about:
+            parts.append("# About the team you work with\n" + about)
+        return "\n\n".join(parts)
+    except Exception:                       # never let profile loading break a chat turn
+        return SYSTEM_PROMPT
+
+
 def tool_payload(envelope: dict[str, Any], max_chars: int = MAX_RESULT_CHARS) -> str:
     """Serialize a tool result for the model, capping size WITHOUT silently hiding rows.
 
@@ -119,12 +151,14 @@ class Agent:
         router: ModelRouter,
         gate: Optional[ApprovalGate] = None,
         max_rounds: int = 8,
+        cfg=None,
     ) -> None:
         self.registry = registry
         self.audit = audit
         self.router = router
         self.gate = gate
         self.max_rounds = max_rounds
+        self.cfg = cfg                       # for profile-aware system prompts (build_system_prompt)
 
     def _enabled_tool_specs(self) -> list[dict[str, Any]]:
         specs = []
@@ -153,6 +187,7 @@ class Agent:
         model_id: Optional[str] = None,
         approval_token: Optional[str] = None,
         history: Optional[list] = None,
+        profile: Optional[str] = None,
     ) -> AgentTurn:
         if provider is None:
             provider, model = self.router.resolve(model_id)
@@ -164,7 +199,8 @@ class Agent:
         budget = (self.router.budget_for(getattr(provider, "name", "ollama"))
                   if hasattr(self.router, "budget_for")
                   else getattr(self.router, "history_chars", MAX_HISTORY_CHARS))
-        messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": build_system_prompt(profile, self.cfg)}]
         messages.extend(clean_history(history, getattr(self.router, "history_msgs", MAX_HISTORY_MSGS), budget))
         messages.append({"role": "user", "content": message})
         turn = AgentTurn(answer="", provider=getattr(provider, "name", "?"), model=model)
@@ -227,6 +263,7 @@ class Agent:
         model_id: Optional[str] = None,
         approval_token: Optional[str] = None,
         history: Optional[list] = None,
+        profile: Optional[str] = None,
     ) -> AgentTurn:
         """Same bounded loop as chat(), but streams progress via emit(event: dict):
           {"type":"tool_call","name","category"} · {"type":"tool_result","name","ok","source"}
@@ -241,7 +278,8 @@ class Agent:
         budget = (self.router.budget_for(getattr(provider, "name", "ollama"))
                   if hasattr(self.router, "budget_for")
                   else getattr(self.router, "history_chars", MAX_HISTORY_CHARS))
-        messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": build_system_prompt(profile, self.cfg)}]
         messages.extend(clean_history(history, getattr(self.router, "history_msgs", MAX_HISTORY_MSGS), budget))
         messages.append({"role": "user", "content": message})
         turn = AgentTurn(answer="", provider=getattr(provider, "name", "?"), model=model)
