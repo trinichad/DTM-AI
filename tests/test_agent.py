@@ -161,7 +161,7 @@ class ProfileAware(unittest.TestCase):
         (pp / "MEMORY.md").write_text("# Memory\n- acme uses Huntress for EDR\n")
         (pp / "USER.md").write_text("DTM Consulting — IT MSP.\n")
         env = d / ".env"
-        env.write_text(f"DTM_ENV=dev\nDTM_AGENTS_DIR={d}\n")
+        env.write_text(f"DTM_ENV=dev\nDTM_AGENTS_DIR={d}\nDTM_VAULT_PATH={d}\n")
         env.chmod(0o600)
         self.cfg = Config(env_path=env)
         self.audit = AuditStore(d / "a.db")
@@ -204,6 +204,24 @@ class ProfileAware(unittest.TestCase):
     def test_build_system_prompt_direct(self):
         self.assertEqual(build_system_prompt(None, self.cfg), SYSTEM_PROMPT)
         self.assertIn("SentinelOps", build_system_prompt("sentinelops", self.cfg))
+
+    def test_client_memory_injected_for_bound_tenant(self):
+        from execution.core.memory import VaultStore
+        VaultStore(cfg=self.cfg).append_memory("acme", "Acme's firewall is a SonicWall TZ470", "tester")
+        rec = _Recorder()
+        ctx = ToolContext(tenant_id="acme", actor="t")
+        self.agent.chat(ctx, "status?", provider=rec)          # no profile, bound to acme
+        sysmsg = rec.seen[0]["content"]
+        self.assertIn("SonicWall TZ470", sysmsg)               # recalled automatically — no tool call
+        self.assertIn("acme", sysmsg)
+
+    def test_client_memory_not_injected_for_star(self):
+        from execution.core.memory import VaultStore
+        VaultStore(cfg=self.cfg).append_memory("acme", "private note", "tester")
+        rec = _Recorder()
+        ctx = ToolContext(tenant_id="*", actor="t")
+        self.agent.chat(ctx, "hi", provider=rec)               # '*' = cross-client → no single memory
+        self.assertEqual(rec.seen[0]["content"], SYSTEM_PROMPT)
 
 
 if __name__ == "__main__":

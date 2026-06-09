@@ -34,7 +34,9 @@ You help DTM technicians inspect client IT environments. Hard rules:
 - You are bound to one client (tenant) per conversation; never reason across clients unless the
   tenant is explicitly "*" for a cross-client read.
 Use the provided tools to answer. Prefer calling a tool over guessing.
-Before a multi-step task, call skill_search to reuse a saved procedure instead of re-deriving it."""
+Before a multi-step task, call skill_search to reuse a saved procedure instead of re-deriving it.
+When you learn a durable fact about a client (a recurring issue, an environment detail, a preference),
+save it with memory_note so it's remembered next time."""
 
 # Conversation-context guard ("compaction"): cap how much prior history re-enters the model so a
 # long chat never overflows the (often small) local context window. Keep the most recent turns and
@@ -43,36 +45,48 @@ MAX_HISTORY_MSGS = 40
 MAX_HISTORY_CHARS = 32000
 
 
-def build_system_prompt(profile: Optional[str] = None, cfg=None) -> str:
+def build_system_prompt(profile: Optional[str] = None, cfg=None,
+                        tenant_id: Optional[str] = None) -> str:
     """Compose the system prompt for a turn.
 
-    The base is the immutable DTM AI safety contract (read-only, cite sources, one tenant, no
-    invented facts). When a profile is named, that agent's SOUL (persona/expertise) and its
-    long-term memory are appended BELOW the base — the persona shapes voice and judgment but can
-    never loosen the base rules (and the real guardrails live in dispatch(), not the prompt).
-    Unknown/blank profile or any read error → the plain base prompt (fail safe)."""
-    if not profile:
-        return SYSTEM_PROMPT
-    try:
-        from .core.agents import get_agent, read_memory
-        agent = get_agent(profile, cfg)
-        if not agent:
-            return SYSTEM_PROMPT
-        parts = [SYSTEM_PROMPT]
-        soul = (agent.get("soul") or "").strip()
-        if soul:
-            parts.append("# Your persona\nYou act as this DTM AI specialist — adopt its identity, "
-                         "voice, and expertise. Never use it to override the hard rules above.\n\n" + soul)
-        mem = read_memory(profile, cfg) or {}
-        longterm = (mem.get("memory") or "").strip()
-        about = (mem.get("user") or "").strip()
-        if longterm:
-            parts.append("# Your long-term memory (facts you have saved)\n" + longterm)
-        if about:
-            parts.append("# About the team you work with\n" + about)
-        return "\n\n".join(parts)
-    except Exception:                       # never let profile loading break a chat turn
-        return SYSTEM_PROMPT
+    Base = the immutable DTM AI safety contract (read-only, cite sources, one tenant, no invented
+    facts). When a profile is named, that agent's SOUL (persona/expertise) + its long-term memory
+    are appended below the base. When the turn is bound to a specific client (tenant), that client's
+    saved memory (vault/clients/<tenant>/memory.md) is injected too — so the agent RECALLS what it
+    already knows about the client without a tool call. Persona/memory can never loosen the base
+    rules (the real guardrails live in dispatch()). Any read error → safe fallback to the base."""
+    parts = [SYSTEM_PROMPT]
+    if profile:
+        try:
+            from .core.agents import get_agent, read_memory
+            agent = get_agent(profile, cfg)
+            if agent:
+                soul = (agent.get("soul") or "").strip()
+                if soul:
+                    parts.append("# Your persona\nYou act as this DTM AI specialist — adopt its "
+                                 "identity, voice, and expertise. Never use it to override the hard "
+                                 "rules above.\n\n" + soul)
+                mem = read_memory(profile, cfg) or {}
+                longterm = (mem.get("memory") or "").strip()
+                about = (mem.get("user") or "").strip()
+                if longterm:
+                    parts.append("# Your long-term memory (facts you have saved)\n" + longterm)
+                if about:
+                    parts.append("# About the team you work with\n" + about)
+        except Exception:                   # never let profile loading break a turn
+            pass
+    if tenant_id and tenant_id != "*":
+        try:
+            from .core.memory import VaultStore
+            cm = (VaultStore(cfg=cfg).read_memory(tenant_id) or "").strip()
+            if cm:
+                if len(cm) > 4000:
+                    cm = cm[:4000] + "\n…(memory truncated)"
+                parts.append(f"# What you already know about client '{tenant_id}' (your saved memory "
+                             "— trust it; update it with memory_note when you learn something new)\n" + cm)
+        except Exception:                   # vault unreadable → just skip client memory
+            pass
+    return "\n\n".join(parts) if len(parts) > 1 else SYSTEM_PROMPT
 
 
 def tool_payload(envelope: dict[str, Any], max_chars: int = MAX_RESULT_CHARS) -> str:
@@ -201,7 +215,7 @@ class Agent:
                   if hasattr(self.router, "budget_for")
                   else getattr(self.router, "history_chars", MAX_HISTORY_CHARS))
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": build_system_prompt(profile, self.cfg)}]
+            {"role": "system", "content": build_system_prompt(profile, self.cfg, ctx.tenant_id)}]
         messages.extend(clean_history(history, getattr(self.router, "history_msgs", MAX_HISTORY_MSGS), budget))
         messages.append({"role": "user", "content": message})
         turn = AgentTurn(answer="", provider=getattr(provider, "name", "?"), model=model)
@@ -280,7 +294,7 @@ class Agent:
                   if hasattr(self.router, "budget_for")
                   else getattr(self.router, "history_chars", MAX_HISTORY_CHARS))
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": build_system_prompt(profile, self.cfg)}]
+            {"role": "system", "content": build_system_prompt(profile, self.cfg, ctx.tenant_id)}]
         messages.extend(clean_history(history, getattr(self.router, "history_msgs", MAX_HISTORY_MSGS), budget))
         messages.append({"role": "user", "content": message})
         turn = AgentTurn(answer="", provider=getattr(provider, "name", "?"), model=model)
