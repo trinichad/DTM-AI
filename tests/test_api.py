@@ -4,8 +4,9 @@ import unittest
 from pathlib import Path
 
 from execution.runtime import build_agent
-from execution.web.api import Api
+from execution.web.api import Api, Resp
 from execution.web.auth import AuthStore, SessionSigner
+from execution.web.server import _make_handler
 
 
 class WebApi(unittest.TestCase):
@@ -84,6 +85,21 @@ class WebApi(unittest.TestCase):
         self.assertEqual(self.H("GET", "/api/conversations", user="bob").payload["conversations"], [])
         self.assertEqual(self.H("GET", f"/api/conversations/{cid}", user="bob").status, 404)
         self.assertEqual(self.H("DELETE", f"/api/conversations/{cid}", user="bob").status, 404)
+
+    def test_do_delete_forwards_query_string(self):
+        # Regression: do_DELETE dropped the query string, so DELETE /api/kb?doc=... arrived with
+        # doc="" and the user couldn't delete their own KB doc. The verb must parse the query.
+        captured = {}
+        self.api.handle = lambda method, path, query, body, user: (
+            captured.update(method=method, path=path, query=query, user=user) or Resp(200, {"ok": True}))
+        Handler = _make_handler(self.api, self.signer, secure_cookie=False)
+        h = Handler.__new__(Handler)                 # no socket — skip BaseHTTPRequestHandler.__init__
+        h._user = lambda: "admin"
+        h._send_json = lambda resp: None
+        h.path = "/api/kb?doc=kb/test.md"
+        h.do_DELETE()
+        self.assertEqual(captured["path"], "/api/kb")
+        self.assertEqual(captured["query"], {"doc": "kb/test.md"})   # query reached the router
 
     def test_conversation_rename_and_delete(self):
         cid = self.H("POST", "/api/conversations", {"tenant": "acme"}, user="admin").payload["id"]

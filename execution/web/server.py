@@ -137,7 +137,8 @@ def _make_handler(api: Api, signer: SessionSigner, secure_cookie: bool):
 
         def do_DELETE(self):
             parsed = urlparse(self.path)
-            self._send_json(api.handle("DELETE", parsed.path, {}, {}, self._user()))
+            query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+            self._send_json(api.handle("DELETE", parsed.path, query, {}, self._user()))
 
     return Handler
 
