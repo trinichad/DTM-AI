@@ -27,9 +27,9 @@
     :root{--ease:cubic-bezier(.4,0,.2,1);--t:180ms}
     html{color-scheme:dark}
     body{font-family:Inter,system-ui,sans-serif;background:
-      radial-gradient(1150px 620px at 12% -8%, rgba(99,102,241,.15), transparent 60%),
-      radial-gradient(950px 520px at 100% 0%, rgba(139,92,246,.11), transparent 55%),
-      #080b13; min-height:100vh;}
+      radial-gradient(1150px 620px at 12% -8%, rgba(99,102,241,.13), transparent 60%),
+      radial-gradient(950px 520px at 100% 0%, rgba(139,92,246,.10), transparent 55%),
+      #06070d; min-height:100vh;}
     .tnum{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
     h1,h2,.heading{letter-spacing:-.011em}
     ::-webkit-scrollbar{width:10px;height:10px}
@@ -71,6 +71,38 @@
     .navi.active{background:linear-gradient(90deg,rgba(99,102,241,.20),rgba(139,92,246,.06));color:#fff}
     .navi.active::before{content:'';position:absolute;left:0;top:18%;height:64%;width:3px;border-radius:3px;background:linear-gradient(180deg,#6366f1,#8b5cf6)}
 
+    /* ── RossMeta "Modern Dark (Cinema)" surface ───────────────────────── */
+    /* ambient drifting light blobs — the cinematic depth cue behind the app */
+    @keyframes drift{0%{transform:translate(0,0) scale(1)}50%{transform:translate(40px,-30px) scale(1.15)}100%{transform:translate(0,0) scale(1)}}
+    .blob{position:fixed;border-radius:9999px;filter:blur(90px);opacity:.16;pointer-events:none;z-index:-1;animation:drift 22s var(--ease) infinite}
+
+    /* message entrance — a soft springy rise */
+    @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+    .rise{animation:rise .45s cubic-bezier(.16,1,.3,1) both}
+
+    /* assistant "thinking" — three bouncing dots */
+    @keyframes bounceDot{0%,80%,100%{transform:translateY(0);opacity:.4}40%{transform:translateY(-5px);opacity:1}}
+    .typing{display:inline-flex;align-items:center;height:1.2em}
+    .typing span{display:inline-block;width:6px;height:6px;border-radius:9999px;background:#8a8f98;margin:0 2px;animation:bounceDot 1.2s infinite}
+    .typing span:nth-child(2){animation-delay:.15s}
+    .typing span:nth-child(3){animation-delay:.3s}
+
+    /* chat bubbles — name label above, accent inset ring on the assistant */
+    .chat-row{display:flex;gap:.75rem}
+    .chat-name{font-size:11px;color:#6e7d96;margin:0 0 4px 4px}
+    .bub{border-radius:18px;padding:11px 16px;font-size:14.5px;line-height:1.6}
+    .bub-you{background:rgba(255,255,255,.06)}
+    .bub-ai{background:rgba(255,255,255,.028);box-shadow:inset 0 0 0 1px rgba(139,92,246,.22)}
+    .prose-chat{line-height:1.65;word-break:break-word}
+    .prose-chat code{font-family:ui-monospace,monospace;font-size:.85em;background:rgba(255,255,255,.06);padding:.1em .35em;border-radius:6px}
+
+    /* citation chips — little monospace source tags */
+    .cite{font-size:10px;font-family:ui-monospace,monospace;padding:2px 7px;border-radius:7px;background:rgba(255,255,255,.05);color:#8a8f98;display:inline-flex;align-items:center;gap:4px}
+
+    /* composer — glass pill that lights up with an accent glow on focus */
+    .composer{border-radius:18px;transition:box-shadow var(--t) var(--ease),border-color var(--t) var(--ease)}
+    .composer:focus-within{box-shadow:0 0 0 1px rgba(99,102,241,.45),0 14px 44px rgba(99,102,241,.16)}
+
     /* respect reduced-motion: kill animation + transition + smooth scroll */
     @media (prefers-reduced-motion: reduce){
       *,*::before,*::after{animation-duration:.001ms !important;animation-iteration-count:1 !important;
@@ -79,6 +111,11 @@
   </style>
 </head>
 <body class="text-slate-200 antialiased">
+
+<!-- ambient cinema blobs (decorative, behind everything) -->
+<div class="blob" style="width:520px;height:520px;left:-120px;top:-110px;background:#6366f1"></div>
+<div class="blob" style="width:480px;height:480px;right:-150px;top:8%;background:#8b5cf6;animation-delay:-8s"></div>
+<div class="blob" style="width:420px;height:420px;left:34%;bottom:-180px;background:#0ea5e9;opacity:.11;animation-delay:-14s"></div>
 
 <!-- LOGIN -->
 <div id="login" class="hidden fixed inset-0 z-50 grid place-items-center">
@@ -330,12 +367,12 @@ function aiHtml(t){ let h=md(t.answer||'');
     `<span class="pill ${x.ok?'bg-emerald-500/15 text-emerald-300':'bg-rose-500/15 text-rose-300'} inline-flex items-center gap-1"><i data-lucide="${x.ok?'check':'x'}" class="text-[11px]"></i>${esc(x.name)}</span>`).join('')+`</div>`;
   if(t.tools) h+=t.tools.filter(x=>x.data).map(x=>
     `<details class="mt-1"><summary class="cursor-pointer text-[11px] text-slate-400 hover:text-slate-200 select-none inline-flex items-center gap-1"><i data-lucide="braces" class="text-[11px]"></i>${esc(x.name)} — returned data</summary><pre class="text-[11px] text-slate-300 bg-ink/60 border border-edge rounded-lg p-2 mt-1 overflow-auto max-h-72 whitespace-pre-wrap">${esc(prettyJson(x.data))}</pre></details>`).join('');
-  if(t.citations&&t.citations.length) h+=`<div class="text-[11px] text-slate-500 mt-1.5 flex items-center gap-1"><i data-lucide="link"></i>${t.citations.map(esc).join(', ')}</div>`;
+  if(t.citations&&t.citations.length) h+=`<div class="mt-2 flex flex-wrap gap-1.5">${t.citations.map(c=>`<span class="cite">↳ ${esc(c)}</span>`).join('')}</div>`;
   if(t.suggest_skill&&t.suggest_skill.tools&&t.suggest_skill.tools.length>=2) h+=`<div class="mt-1.5"><button class="save-skill text-[11px] inline-flex items-center gap-1.5 bg-accent/10 border border-accent/30 text-accent rounded-lg px-2.5 py-1 hover:bg-accent/20" data-sk="${encodeURIComponent(JSON.stringify(t.suggest_skill))}"><i data-lucide="sparkles" class="text-[12px]"></i>Save these ${t.suggest_skill.tools.length} steps as a reusable skill</button></div>`;
   if(t.meta) h+=`<div class="text-[11px] text-slate-600 mt-1">${esc(t.meta)}</div>`;
   return h; }
 // ── live chat streaming, decoupled from the view so it keeps painting across tab switches ──
-const CHAT_DOTS='<span class="inline-flex gap-1"><span class="dot">●</span><span class="dot">●</span><span class="dot">●</span></span>';
+const CHAT_DOTS='<span class="typing"><span></span><span></span><span></span></span>';
 function chatThinkBlock(){ const think=STREAM?STREAM.think:'', acc=STREAM?STREAM.acc:''; if(!think) return '';
   if(acc) return `<div class="text-[11px] text-slate-500 mb-1.5 flex items-center gap-1.5"><i data-lucide="brain" class="text-[11px]"></i><span class="italic opacity-70">Thought for a moment</span></div>`;
   const tail=esc(think).replace(/\s+/g,' ').slice(-280);
@@ -516,18 +553,18 @@ const VIEWS={
           <button id="delChat" class="text-[11px] text-slate-500 hover:text-rose-300 inline-flex items-center gap-1" title="Delete this conversation"><i data-lucide="trash-2" class="text-[12px]"></i> Delete</button>
           <button id="newChatTop" class="md:hidden text-[11px] text-slate-500 hover:text-accent inline-flex items-center gap-1"><i data-lucide="plus" class="text-[12px]"></i> New</button>
         </div>
-        <div id="msgs" class="flex-1 space-y-4 mb-3 overflow-auto"></div>
+        <div id="msgs" class="flex-1 space-y-5 mb-3 overflow-auto"></div>
         <div id="suggest" class="flex flex-wrap gap-2 mb-3"></div>
-        <form id="chatForm" class="card glass flex gap-2 p-2">
-          <input id="msg" placeholder="Ask about ${esc(TENANT==='*'?'all clients':TENANT)} …"
-            class="flex-1 bg-transparent px-3 py-2 text-sm focus:outline-none"/>
-          <button class="grad text-white rounded-xl px-4 text-sm font-semibold flex items-center gap-1"><i data-lucide="send"></i></button>
+        <form id="chatForm" class="composer glass flex items-end gap-2 p-2 pl-4">
+          <textarea id="msg" rows="1" placeholder="Ask about ${esc(TENANT==='*'?'all clients':TENANT)} …"
+            class="flex-1 bg-transparent py-2 text-sm leading-relaxed resize-none focus:outline-none max-h-40 self-center"></textarea>
+          <button type="submit" aria-label="Send" class="grad text-white rounded-xl h-9 w-9 grid place-items-center shrink-0"><i data-lucide="send" class="text-[15px]"></i></button>
         </form>
         <div class="text-[11px] text-slate-500 mt-2 flex items-center gap-1.5"><i data-lucide="shield-check"></i> Analysing only — DTM AI never changes client systems in this mode. ☁ = cloud model.</div>
       </div></div>`;
     const sg=['How many assets does this client have?','Any open Huntress incidents?','Summarise this client’s security posture'];
     const showSuggest=()=>{ const el=$('#suggest'); if(!el)return; el.innerHTML=MSGS.length?'':sg.map(s=>`<button class="pill bg-white/5 hover:bg-white/10 text-slate-300 border border-edge">${esc(s)}</button>`).join('');
-      el.querySelectorAll('button').forEach(b=>b.onclick=()=>{$('#msg').value=b.textContent;$('#msg').focus();}); };
+      el.querySelectorAll('button').forEach(b=>b.onclick=()=>{$('#msg').value=b.textContent;$('#msg').dispatchEvent(new Event('input'));$('#msg').focus();}); };
     const ctxCap=()=>{ const m=models.find(x=>x.id===MODEL); return (m&&m.context_chars)||(mm.context&&mm.context.history_chars)||32000; };
     const ctxMsgs=()=>MSGS.filter(t=>t.role==='user'?t.text:(t.answer&&!t.error)).map(t=>({role:t.role,content:t.role==='user'?t.text:t.answer}));
     const updateMeter=()=>{ const el=$('#ctxMeter'); if(!el)return; const cap=ctxCap(); const h=ctxMsgs();
@@ -565,6 +602,11 @@ const VIEWS={
       if(c)c.title=(t.trim()||'New chat'); renderRail(); };
     const refreshConvs=async()=>{ try{ CONVS=(await api('GET','/api/conversations')).conversations||[]; }catch(_){} renderRail(); };
     $('#model').onchange=e=>{MODEL=e.target.value; updateMeter();};
+    // auto-grow composer + Enter to send / Shift+Enter for a newline
+    const ta=$('#msg');
+    if(ta){ const grow=()=>{ ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,160)+'px'; };
+      ta.addEventListener('input',grow);
+      ta.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); $('#chatForm').requestSubmit(); } }); }
     if($('#addModel'))$('#addModel').onclick=()=>route('integrations');
     if($('#newChat'))$('#newChat').onclick=newChat;
     if($('#newChatTop'))$('#newChatTop').onclick=newChat;
@@ -576,7 +618,7 @@ const VIEWS={
       MSGS=r.messages.map(normMsg); renderChatLog(); showSuggest(); updateMeter(); toast('Conversation compacted'); };
     $('#msgs').addEventListener('click',e=>{ const b=e.target.closest('.open-table'); if(b){ openTablePopup(decodeURIComponent(b.dataset.answer)); return; }
       const sk=e.target.closest('.save-skill'); if(sk) saveSkill(JSON.parse(decodeURIComponent(sk.dataset.sk))); });
-    $('#chatForm').onsubmit=async e=>{e.preventDefault();const m=$('#msg').value.trim();if(!m)return;$('#msg').value='';
+    $('#chatForm').onsubmit=async e=>{e.preventDefault();const m=$('#msg').value.trim();if(!m)return;$('#msg').value='';$('#msg').style.height='auto';
       MSGS.push({role:'user',text:m}); showSuggest(); updateMeter();
       bubble('you',esc(m));
       // State at module scope (STREAM) so a tab switch can't kill the turn; the reader keeps
@@ -1217,10 +1259,14 @@ function toggle(name,field,val,disabled,label){
     <div class="switch ${val?'on':''} ${disabled?'disabled':''}" data-name="${esc(name)}" data-field="${field}"></div>
     <span class="text-[10px] text-slate-600 md:hidden">${label}</span></div>`;}
 function bubble(who,html,fixedId){const id=fixedId||('m'+Math.random().toString(36).slice(2));const mine=who==='you';
-  const avatar=mine?`<div class="h-8 w-8 rounded-full bg-edge grid place-items-center text-xs font-semibold shrink-0">You</div>`
-    :`<div class="h-8 w-8 rounded-full grad grid place-items-center shrink-0 shadow-lg shadow-indigo-500/30"><i data-lucide="sparkles" class="text-white text-sm"></i></div>`;
-  $('#msgs').insertAdjacentHTML('beforeend',`<div class="flex gap-3 ${mine?'flex-row-reverse':''} animate-fadeup">
-    ${avatar}<div id="${id}" class="${mine?'bg-accent/15 border-accent/20':'card glass'} border rounded-2xl px-4 py-2.5 max-w-[80%] text-sm leading-relaxed">${html}</div></div>`);
+  const avatar=mine
+    ?`<div class="h-8 w-8 rounded-xl bg-white/[.06] grid place-items-center shrink-0 mt-0.5"><i data-lucide="user" class="text-slate-300 text-sm"></i></div>`
+    :`<div class="h-8 w-8 rounded-xl grid place-items-center shrink-0 mt-0.5" style="background:rgba(139,92,246,.16);box-shadow:inset 0 0 0 1px rgba(139,92,246,.35)"><i data-lucide="sparkles" class="text-violet-300 text-sm"></i></div>`;
+  $('#msgs').insertAdjacentHTML('beforeend',`<div class="chat-row rise ${mine?'flex-row-reverse':''}">
+    ${avatar}<div class="max-w-[78%] min-w-0 ${mine?'flex flex-col items-end':''}">
+      <div class="chat-name ${mine?'pr-1':''}">${mine?'You':'DTM AI'}</div>
+      <div id="${id}" class="bub ${mine?'bub-you':'bub-ai prose-chat'}">${html}</div>
+    </div></div>`);
   $('#msgs').scrollTop=1e9;icons();return id;}
 
 (async()=>{try{await loadMe();if(!ME)throw 0;showApp();loadClients();route('overview');}catch(_){showLogin();}})();
