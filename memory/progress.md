@@ -20,6 +20,12 @@
   ⚠ OWNER must install the 3 privileged files as root (I can't take root). Risk accepted in D-22:
   stolen admin session = full takeover; channel is still plain HTTP (no TLS) — add TLS later.
   **Deploy flow change:** restart ONLY `dtm-ai`, never `dtm-ai-recovery`.
+- **Terminal → real interactive PTY (xterm.js + WebSocket)**, ported from RossMeta AI (owner: "its terminal
+  works so much better"). Added minimal WebSocket to the stdlib server (`execution/web/wsutil.py`) + a
+  `pty.fork()` bridge (`execution/web/pty_session.py`, threads/select), route `GET /ws/terminal`
+  (admin-gated, audited) in server.py + recovery.py. Vendored xterm.js/css + addon-fit into dashboard/vendor
+  (copied from RossMeta, no download). `:8090` tab + `:8091` recovery both now real terminals — vim/top/
+  interactive `claude`/sudo prompts all work. One-shot `/api/terminal` kept as fallback. 232 tests green.
 
 ## 2026-06-09 (cont.) — usable memory/KB + living-memory model
 - KB CRUD shipped (read modal, download, New/Upload, edit, **rename/move**, delete); bundled `reference/`

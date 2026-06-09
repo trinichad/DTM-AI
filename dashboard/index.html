@@ -20,6 +20,9 @@
     } } };
   </script>
   <link rel="stylesheet" href="/vendor/fonts.css">
+  <link rel="stylesheet" href="/vendor/xterm.css">
+  <script src="/vendor/xterm.js"></script>
+  <script src="/vendor/addon-fit.js"></script>
   <style>
     :root{--ease:cubic-bezier(.4,0,.2,1);--t:180ms}
     html{color-scheme:dark}
@@ -157,7 +160,7 @@ const SUB={overview:'Live health across your clients',chat:'Ask about a client �
   terminal:'Run commands on the server — admin only, audited',
   audit:'Every action, logged',settings:'Account & users'};
 let ME=null, MODEL='';
-let TERM_CWD='', TERM_HIST=[], TERM_HI=0;   // admin terminal: working dir + command history
+let TERM_CLEANUP=null;   // disposes the live xterm + WebSocket when leaving the Terminal tab
 let STREAM=null;   // in-flight chat turn, at module scope so it survives tab switches
 // Chat history lives on the SERVER now (per-user, multi-conversation) — it persists across
 // devices/browsers until a conversation is explicitly deleted, like ChatGPT/Claude.
@@ -414,6 +417,7 @@ function renderNav(){$('#nav').innerHTML=NAV.filter(n=>!(n[0]==='build'||n[0]===
   return `<a data-id="${id}" class="navi ${id===current?'active':''}"><i data-lucide="${ic}"></i><span>${label}</span>${badge}</a>`;}).join('');
   document.querySelectorAll('[data-id]').forEach(a=>a.onclick=()=>route(a.dataset.id));icons();}
 function route(id){current=id;const n=NAV.find(x=>x[0]===id);clearInterval(window._statPoll);
+  if(TERM_CLEANUP&&id!=='terminal'){try{TERM_CLEANUP()}catch(e){} TERM_CLEANUP=null;}
   $('#title').textContent=n?n[1]:(id.charAt(0).toUpperCase()+id.slice(1));
   $('#subtitle').textContent=SUB[id]||'';renderNav();$('#view').classList.remove('animate-fadeup');
   void $('#view').offsetWidth;$('#view').classList.add('animate-fadeup');VIEWS[id]();}
@@ -428,8 +432,6 @@ function ring(pct,color='#6366f1',size=54){const r=22,c=2*Math.PI*r,off=c*(1-pct
     <circle cx="27" cy="27" r="${r}" fill="none" stroke="${color}" stroke-width="5" stroke-linecap="round"
       stroke-dasharray="${c}" stroke-dashoffset="${off}"/></svg>`;}
 
-// Append a chunk of terminal output. textContent (not innerHTML) → command output can never inject HTML.
-function termWrite(out,text,cls){const s=document.createElement('span');if(cls)s.className=cls;s.textContent=text;out.appendChild(s);out.scrollTop=out.scrollHeight;}
 const VIEWS={
   async overview(){
     const [tools,ints,aud]=await Promise.all([api('GET','/api/tools'),api('GET','/api/integrations'),
@@ -997,44 +999,32 @@ const VIEWS={
 
   async terminal(){
     if(!ME||ME.role!=='admin'){$('#view').innerHTML=`<div class="card p-5 max-w-2xl text-sm text-slate-400">The terminal is admin-only.</div>`;return;}
-    const st=await api('GET','/api/terminal');
-    if(!st||st.enabled===false){$('#view').innerHTML=`<div class="card p-5 max-w-2xl text-sm text-slate-400">The admin terminal is disabled on this server (<span class="font-mono">DTM_ADMIN_TERMINAL=0</span>).</div>`;return;}
-    const who=esc(st.user||'dtm-ai'); TERM_CWD=st.cwd||'/';
     $('#view').innerHTML=`<div class="h-full flex flex-col min-h-0">
         <div class="flex items-center gap-2 mb-2 flex-wrap">
           <span class="pill bg-amber-500/15 text-amber-300 inline-flex items-center gap-1"><i data-lucide="triangle-alert" class="text-[12px]"></i> Admin · audited</span>
-          <span class="text-[11px] text-slate-500">Runs as <span class="text-slate-300 font-mono">${who}</span> on <span class="text-slate-300 font-mono">${esc(st.host||'server')}</span> — full access · every command is logged to the audit trail.</span>
-          <button id="termClear" class="ml-auto text-xs text-slate-400 hover:text-accent inline-flex items-center gap-1"><i data-lucide="eraser" class="text-[12px]"></i> Clear</button>
+          <span id="termStat" class="text-[11px] text-slate-500 inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-amber-400"></span>connecting…</span>
+          <span class="text-[11px] text-slate-500 ml-auto">Interactive shell on the server — install &amp; run <span class="font-mono text-slate-300">claude</span>, edit files, <span class="font-mono text-slate-300">sudo</span>, vim, top…</span>
         </div>
-        <div id="termOut" class="flex-1 min-h-0 overflow-auto bg-black/70 border border-edge rounded-xl p-3 font-mono text-[12.5px] leading-relaxed text-slate-200 whitespace-pre-wrap break-words"></div>
-        <div class="flex items-center gap-2 mt-2 bg-black/70 border border-edge rounded-xl px-3 py-2.5 font-mono text-[12.5px] focus-within:border-accent">
-          <span id="termPrompt" class="text-emerald-400 shrink-0 whitespace-nowrap"></span>
-          <input id="termIn" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Terminal command input" class="flex-1 min-w-0 bg-transparent border-0 outline-none text-slate-100" placeholder="type a command · Enter to run · ↑/↓ history"/>
-        </div></div>`;
+        <div id="termHost" class="flex-1 min-h-0 rounded-xl border border-edge overflow-hidden" style="background:#0b0b10"></div></div>`;
     icons();
-    const out=$('#termOut'),inp=$('#termIn'),pr=$('#termPrompt');
-    const setPrompt=()=>{pr.textContent=`${st.user||'dtm-ai'}:${TERM_CWD}$`;};
-    setPrompt();
-    termWrite(out,`DTM AI admin terminal — commands run as ${st.user||'dtm-ai'}. ${st.user==='root'?'Root shell.':'Prefix sudo for root (once enabled).'} Every command is audited.\n\n`,'text-slate-500');
-    inp.focus();
-    $('#termClear').onclick=()=>{out.innerHTML='';inp.focus();};
-    inp.onkeydown=async e=>{
-      if(e.key==='ArrowUp'){e.preventDefault();if(TERM_HIST.length){TERM_HI=Math.max(0,TERM_HI-1);inp.value=TERM_HIST[TERM_HI]||'';}return;}
-      if(e.key==='ArrowDown'){e.preventDefault();if(TERM_HIST.length){TERM_HI=Math.min(TERM_HIST.length,TERM_HI+1);inp.value=TERM_HIST[TERM_HI]||'';}return;}
-      if(e.key!=='Enter')return;
-      const cmd=inp.value;if(!cmd.trim())return;
-      TERM_HIST.push(cmd);TERM_HI=TERM_HIST.length;inp.value='';
-      termWrite(out,`${st.user||'dtm-ai'}:${TERM_CWD}$ ${cmd}\n`,'text-emerald-300');
-      inp.disabled=true;
-      const r=await api('POST','/api/terminal',{command:cmd});
-      inp.disabled=false;inp.focus();
-      if(!r){termWrite(out,'(request failed)\n','text-rose-400');return;}
-      if(r.error){termWrite(out,r.error+'\n','text-rose-400');return;}
-      if(r.stdout)termWrite(out,r.stdout.endsWith('\n')?r.stdout:r.stdout+'\n');
-      if(r.stderr)termWrite(out,r.stderr.endsWith('\n')?r.stderr:r.stderr+'\n','text-rose-300');
-      if(r.cwd){TERM_CWD=r.cwd;setPrompt();}
-      if(typeof r.exit_code==='number'&&r.exit_code!==0&&!r.stderr)termWrite(out,`(exit ${r.exit_code})\n`,'text-rose-300');
-    };
+    if(typeof Terminal==='undefined'){$('#termHost').innerHTML='<div class="p-4 text-sm text-rose-300">xterm.js failed to load (/vendor/xterm.js) — hard-refresh.</div>';return;}
+    const host=$('#termHost');
+    const stat=(c,t)=>{const e=$('#termStat');if(e)e.innerHTML=`<span class="h-2 w-2 rounded-full" style="background:${c}"></span>${t}`;};
+    const term=new Terminal({fontFamily:'ui-monospace,SFMono-Regular,Menlo,monospace',fontSize:13,cursorBlink:true,allowProposedApi:true,
+      theme:{background:'#0b0b10',foreground:'#e6e7ea',cursor:'#8b5cf6',selectionBackground:'#8b5cf640'}});
+    const fit=new FitAddon.FitAddon();
+    term.loadAddon(fit);term.open(host);setTimeout(()=>{try{fit.fit()}catch(e){}},0);
+    const proto=location.protocol==='https:'?'wss':'ws';
+    const ws=new WebSocket(proto+'://'+location.host+'/ws/terminal');
+    const sendResize=()=>{try{fit.fit()}catch(e){}if(ws.readyState===1)ws.send(JSON.stringify({type:'resize',cols:term.cols,rows:term.rows}));};
+    ws.onopen=()=>{stat('#10b981','connected · live shell');sendResize();term.focus();};
+    ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.type==='out')term.write(m.data);else if(m.type==='exit'){term.write('\r\n\x1b[90m[session ended]\x1b[0m\r\n');stat('#ef4444','session ended');}};
+    ws.onclose=()=>stat('#ef4444','disconnected (admin only · or DTM_ADMIN_TERMINAL=0)');
+    ws.onerror=()=>stat('#ef4444','connection error');
+    term.onData(d=>{if(ws.readyState===1)ws.send(JSON.stringify({type:'in',data:d}));});
+    const ro=new ResizeObserver(()=>sendResize());ro.observe(host);
+    if(TERM_CLEANUP)try{TERM_CLEANUP()}catch(e){}
+    TERM_CLEANUP=()=>{try{ro.disconnect()}catch(e){}try{ws.close()}catch(e){}try{term.dispose()}catch(e){}};
   },
 
   async settings(){

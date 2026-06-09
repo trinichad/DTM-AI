@@ -113,6 +113,8 @@ def _make_handler(api: Api, signer: SessionSigner, secure_cookie: bool):
         # ── verbs ──
         def do_GET(self):
             parsed = urlparse(self.path)
+            if parsed.path == "/ws/terminal":
+                return self._ws_terminal()
             if parsed.path.startswith("/api/"):
                 query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
                 self._send_json(api.handle("GET", parsed.path, query, {}, self._user()))
@@ -139,6 +141,24 @@ def _make_handler(api: Api, signer: SessionSigner, secure_cookie: bool):
             parsed = urlparse(self.path)
             query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
             self._send_json(api.handle("DELETE", parsed.path, query, {}, self._user()))
+
+        # ── interactive PTY terminal over WebSocket (admin-only, audited — D-22) ──
+        def _ws_terminal(self):
+            from . import wsutil, pty_session
+            from ..core.adminshell import terminal_enabled
+            self.close_connection = True
+            user = self._user()
+            if not (user and api.auth.get_role(user) == "admin") or not terminal_enabled():
+                self.send_response(HTTPStatus.FORBIDDEN); self.end_headers(); return
+            if not wsutil.is_ws_upgrade(self.headers):
+                self.send_response(HTTPStatus.BAD_REQUEST); self.end_headers(); return
+            try:
+                if not wsutil.handshake(self):
+                    return
+                api.agent.audit.record(actor=user, tenant_id="*", action="terminal", detail="pty open")
+                pty_session.serve(self.connection)
+            except Exception:
+                pass   # disconnect / shell gone — pty_session always reaps the child
 
     return Handler
 

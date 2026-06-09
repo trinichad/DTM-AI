@@ -12,7 +12,20 @@ opening SSH. This is the constitution's one explicit, **human-only** exception t
 shell"). It is NOT available to the AI/agent loop: `dispatch()` and the registry are untouched; the agent
 still has zero shell access.
 
-## Flow
+## Interactive PTY (the terminal the UI actually uses)
+The dashboard Terminal (and the :8091 recovery console) is a **real pseudo-terminal over a WebSocket**,
+rendered with **xterm.js** — so `vim`, `top`, pagers, password prompts, colors, and **interactive
+`claude`** all work. Ported from RossMeta AI's design.
+- `execution/web/wsutil.py` — minimal RFC-6455 handshake + frame codec for the stdlib server (no deps).
+- `execution/web/pty_session.py` — `pty.fork()` a login shell, bridge fd⟷socket with `select` in the
+  connection thread; JSON frames `{in|resize|out|exit}`; `SIGKILL`s the child on disconnect (no orphans).
+- Route `GET /ws/terminal` (admin-gated, `terminal_enabled()`, audited `action="terminal"`) in both
+  `server.py` (`_ws_terminal`, runs as `dtm-ai`) and `recovery.py` (runs as root). xterm assets are
+  vendored at `dashboard/vendor/{xterm.js,xterm.css,addon-fit.js}`.
+- The old one-shot `adminshell.py` + `POST /api/terminal` stays as an audited programmatic fallback; the
+  UI no longer uses it. Everything below (guardrails, root, kill switch) applies to the PTY too.
+
+## Flow (one-shot fallback `POST /api/terminal`)
 ```
 admin types command → POST /api/terminal {command}
   → _require_admin(role)            (non-admins: 403; nav item hidden for them too)
