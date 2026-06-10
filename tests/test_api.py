@@ -166,5 +166,52 @@ class WebApi(unittest.TestCase):
         self.assertIsNone(self.signer.verify(token))
 
 
+class ScheduledDelegation(unittest.TestCase):
+    """Creating recurring board tasks through the manual Delegate form's API path."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        db = Path(self.tmp.name) / "w.db"
+        self.agent = build_agent(db_path=db)
+        self.auth = AuthStore(db)
+        self.auth.ensure_admin("secret")
+        self.api = Api(self.agent, self.auth, SessionSigner(secret=b"0" * 32))
+
+    def tearDown(self):
+        self.auth.close()
+        self.tmp.cleanup()
+
+    def H(self, method, path, body=None, query=None, user=None):
+        return self.api.handle(method, path, query or {}, body or {}, user)
+
+    def test_create_scheduled_task(self):
+        r = self.H("POST", "/api/kanban/tasks",
+                   {"title": "drift check", "assignee": "patchwright",
+                    "schedule": "daily 07:00", "tenant": "acme"}, user="admin")
+        # profile may not exist on disk in this fixture — creation is store-level, so 200
+        self.assertEqual(r.status, 200)
+        self.assertEqual(r.payload["status"], "scheduled")
+        self.assertTrue(r.payload["recurring"])
+        self.assertEqual(r.payload["schedule_spec"], "daily 07:00")
+        self.assertIsNotNone(r.payload["next_run_ms"])
+
+    def test_bad_schedule_400(self):
+        r = self.H("POST", "/api/kanban/tasks",
+                   {"title": "x", "assignee": "pw", "schedule": "sometimes"}, user="admin")
+        self.assertEqual(r.status, 400)
+        self.assertIn("unrecognised schedule", r.payload["error"])
+
+    def test_recurring_needs_assignee_400(self):
+        r = self.H("POST", "/api/kanban/tasks", {"title": "x", "schedule": "hourly"}, user="admin")
+        self.assertEqual(r.status, 400)
+        self.assertIn("needs an assignee", r.payload["error"])
+
+    def test_plain_task_unaffected(self):
+        r = self.H("POST", "/api/kanban/tasks", {"title": "one-off"}, user="admin")
+        self.assertEqual(r.status, 200)
+        self.assertFalse(r.payload["recurring"])
+        self.assertEqual(r.payload["status"], "triage")
+
+
 if __name__ == "__main__":
     unittest.main()

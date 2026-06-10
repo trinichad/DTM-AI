@@ -631,14 +631,25 @@ class Api:
         An assigned task is dispatched immediately — a worker runs the agent loop AS that profile."""
         assignee = (body.get("assignee") or "").strip()
         tenant = (body.get("tenant") or "").strip()
+        schedule = (body.get("schedule") or "").strip()
+        next_run = None
+        if schedule:                                   # optional recurrence (scheduled-delegation SOP)
+            from ..core.scheduler import compute_next_run, valid_spec
+            if not valid_spec(schedule):
+                return Resp(400, {"error": f"unrecognised schedule '{schedule}' — try "
+                                  "'every 30m', 'hourly', 'daily 07:00', or 'weekdays 09:30'"})
+            if not assignee:
+                return Resp(400, {"error": "a recurring task needs an assignee (specialist) to run it"})
+            next_run = compute_next_run(schedule, int(time.time() * 1000))
         try:
             t = self.agent.tasks.create(
                 body.get("title") or "", body=body.get("body") or "", assignee=assignee,
                 created_by=f"dtm-ai:{user}", tenant=tenant,
-                idempotency_key=(body.get("idempotency_key") or "").strip())
+                idempotency_key=(body.get("idempotency_key") or "").strip(),
+                recurring=bool(schedule), schedule_spec=schedule, next_run_at=next_run)
         except ValueError as e:
             return Resp(400, {"error": str(e)})
-        if assignee:
+        if assignee and not schedule:
             self.agent.dispatcher.dispatch()          # start it running now, not on the next poll
         self.agent.audit.record(actor=user, tenant_id=tenant or "*", action="config_change",
                                 detail=f"delegate={assignee or 'unassigned'}:{t['title'][:60]}")

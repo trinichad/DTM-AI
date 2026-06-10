@@ -1061,7 +1061,13 @@ const VIEWS={
           <label class="block text-[11px] uppercase tracking-wide text-slate-500 mb-1">Task title</label>
           <input id="dTitle" class="w-full bg-ink/70 border border-edge rounded-lg p-2.5 text-sm text-slate-200 focus:border-accent focus:outline-none mb-3" placeholder="Audit MFA gaps across Acme" spellcheck="false">
           <label class="block text-[11px] uppercase tracking-wide text-slate-500 mb-1">Details <span class="text-slate-600 normal-case">— what to do, scope, what 'done' looks like</span></label>
-          <textarea id="dBody" class="w-full h-40 bg-ink/70 border border-edge rounded-lg p-2.5 text-sm text-slate-200 focus:border-accent focus:outline-none mb-4" placeholder="List every Acme user with MFA disabled, using the read-only M365/Cylance tools. Report a table. Do not change anything." spellcheck="false"></textarea>
+          <textarea id="dBody" class="w-full h-40 bg-ink/70 border border-edge rounded-lg p-2.5 text-sm text-slate-200 focus:border-accent focus:outline-none mb-3" placeholder="List every Acme user with MFA disabled, using the read-only M365/Cylance tools. Report a table. Do not change anything." spellcheck="false"></textarea>
+          <label class="block text-[11px] uppercase tracking-wide text-slate-500 mb-1">Repeat <span class="text-slate-600 normal-case">— optional; leave empty to run once, now</span></label>
+          <div class="flex items-center gap-2 mb-1.5">
+            <input id="dSchedule" class="flex-1 bg-ink/70 border border-edge rounded-lg p-2.5 text-sm text-slate-200 focus:border-accent focus:outline-none" placeholder="e.g. daily 07:00" spellcheck="false" list="schedDL">
+            <datalist id="schedDL"><option value="every 30m"><option value="hourly"><option value="daily 07:00"><option value="weekdays 09:30"></datalist>
+          </div>
+          <div class="text-[11px] text-slate-500 mb-4 flex items-center gap-1.5"><i data-lucide="repeat" class="text-[11px]"></i> Formats: <span class="font-mono text-slate-400">every 30m</span> · <span class="font-mono text-slate-400">hourly</span> · <span class="font-mono text-slate-400">daily 07:00</span> · <span class="font-mono text-slate-400">weekdays 09:30</span>. Recurring jobs wait in <span class="text-slate-400">scheduled</span> and fire automatically.</div>
           <div class="flex items-center gap-2"><button id="dCreate" class="grad text-white rounded-lg px-4 py-2 text-sm font-semibold inline-flex items-center gap-1.5"><i data-lucide="send"></i> Delegate</button>
             <button id="dCancel" class="text-slate-400 hover:text-slate-200 text-sm px-3 py-2">Cancel</button></div>
         </div></div>`;
@@ -1074,8 +1080,9 @@ const VIEWS={
         const title=($('#dTitle').value||'').trim();
         if(!title){ toast('Task title required',false); return; }
         const btn=$('#dCreate'); btn.disabled=true;
-        const r=await api('POST','/api/kanban/tasks',{title,body:$('#dBody').value,assignee:$('#dAssignee').value});
-        if(r&&r.id&&!r.error){ toast(`Delegated to ${$('#dAssignee').value} — worker spawning`); openTask(r.id); }
+        const sched=($('#dSchedule').value||'').trim();
+        const r=await api('POST','/api/kanban/tasks',{title,body:$('#dBody').value,assignee:$('#dAssignee').value,schedule:sched});
+        if(r&&r.id&&!r.error){ toast(sched?`Scheduled (${sched}) for ${$('#dAssignee').value}`:`Delegated to ${$('#dAssignee').value} — worker spawning`); openTask(r.id); }
         else { toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can delegate':('Delegate failed: '+((r&&r.error)||'')),false); btn.disabled=false; }
       };
     }
