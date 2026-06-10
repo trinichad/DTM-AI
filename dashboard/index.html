@@ -70,6 +70,16 @@
     .navi:hover{background:rgba(255,255,255,.05);color:#e2e8f0}
     .navi.active{background:linear-gradient(90deg,rgba(99,102,241,.20),rgba(139,92,246,.06));color:#fff}
     .navi.active::before{content:'';position:absolute;left:0;top:18%;height:64%;width:3px;border-radius:3px;background:linear-gradient(180deg,#6366f1,#8b5cf6)}
+    /* collapsed (icon-only) sidebar — toggled by the panel button in the header */
+    #sideBar{transition:width .18s var(--ease)}
+    #sideBar.mini{width:64px}
+    #sideBar.mini .side-x{display:none}
+    #sideBar.mini #brandRow{padding-left:0;padding-right:0;justify-content:center}
+    #sideBar.mini .navi{justify-content:center;padding:.55rem 0}
+    #sideBar.mini .navi span{display:none}
+    #sideBar.mini #userCard{justify-content:center;padding:.5rem 0}
+    #sideBar.mini #sysRow{justify-content:center;padding:0}
+    #sideBar.mini #sysRow #logout{margin-left:0}
 
     /* ── RossMeta "Modern Dark (Cinema)" surface ───────────────────────── */
     /* ambient drifting light blobs — the cinematic depth cue behind the app */
@@ -165,28 +175,29 @@
 
 <!-- APP -->
 <div id="app" class="hidden h-screen overflow-hidden flex">
-  <aside class="w-60 shrink-0 glass border-r border-edge flex flex-col">
-    <div class="px-5 py-5 flex items-center gap-3">
+  <aside id="sideBar" class="w-60 shrink-0 glass border-r border-edge flex flex-col">
+    <div id="brandRow" class="px-5 py-5 flex items-center gap-3">
       <div id="brandBox" class="h-9 w-9 rounded-xl grad grid place-items-center font-extrabold text-white shadow-lg shadow-indigo-500/30 overflow-hidden">D</div>
-      <div><div class="font-bold leading-none">DTM AI</div><div class="text-[10px] text-slate-500 mt-1 tracking-wide">MSP OPERATIONS</div></div>
+      <div class="side-x"><div class="font-bold leading-none">DTM AI</div><div class="text-[10px] text-slate-500 mt-1 tracking-wide">MSP OPERATIONS</div></div>
     </div>
     <nav id="nav" class="flex-1 px-3 space-y-1 overflow-y-auto"></nav>
     <div class="px-3 pb-3 pt-2 space-y-2">
       <button id="userCard" class="w-full card p-2.5 flex items-center gap-2.5 text-left hover:border-accent/40 transition">
         <div id="userAvatar" class="h-8 w-8 rounded-full grad grid place-items-center text-xs font-bold text-white shrink-0">?</div>
-        <div class="min-w-0"><div id="userName" class="text-sm font-medium truncate">—</div>
+        <div class="min-w-0 side-x"><div id="userName" class="text-sm font-medium truncate">—</div>
           <div id="userRole" class="text-[10px] text-slate-500 uppercase tracking-wide">—</div></div>
-        <i data-lucide="settings" class="ml-auto text-slate-500"></i>
+        <i data-lucide="settings" class="ml-auto text-slate-500 side-x"></i>
       </button>
-      <div class="px-1 flex items-center gap-2 text-xs text-slate-400">
-        <span class="h-2 w-2 rounded-full bg-emerald-400 animate-pulseDot"></span><span>System online</span>
+      <div id="sysRow" class="px-1 flex items-center gap-2 text-xs text-slate-400">
+        <span class="h-2 w-2 rounded-full bg-emerald-400 animate-pulseDot"></span><span class="side-x">System online</span>
         <button id="logout" aria-label="Log out" title="Log out" class="ml-auto hover:text-slate-200 flex items-center gap-1"><i data-lucide="log-out"></i></button>
       </div>
     </div>
   </aside>
 
   <main class="flex-1 flex flex-col min-w-0">
-    <header class="h-16 glass border-b border-edge flex items-center gap-3 px-6 sticky top-0 z-10">
+    <header class="h-16 glass border-b border-edge flex items-center gap-3 px-4 sticky top-0 z-10">
+      <button id="sideTgl" class="h-9 w-9 grid place-items-center rounded-lg text-slate-400 hover:text-slate-200 hover:bg-white/5 transition shrink-0" title="Hide menu"><i data-lucide="panel-left"></i></button>
       <div><div id="title" class="font-semibold text-[15px]">Overview</div>
         <div id="subtitle" class="text-xs text-slate-500"></div></div>
       <div class="ml-auto flex items-center gap-2">
@@ -684,17 +695,22 @@ function openCliPanel(){
   if(!p.classList.contains('hidden')){ closeCliPanel(); return; }
   let q='', sel=0;
   const opts=()=>['*',...CLIENTS.filter(c=>!q||c.toLowerCase().includes(q))];
+  // highlight WITHOUT rebuilding the DOM — a rebuild on hover destroys the row mid-click
+  const hot=(scroll)=>{ $('#cliList').querySelectorAll('.cli-opt').forEach(x=>{ const h=+x.dataset.i===sel;
+    x.classList.toggle('bg-accent/15',h); if(h&&scroll)x.scrollIntoView({block:'nearest'}); }); };
   const paint=()=>{ const list=opts(); if(sel>=list.length)sel=Math.max(0,list.length-1);
-    $('#cliList').innerHTML=list.map((c,i)=>{ const active=c===TENANT, hot=i===sel;
-      return `<button class="cli-opt w-full text-left px-3 py-2 flex items-center gap-2.5 transition ${hot?'bg-accent/15':'hover:bg-white/5'}" data-t="${esc(c)}" data-i="${i}">
+    $('#cliList').innerHTML=list.map((c,i)=>{ const active=c===TENANT;
+      return `<button class="cli-opt w-full text-left px-3 py-2 flex items-center gap-2.5 transition hover:bg-white/5" data-t="${esc(c)}" data-i="${i}">
         <span class="h-7 w-7 rounded-lg grid place-items-center shrink-0 ${c==='*'?'bg-accent/15 text-accent':'bg-white/5 text-slate-400'}"><i data-lucide="${c==='*'?'layers':'building-2'}" class="text-[13px]"></i></span>
         <span class="flex-1 min-w-0 text-[13px] truncate ${active?'text-slate-100 font-medium':'text-slate-300'}">${esc(tenantLabel(c))}</span>
         ${active?'<i data-lucide="check" class="text-accent text-[14px] shrink-0"></i>':''}</button>`; }).join('')
       ||'<div class="px-3 py-4 text-xs text-slate-600 text-center">No matching clients</div>';
     icons();
     $('#cliList').querySelectorAll('.cli-opt').forEach(b=>{
-      b.onclick=()=>{ closeCliPanel(); setTenant(b.dataset.t); };
-      b.onmouseenter=()=>{ sel=+b.dataset.i; paint(); }; }); };
+      // mousedown (not click): fires immediately and before any focus/blur churn can swallow it
+      b.onmousedown=e=>{ e.preventDefault(); closeCliPanel(); setTenant(b.dataset.t); };
+      b.onmouseenter=()=>{ sel=+b.dataset.i; hot(false); }; });
+    hot(false); };
   p.innerHTML=`<div class="p-2 border-b border-edge" style="background:rgba(255,255,255,.02)">
       <div class="relative"><i data-lucide="search" class="absolute left-2.5 top-2 text-slate-500 text-[13px]"></i>
         <input id="cliQ" placeholder="Search clients…" autocomplete="off"
@@ -705,13 +721,20 @@ function openCliPanel(){
   const qi=$('#cliQ'); qi.focus();
   qi.addEventListener('input',()=>{ q=qi.value.toLowerCase().trim(); sel=0; paint(); });
   qi.addEventListener('keydown',e=>{ const list=opts();
-    if(e.key==='ArrowDown'){ e.preventDefault(); sel=(sel+1)%list.length; paint(); }
-    else if(e.key==='ArrowUp'){ e.preventDefault(); sel=(sel-1+list.length)%list.length; paint(); }
+    if(e.key==='ArrowDown'){ e.preventDefault(); sel=(sel+1)%list.length; hot(true); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); sel=(sel-1+list.length)%list.length; hot(true); }
     else if(e.key==='Enter'){ e.preventDefault(); if(list[sel]!=null){ closeCliPanel(); setTenant(list[sel]); } }
     else if(e.key==='Escape'){ closeCliPanel(); } });
   document.addEventListener('click',cliOutside,true);
 }
 $('#cliBtn').onclick=openCliPanel;
+// ── collapsible left menu — icon-only rail, remembered across sessions ──
+function applySide(){ const m=localStorage.getItem('dtm_side_mini')==='1';
+  $('#sideBar').classList.toggle('mini',m);
+  const t=$('#sideTgl'); if(t)t.title=m?'Show menu':'Hide menu'; }
+$('#sideTgl').onclick=()=>{ localStorage.setItem('dtm_side_mini',
+  localStorage.getItem('dtm_side_mini')==='1'?'0':'1'); applySide(); };
+applySide();
 async function loadMe(){ try{ ME=await api('GET','/api/me'); renderUser(); }catch(_){} }
 function fillClientDL(clients){ CLIENTS=clients||[]; }   // feeds the client picker dropdown
 async function loadClients(){ try{ const r=await api('GET','/api/clients'); fillClientDL(r.clients||[]); }catch(_){} }
@@ -720,7 +743,7 @@ function renderUser(){ if(!ME)return; $('#userName').textContent=ME.username;
 
 function renderNav(){$('#nav').innerHTML=NAV.filter(n=>!(n[0]==='build'||n[0]==='terminal'||n[0]==='files')||(ME&&ME.role==='admin')).map(([id,label,ic])=>{
   const badge='';   // approvals moved to the top-bar bell
-  return `<a data-id="${id}" class="navi ${id===current?'active':''}"><i data-lucide="${ic}"></i><span>${label}</span>${badge}</a>`;}).join('');
+  return `<a data-id="${id}" title="${label}" class="navi ${id===current?'active':''}"><i data-lucide="${ic}"></i><span>${label}</span>${badge}</a>`;}).join('');
   document.querySelectorAll('[data-id]').forEach(a=>a.onclick=()=>route(a.dataset.id));icons();}
 function route(id){current=id;const n=NAV.find(x=>x[0]===id);clearInterval(window._statPoll);
   if(TERM_CLEANUP&&id!=='terminal'){try{TERM_CLEANUP()}catch(e){} TERM_CLEANUP=null;}
