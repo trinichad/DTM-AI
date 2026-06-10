@@ -869,7 +869,11 @@ const VIEWS={
         <div class="flex items-center gap-2 flex-wrap"><span class="font-medium font-mono text-[13px] truncate">${esc(t.name)}</span>${catChip(t.category)}${riskDot(t.risk)}</div>
         <div class="text-xs text-slate-500 mt-0.5">${esc(t.description)}</div>
       </div>
-      <button class="cap-code hbtn justify-center shrink-0" style="width:32px;height:32px;padding:0" title="View this tool's source code (read-only)" data-name="${esc(t.name)}"><i data-lucide="code" class="text-[13px]"></i></button>
+      <div class="flex items-center gap-1 shrink-0">
+        <button class="cap-code hbtn justify-center" style="width:32px;height:32px;padding:0" title="View / edit this tool's source code" data-name="${esc(t.name)}"><i data-lucide="code" class="text-[13px]"></i></button>
+        <button class="cap-ren hbtn justify-center" style="width:32px;height:32px;padding:0" title="Rename this tool" data-name="${esc(t.name)}"><i data-lucide="pencil" class="text-[13px]"></i></button>
+        <button class="cap-del hbtn justify-center" style="width:32px;height:32px;padding:0;color:#fda4af" title="Delete this tool (file moves to .tmp/deleted_skills — recoverable)" data-name="${esc(t.name)}"><i data-lucide="trash-2" class="text-[13px]"></i></button>
+      </div>
       <div class="flex items-center gap-5 text-center shrink-0">
         ${toggle(t.name,'enabled',t.enabled,false,'Enabled')}
         ${toggle(t.name,'allow_write',t.allow_write,(t.category==='read'||t.category==='alert'),'Write')}
@@ -894,23 +898,53 @@ const VIEWS={
         <i data-lucide="shield-half" class="text-accent"></i>
         <div class="text-sm text-slate-400 flex-1 min-w-[16rem]">Open capabilities tool-by-tool as you build trust. <span class="text-slate-200">Read-only by default.</span> Destructive tools always require per-action approval.</div>
         <span class="pill bg-white/5 text-slate-200 text-sm">${total} capabilities</span>
-        <span class="pill bg-emerald-500/15 text-emerald-300 text-sm">${totalOn} enabled</span></div>
+        <span class="pill bg-emerald-500/15 text-emerald-300 text-sm">${totalOn} enabled</span>
+        <button id="capAdd" class="grad text-white rounded-lg px-3 py-1.5 text-xs font-semibold inline-flex items-center gap-1.5"><i data-lucide="plus"></i> New tool</button></div>
       <div class="space-y-2.5 max-w-5xl">${order.map(s=>group(s,groups[s])).join('')}</div>`;
     icons();
+    const admErr=(r,msg)=>toast((r&&r.error&&String(r.error).includes('admin'))?'Owner only — admin required':(msg+': '+((r&&r.error)||'')),false);
+    const codeEditor=(title,initial,pathLabel,onSave)=>openDrawer({title,icon:'code',wide:true,render:body=>{
+      body.innerHTML=`<div class="h-full flex flex-col">
+        <div class="px-4 py-2 text-[11px] font-mono text-slate-500 border-b border-edge flex items-center gap-2 shrink-0">
+          <span class="truncate">${esc(pathLabel||'')}</span>
+          <button id="codeCopy" class="ml-auto hbtn shrink-0" style="height:26px;padding:0 10px;font-size:11px">Copy</button>
+          <button id="codeSave" class="grad text-white rounded-lg shrink-0 text-[11px] font-semibold" style="height:26px;padding:0 12px">Save</button></div>
+        <textarea id="codeText" class="flex-1 min-h-0 w-full bg-ink/60 p-4 text-[11.5px] font-mono leading-relaxed text-slate-200 focus:outline-none resize-none" spellcheck="false">${esc(initial)}</textarea>
+        <div class="px-4 py-2.5 text-[11px] text-slate-500 border-t border-edge flex items-start gap-1.5 shrink-0"><i data-lucide="shield-check" class="text-[12px] mt-0.5 shrink-0"></i><span>Your hand edits go live on save — validated first (syntax + a valid tool shape; failures restore the old code). AI-drafted tools still require the Build sandbox + your approval. Everything is git-tracked.</span></div></div>`;
+      icons();
+      $('#codeCopy').onclick=()=>{ navigator.clipboard.writeText($('#codeText').value).then(()=>toast('Copied')); };
+      $('#codeSave').onclick=async()=>{ const btn=$('#codeSave'); btn.disabled=true;
+        await onSave($('#codeText').value); btn.disabled=false; };
+    }});
     document.querySelectorAll('.cap-grp').forEach(b=>b.onclick=()=>{ window._capOpen[b.dataset.src]=!window._capOpen[b.dataset.src]; VIEWS.capabilities(); });
     document.querySelectorAll('.cap-code').forEach(b=>b.onclick=async e=>{ e.stopPropagation();
       const name=b.dataset.name;
       const r=await api('GET','/api/tools/'+encodeURIComponent(name)+'/code');
-      if(!r||r.error){ toast((r&&r.error&&String(r.error).includes('admin'))?'Owner only — admin can view code':('Failed: '+((r&&r.error)||'')),false); return; }
-      openDrawer({title:name,icon:'code',wide:true,render:body=>{
-        body.innerHTML=`<div class="px-4 py-2 text-[11px] font-mono text-slate-500 border-b border-edge flex items-center gap-2 sticky top-0" style="background:rgba(11,15,24,.95)">
-            <span class="truncate">${esc(r.path)}</span>
-            <button id="codeCopy" class="ml-auto hbtn shrink-0" style="height:26px;padding:0 10px;font-size:11px">Copy</button></div>
-          <pre class="p-4 text-[11.5px] font-mono leading-relaxed whitespace-pre-wrap break-words text-slate-300">${esc(r.code)}</pre>
-          <div class="px-4 pb-4 text-[11px] text-slate-500 flex items-start gap-1.5"><i data-lucide="lock" class="text-[12px] mt-0.5 shrink-0"></i><span>Read-only by design: live tool code is git-tracked and changes only through the Build flow (sandboxed draft → your review → merge). Use the switches to enable/disable, or the Build tab to draft a new version.</span></div>`;
-        icons();
-        $('#codeCopy').onclick=()=>{ navigator.clipboard.writeText(r.code).then(()=>toast('Source copied')); };
-      }}); });
+      if(!r||r.error){ admErr(r,'Failed'); return; }
+      codeEditor(name,r.code,r.path,async code=>{
+        const s=await api('POST','/api/tools/'+encodeURIComponent(name)+'/code',{code});
+        if(s&&s.ok){ toast(`${name} saved — live now (no restart needed)`); closeDrawer(); }
+        else admErr(s,'Save failed'); }); });
+    document.querySelectorAll('.cap-ren').forEach(b=>b.onclick=async e=>{ e.stopPropagation();
+      const name=b.dataset.name;
+      const nn=prompt(`Rename tool "${name}" to (snake_case):`,name); if(nn===null)return;
+      const r=await api('POST','/api/tools/'+encodeURIComponent(name)+'/rename',{name:nn.trim()});
+      if(r&&r.ok){ toast(`Renamed → ${r.name} (trust settings kept)`); VIEWS.capabilities(); }
+      else admErr(r,'Rename failed'); });
+    document.querySelectorAll('.cap-del').forEach(b=>b.onclick=async e=>{ e.stopPropagation();
+      const name=b.dataset.name;
+      if(!confirm(`Delete tool "${name}"?\n\nThe file moves to .tmp/deleted_skills/ (recoverable by hand), and the tool disappears from the registry immediately.`))return;
+      const r=await api('DELETE','/api/tools/'+encodeURIComponent(name));
+      if(r&&r.ok){ toast(`${name} deleted — recoverable at ${r.recoverable_at}`); VIEWS.capabilities(); }
+      else admErr(r,'Delete failed'); });
+    if($('#capAdd'))$('#capAdd').onclick=()=>{
+      const name=prompt('New tool name (snake_case — becomes the filename and NAME):'); if(name===null)return;
+      const nm=(name||'').trim().toLowerCase(); if(!/^[a-z][a-z0-9_]*$/.test(nm)){ toast('Name must be snake_case',false); return; }
+      const tpl=`"""${nm} — describe what this tool reads/does (one line)."""\nfrom typing import Any\n\nNAME = "${nm}"\nDESCRIPTION = "One line shown to the LLM — what this tool returns and when to use it."\nSOURCE = "dtm_ai"\nCATEGORY = "read"            # read | alert | write | destructive\nRISK_LEVEL = "low"           # none | low | medium | high\nREQUIRES_APPROVAL = False\nENABLED_BY_DEFAULT = False\nPARAMETERS: dict[str, Any] = {\n    "type": "object",\n    "properties": {},\n    "additionalProperties": False,\n}\n\n\ndef run(ctx, **_: Any):\n    # ctx.tenant_id · ctx.actor · ctx.client("kaseya"|"cylance"|"huntress") for vendor APIs\n    return {"ok": True}\n`;
+      codeEditor('New tool: '+nm,tpl,'execution/skills/'+nm+'.py',async code=>{
+        const s=await api('POST','/api/tools',{name:nm,code});
+        if(s&&s.ok){ toast(`${nm} created — find it in its group (disabled by default)`); closeDrawer(); VIEWS.capabilities(); }
+        else admErr(s,'Create failed'); }); };
     document.querySelectorAll('.switch:not(.disabled)').forEach(sw=>sw.onclick=async()=>{
       const name=sw.dataset.name,field=sw.dataset.field,val=!sw.classList.contains('on');
       sw.classList.toggle('on',val);

@@ -215,3 +215,85 @@ class ScheduledDelegation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OwnerToolAuthoring(unittest.TestCase):
+    """D-23 — admin add/edit/rename/delete of live skills, validated + recoverable."""
+
+    NAME = "zz_owner_tmp"
+    NAME2 = "zz_owner_tmp2"
+    CODE = ('from typing import Any\n'
+            'NAME = "zz_owner_tmp"\n'
+            'DESCRIPTION = "temp owner test tool"\n'
+            'SOURCE = "dtm_ai"\n'
+            'CATEGORY = "read"\n'
+            'RISK_LEVEL = "none"\n'
+            'PARAMETERS: dict[str, Any] = {"type": "object", "properties": {}, "additionalProperties": False}\n'
+            'def run(ctx, **_: Any):\n'
+            '    return {"ok": True, "hello": "world"}\n')
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        db = Path(self.tmp.name) / "w.db"
+        self.agent = build_agent(db_path=db)
+        self.auth = AuthStore(db)
+        self.auth.ensure_admin("secret")
+        self.api = Api(self.agent, self.auth, SessionSigner(secret=b"0" * 32))
+        # belt-and-braces cleanup of every artifact this test can create
+        import sys as _sys
+        skills = Path(__file__).resolve().parents[1] / "execution" / "skills"
+        trash = Path(__file__).resolve().parents[1] / ".tmp" / "deleted_skills"
+        def _scrub():
+            for p in (skills / f"{self.NAME}.py", skills / f"{self.NAME}.py.bak",
+                      skills / f"{self.NAME2}.py", skills / f"{self.NAME2}.py.bak",
+                      trash / f"{self.NAME}.py", trash / f"{self.NAME2}.py"):
+                try: p.unlink()
+                except OSError: pass
+            _sys.modules.pop(f"execution.skills.{self.NAME}", None)
+            _sys.modules.pop(f"execution.skills.{self.NAME2}", None)
+        self.addCleanup(_scrub)
+
+    def tearDown(self):
+        self.auth.close()
+        self.tmp.cleanup()
+
+    def H(self, method, path, body=None, user="admin"):
+        return self.api.handle(method, path, {}, body or {}, user)
+
+    def test_full_lifecycle(self):
+        # add
+        r = self.H("POST", "/api/tools", {"name": self.NAME, "code": self.CODE})
+        self.assertEqual(r.status, 200, r.payload)
+        self.assertIsNotNone(self.agent.registry.get(self.NAME))
+        # bad edit (syntax error) is rejected and the old code survives
+        r = self.H("POST", f"/api/tools/{self.NAME}/code", {"code": "def broken(:"})
+        self.assertEqual(r.status, 400)
+        self.assertIn("world", self.H("GET", f"/api/tools/{self.NAME}/code").payload["code"])
+        # good edit goes live (hot reload, no restart)
+        r = self.H("POST", f"/api/tools/{self.NAME}/code", {"code": self.CODE.replace("world", "mars")})
+        self.assertEqual(r.status, 200, r.payload)
+        self.assertIn("mars", self.H("GET", f"/api/tools/{self.NAME}/code").payload["code"])
+        # rename keeps the trust policy
+        self.agent.audit.set_enabled(self.NAME, True)
+        r = self.H("POST", f"/api/tools/{self.NAME}/rename", {"name": self.NAME2})
+        self.assertEqual(r.status, 200, r.payload)
+        self.assertIsNone(self.agent.registry.get(self.NAME))
+        self.assertIsNotNone(self.agent.registry.get(self.NAME2))
+        self.assertTrue(self.agent.audit.is_enabled(self.NAME2, False))
+        # delete moves the file to the recoverable trash
+        r = self.H("DELETE", f"/api/tools/{self.NAME2}")
+        self.assertEqual(r.status, 200, r.payload)
+        self.assertIsNone(self.agent.registry.get(self.NAME2))
+        self.assertTrue((Path(__file__).resolve().parents[1] / ".tmp" / "deleted_skills" / f"{self.NAME2}.py").is_file())
+
+    def test_add_requires_valid_tool_shape(self):
+        r = self.H("POST", "/api/tools", {"name": self.NAME, "code": "x = 1\n"})
+        self.assertEqual(r.status, 400)
+        self.assertIsNone(self.agent.registry.get(self.NAME))
+        skills = Path(__file__).resolve().parents[1] / "execution" / "skills"
+        self.assertFalse((skills / f"{self.NAME}.py").exists())   # failed add leaves nothing behind
+
+    def test_non_admin_blocked(self):
+        self.auth.create_user("tech", "pw12345678", role="user")
+        r = self.api.handle("POST", "/api/tools", {}, {"name": self.NAME, "code": self.CODE}, "tech")
+        self.assertEqual(r.status, 403)

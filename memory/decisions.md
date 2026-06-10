@@ -290,3 +290,16 @@ OpenAI/Mock fall back to whole-answer (later refinement). The agent's push-callb
 SSE pull-generator via a queue + worker thread. **If true bidirectional WS is later needed for
 server-pushed alerts, SSE-for-chat does not preclude adding it.** (locked; supersedes the §6 "WebSocket"
 note for chat)
+
+## Owner direct tool authoring (2026-06-09)
+
+**D-23 — The admin may edit / rename / delete / add live skill code from the Capabilities tab.**
+I-5's gate exists because LLM-WRITTEN code touching client systems is the highest-risk surface — so the
+agent's path stays: draft → skills_candidate sandbox → AST scan → human review → promote. But the
+HUMAN owner is the trust anchor of the whole system (the admin Terminal already grants full root, D-22),
+so blocking the owner from hand-editing a skill in the dashboard adds friction without adding safety.
+Owner path (admin-gated, audited `config_change: tool_*`): edit/add validate syntax + import + required
+attrs before going live (failed validation → previous file restored); delete moves the file to
+`.tmp/deleted_skills/` (recoverable); rename rewrites NAME + filename. Module hot-reloads — no restart.
+Everything remains git-tracked (I-6). The AGENT still cannot call any of these routes (they are web-admin
+only, not tools). I-5 amended in CLAUDE.md to say "human merge OR direct admin edit (D-23)".

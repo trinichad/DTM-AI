@@ -120,6 +120,14 @@ class Api:
             return Resp(200, {"tools": self._tools()})
         if method == "GET" and path.startswith("/api/tools/") and path.endswith("/code"):
             return self._require_admin(role) or self._tool_code(path.split("/")[3], user)
+        if method == "POST" and path == "/api/tools":
+            return self._require_admin(role) or self._tool_add(body, user)
+        if method == "POST" and path.startswith("/api/tools/") and path.endswith("/code"):
+            return self._require_admin(role) or self._tool_edit(path.split("/")[3], body, user)
+        if method == "POST" and path.startswith("/api/tools/") and path.endswith("/rename"):
+            return self._require_admin(role) or self._tool_rename(path.split("/")[3], body, user)
+        if method == "DELETE" and path.startswith("/api/tools/") and len(path.split("/")) == 4:
+            return self._require_admin(role) or self._tool_delete(path.split("/")[3], user)
         if method == "GET" and path == "/api/models":
             r = self.agent.router
             return Resp(200, {"models": r.available_models(),
@@ -755,6 +763,159 @@ class Api:
             return Resp(500, {"error": f"cannot read source: {e}"})
         self.agent.audit.record(actor=user, tenant_id="*", action="code_view", tool=name)
         return Resp(200, {"name": name, "module": info.module, "path": str(path_), "code": src})
+
+    # ── owner direct tool authoring (D-23) — admin-only, audited, validated, hot-reloaded ────────
+    _TOOL_NAME_RE = __import__("re").compile(r"^[a-z][a-z0-9_]*$")
+
+    def _skills_dir(self):
+        import execution.skills as pkg
+        from pathlib import Path
+        return Path(pkg.__path__[0])
+
+    def _reload_skill(self, module_name: str) -> Optional[str]:
+        """Import/reload a skill module + re-discover the registry. Error string or None."""
+        import importlib
+        import sys
+        try:
+            if module_name in sys.modules:
+                importlib.reload(sys.modules[module_name])
+            else:
+                importlib.import_module(module_name)
+            self.agent.registry.discover()
+        except Exception as e:                       # surfaced verbatim to the admin
+            return f"{type(e).__name__}: {e}"
+        return None
+
+    def _tool_edit(self, name: str, body: dict, user: str) -> Resp:
+        """Overwrite a live skill's source (D-23). Validated before it sticks: syntax, import,
+        and the module must still register a tool named `name` (renames go through /rename).
+        Any failure restores the previous file byte-for-byte."""
+        import ast as _ast
+        import sys
+        code = body.get("code")
+        if not isinstance(code, str) or not code.strip():
+            return Resp(400, {"error": "code required"})
+        info = self.agent.registry.get(name)
+        if info is None:
+            return Resp(404, {"error": f"unknown tool '{name}'"})
+        try:
+            _ast.parse(code)
+        except SyntaxError as e:
+            return Resp(400, {"error": f"syntax error: {e}"})
+        path = self._skills_dir() / (info.module.rsplit(".", 1)[-1] + ".py")
+        prev = path.read_text(encoding="utf-8")
+        path.with_suffix(".py.bak").write_text(prev, encoding="utf-8")
+        path.write_text(code, encoding="utf-8")
+        err = self._reload_skill(info.module)
+        if err is None and self.agent.registry.get(name) is None:
+            err = (f"edited code no longer defines a valid tool named '{name}' "
+                   "(NAME/DESCRIPTION/PARAMETERS/run required; to rename, use Rename)")
+        if err:
+            path.write_text(prev, encoding="utf-8")
+            self._reload_skill(info.module)          # restore the old version in memory too
+            return Resp(400, {"error": err})
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"tool_edit={name}")
+        return Resp(200, {"ok": True, "name": name})
+
+    def _tool_add(self, body: dict, user: str) -> Resp:
+        """Create a new live skill from owner-pasted code (D-23). NAME must equal the file name."""
+        import ast as _ast
+        import sys
+        name = (body.get("name") or "").strip().lower()
+        code = body.get("code")
+        if not self._TOOL_NAME_RE.match(name):
+            return Resp(400, {"error": "name must be snake_case (lowercase letters, digits, _)"})
+        if not isinstance(code, str) or not code.strip():
+            return Resp(400, {"error": "code required"})
+        path = self._skills_dir() / f"{name}.py"
+        if path.exists() or self.agent.registry.get(name) is not None:
+            return Resp(409, {"error": f"tool '{name}' already exists"})
+        try:
+            _ast.parse(code)
+        except SyntaxError as e:
+            return Resp(400, {"error": f"syntax error: {e}"})
+        path.write_text(code, encoding="utf-8")
+        module = f"execution.skills.{name}"
+        err = self._reload_skill(module)
+        if err is None and self.agent.registry.get(name) is None:
+            err = (f"module imports but does not register a tool named '{name}' — NAME must equal "
+                   "the file name and NAME/DESCRIPTION/PARAMETERS/run must all be defined")
+        if err:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            sys.modules.pop(module, None)
+            self.agent.registry.discover()
+            return Resp(400, {"error": err})
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"tool_add={name}")
+        return Resp(200, {"ok": True, "name": name})
+
+    def _tool_rename(self, name: str, body: dict, user: str) -> Resp:
+        """Rename a live skill (D-23): rewrites the NAME line + the file, migrates its
+        enabled/allow_write/require_approval policy so trust settings survive the rename."""
+        import re as _re
+        import sys
+        new = (body.get("name") or "").strip().lower()
+        if not self._TOOL_NAME_RE.match(new):
+            return Resp(400, {"error": "new name must be snake_case (lowercase letters, digits, _)"})
+        info = self.agent.registry.get(name)
+        if info is None:
+            return Resp(404, {"error": f"unknown tool '{name}'"})
+        if new == name:
+            return Resp(400, {"error": "that is already the tool's name"})
+        new_path = self._skills_dir() / f"{new}.py"
+        if new_path.exists() or self.agent.registry.get(new) is not None:
+            return Resp(409, {"error": f"tool '{new}' already exists"})
+        old_path = self._skills_dir() / (info.module.rsplit(".", 1)[-1] + ".py")
+        src = old_path.read_text(encoding="utf-8")
+        src2, n = _re.subn(r"(?m)^(NAME\s*=\s*)(['\"]).*?\2", rf"\g<1>\g<2>{new}\g<2>", src, count=1)
+        if n != 1:
+            return Resp(400, {"error": "couldn't find a simple NAME = \"…\" line to rewrite — edit the code instead"})
+        # capture the current policy BEFORE the registry forgets the old name
+        was_enabled = self.agent.audit.is_enabled(name, info.enabled_by_default)
+        pol = self.agent.caps.get(name, default_enabled=info.enabled_by_default)
+        new_path.write_text(src2, encoding="utf-8")
+        old_path.unlink()
+        sys.modules.pop(info.module, None)
+        err = self._reload_skill(f"execution.skills.{new}")
+        if err is None and self.agent.registry.get(new) is None:
+            err = "renamed module no longer registers a valid tool"
+        if err:
+            old_path.write_text(src, encoding="utf-8")   # roll back
+            try:
+                new_path.unlink()
+            except OSError:
+                pass
+            sys.modules.pop(f"execution.skills.{new}", None)
+            self._reload_skill(info.module)
+            return Resp(400, {"error": err})
+        self.agent.audit.set_enabled(new, was_enabled)   # trust settings follow the tool
+        self.agent.caps.set(new, allow_write=pol.allow_write, require_approval=pol.require_approval)
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"tool_rename={name}->{new}")
+        return Resp(200, {"ok": True, "name": new, "was": name})
+
+    def _tool_delete(self, name: str, user: str) -> Resp:
+        """Delete a live skill (D-23): the file moves to .tmp/deleted_skills/ (recoverable), the
+        module unloads, the registry re-discovers."""
+        import shutil
+        import sys
+        from pathlib import Path
+        info = self.agent.registry.get(name)
+        if info is None:
+            return Resp(404, {"error": f"unknown tool '{name}'"})
+        path = self._skills_dir() / (info.module.rsplit(".", 1)[-1] + ".py")
+        trash = Path(self._skills_dir()).parents[1] / ".tmp" / "deleted_skills"
+        trash.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(path), str(trash / f"{name}.py"))
+        sys.modules.pop(info.module, None)
+        self.agent.registry.discover()
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"tool_delete={name}")
+        return Resp(200, {"ok": True, "deleted": name, "recoverable_at": str(trash / f"{name}.py")})
 
     def _set_agent_memory(self, name: str, body: dict, user: str) -> Resp:
         """Owner-edit an agent's MEMORY.md / USER.md (admin; audited). Omitted field = untouched."""

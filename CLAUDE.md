@@ -145,9 +145,11 @@ def run(ctx, **kwargs) -> dict | list   # ctx = {tenant_id, clients, actor}; ret
 - **I-5** The runtime agent may **save learned-skill playbooks** (compositions of already-enabled tools,
   no new code — D-15) but **cannot author or modify executable tool code.** A new executable primitive is
   drafted into `skills_candidate/` (AST security-scan + schema-lint) and reaches live `skills/` only by
-  **human merge** (D-4) — LLM-written code touching live client systems is the highest-risk surface, so
-  this gate stays even though the build is now fully in-house (D-19). New tools default `CATEGORY=read`,
-  `ENABLED_BY_DEFAULT=False`.
+  **human merge or direct admin edit (D-23)** — LLM-written code touching live client systems is the
+  highest-risk surface, so the sandbox gate stays for the AGENT (D-4, D-19). The **human owner** may
+  edit/rename/delete/add skills directly from the Capabilities tab (admin-gated, audited, validated
+  before going live, git-tracked) — the owner is the trust anchor, not the threat model. New tools
+  default `CATEGORY=read`, `ENABLED_BY_DEFAULT=False`.
 - **I-6** Everything under git. Tool promotions and config changes are commits → backup + rollback by design.
 - **I-7** If logic changes, the `/architecture/` SOP is updated **before** the code (A.N.T. golden rule).
 - **I-8** All intermediate/ephemeral file IO routes through `/.tmp/`. Deliverables land in the

@@ -21,6 +21,21 @@ admin describes a tool
 ```
 Reject discards the candidate. The runtime agent can never author tools — only this admin-gated path.
 
+## Owner direct authoring (D-23) — the human fast path
+The pipeline above is the AGENT's only road. The **human admin** additionally gets direct CRUD on live
+skills from the Capabilities tab (`/api/tools*`, admin-gated, audited `config_change: tool_*`):
+- **Edit** `POST /api/tools/<name>/code` — syntax (`ast.parse`) + import + required-attrs validation
+  BEFORE the new code goes live; on any failure the previous file is restored byte-for-byte. A `.bak`
+  is kept beside the file. The module hot-reloads (no service restart).
+- **Add** `POST /api/tools` `{name, code}` — same validation; file lands in `execution/skills/`.
+- **Rename** `POST /api/tools/<name>/rename` — rewrites the `NAME = "…"` line + the filename; rejects
+  collisions.
+- **Delete** `DELETE /api/tools/<name>` — moves the file to `.tmp/deleted_skills/<name>.py` (I-8,
+  recoverable by hand), drops it from `sys.modules`, re-discovers.
+Safety model: the owner is the trust anchor (the admin Terminal already grants root, D-22) — these
+routes never appear as agent tools, so the LLM cannot reach them. Everything stays git-tracked (I-6);
+the kill switch (I-4) and the Capability Console still gate execution.
+
 ## The validator (`validate_candidate`) — defense in depth
 AST-based (not regex), fail-closed. Rejects:
 - syntax errors; missing NAME/DESCRIPTION/PARAMETERS/run; non-object PARAMETERS
