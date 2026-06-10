@@ -1477,15 +1477,38 @@ const VIEWS={
       <div class="flex gap-2 mt-3">
         ${c.validation.ok?`<button class="bp-promote grad text-white rounded-lg px-3 py-1.5 text-xs font-semibold inline-flex items-center gap-1" data-n="${esc(c.name)}"><i data-lucide="rocket"></i> Promote to live (starts disabled)</button>`:''}
         <button class="bp-reject bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/20 rounded-lg px-3 py-1.5 text-xs" data-n="${esc(c.name)}">Discard</button></div></div>`;
+    const step=(n,t,d)=>`<div class="flex gap-3"><span class="h-6 w-6 rounded-lg grad grid place-items-center text-[11px] font-bold text-white shrink-0">${n}</span><div class="min-w-0"><div class="text-[13px] font-medium text-slate-200">${t}</div><div class="text-xs text-slate-500 mt-0.5 leading-relaxed">${d}</div></div></div>`;
     $('#view').innerHTML=`<div class="max-w-3xl space-y-4">
       <div class="card p-5">
         <div class="flex items-center gap-2 mb-2 font-semibold"><i data-lucide="hammer" class="text-accent"></i> Draft a new tool</div>
-        <div class="text-sm text-slate-400 mb-3">Describe a read-only capability. The AI drafts it into a sandbox; it's validated (security scan + schema) and stays <span class="text-slate-200">disabled until you promote it</span>. Nothing touches client systems during drafting.</div>
+        <div class="text-sm text-slate-400 mb-3">Describe a read-only capability in plain English. Nothing touches client systems during drafting.</div>
         <textarea id="bd" rows="3" placeholder="e.g. List Cylance devices that haven't checked in for 30 days" class="w-full bg-ink/80 border border-edge rounded-lg px-3 py-2 text-sm focus:border-accent focus:outline-none"></textarea>
         <div class="flex items-center gap-2 mt-2"><button id="bd-go" class="grad text-white rounded-lg px-4 py-2 text-sm font-semibold inline-flex items-center gap-1"><i data-lucide="sparkles"></i> Generate draft</button>
           <span id="bd-status" class="text-xs text-slate-500"></span></div>
       </div>
-      <div class="space-y-3">${candidates.length?candidates.map(cand).join(''):'<div class="text-sm text-slate-500 px-1">No candidates yet — describe one above.</div>'}</div></div>`;
+      <details class="card p-5">
+        <summary class="cursor-pointer select-none font-semibold flex items-center gap-2"><i data-lucide="graduation-cap" class="text-accent"></i> How AI tool-building works — the full flow</summary>
+        <div class="space-y-3 mt-4">
+          ${step(1,'You describe it (above)','One or two sentences about what you want the tool to look up. Pick the model you trust for code.')}
+          ${step(2,'The AI writes the code — into quarantine','The draft lands in a sandbox folder, NOT in the live system. It cannot run from there. It appears below as a <b class="text-slate-300">pending capability</b>. (This is not the Skills tab — Skills are saved procedures the agent learned; this is brand-new tool code.)')}
+          ${step(3,'The machine checks it first','An automatic security scan rejects anything dangerous: shell/network/file access is hard-blocked, and AI drafts may only READ — they can never write to or change client systems.')}
+          ${step(4,'You review and decide','Read the code below (or just the description). <b class="text-slate-300">Approve & promote</b> moves it to the Capabilities tab — still switched OFF. <b class="text-slate-300">Discard</b> deletes it. Nothing goes live without your click.')}
+          ${step(5,'You test it, then switch it on','See the testing steps below. Until you flip its Enabled switch in Capabilities, the AI cannot touch it.')}
+        </div>
+        <div class="mt-5 pt-4 border-t border-edge/40">
+          <div class="font-semibold text-sm mb-3 flex items-center gap-2"><i data-lucide="flask-conical" class="text-accent"></i> How to test a promoted tool</div>
+          <div class="space-y-3">
+            ${step('a','Enable it','Capabilities → find it in its group → flip <b class="text-slate-300">Enabled</b>. It is read-only, so the worst case is a wrong or failed answer — it cannot change anything.')}
+            ${step('b','Probe it in Chat','Pick a client and ask a question that needs it — you can even say “use &lt;tool name&gt;”. Watch the tool chip under the answer: green ✓ = ran, red ✗ = failed.')}
+            ${step('c','Verify the data','Expand “returned data” under the answer and sanity-check a few values against the vendor portal. Every call is also in the Audit tab.')}
+            ${step('d','Not right? You stay in control','Disable it (kill switch), fix it yourself with the &lt;/&gt; code editor in Capabilities (validated, instant), or delete it (recoverable).')}
+          </div>
+        </div>
+      </details>
+      <div class="flex items-center gap-2 px-1 pt-1">
+        <i data-lucide="inbox" class="text-accent text-sm"></i><span class="font-semibold text-sm">Pending capabilities — awaiting your approval</span>
+        <span class="pill bg-white/5 text-slate-300">${candidates.length}</span></div>
+      <div class="space-y-3">${candidates.length?candidates.map(cand).join(''):'<div class="text-sm text-slate-500 px-1">None waiting. Draft one above — it will appear here for your review before it can go anywhere near the live system.</div>'}</div></div>`;
     $('#bd-go').onclick=async()=>{const desc=$('#bd').value.trim();if(!desc)return;
       $('#bd-status').textContent='drafting…';
       const r=await api('POST','/api/build/draft',{description:desc,model:MODEL});
@@ -1574,9 +1597,14 @@ async function toggleCreds(integration, box){
   icons();
 }
 function toggle(name,field,val,disabled,label){
-  return `<div class="flex flex-col items-center gap-1">
+  const TIP={
+    enabled:'Kill switch: OFF = the AI cannot use this tool at all — dispatch refuses it even if the model asks (config, not code).',
+    allow_write:'Allows this tool’s WRITE action to run. Read-only tools have nothing to write, so this is locked off for them.',
+    require_approval:'Every write first lands in the Approvals tab and waits for your sign-off. Locked ON for destructive tools — that floor can’t be disabled.'};
+  const lock=disabled?(field==='allow_write'?' — locked: read-only tool':field==='require_approval'?' — locked: destructive always needs approval':' — locked'):'';
+  return `<div class="flex flex-col items-center gap-1" title="${TIP[field]||''}${lock}">
     <div class="switch ${val?'on':''} ${disabled?'disabled':''}" data-name="${esc(name)}" data-field="${field}"></div>
-    <span class="text-[10px] text-slate-600 md:hidden">${label}</span></div>`;}
+    <span class="text-[10px] ${disabled?'text-slate-700':'text-slate-500'}">${label}</span></div>`;}
 function bubble(who,html,fixedId){const id=fixedId||('m'+Math.random().toString(36).slice(2));const mine=who==='you';
   const ag=CHAT_AGENT||{}, hx=agentHex(ag);
   const face=ag.emoji?esc(ag.emoji):`<i data-lucide="${ag.is_manager===false?'bot':'sparkles'}" class="text-sm" style="color:${hx}"></i>`;
