@@ -145,7 +145,7 @@
 <div id="login" class="hidden fixed inset-0 z-50 grid place-items-center">
   <form id="loginForm" class="card glass w-[22rem] p-8 space-y-5 animate-fadeup">
     <div class="flex items-center gap-3">
-      <div class="h-11 w-11 rounded-2xl grad grid place-items-center font-extrabold text-white text-lg shadow-lg shadow-indigo-500/30">D</div>
+      <div id="brandBoxLogin" class="h-11 w-11 rounded-2xl grad grid place-items-center font-extrabold text-white text-lg shadow-lg shadow-indigo-500/30 overflow-hidden">D</div>
       <div><div class="font-bold text-xl leading-none grad-text">DTM AI</div>
         <div class="text-xs text-slate-400 mt-1">MSP Operations Console</div></div>
     </div>
@@ -167,7 +167,7 @@
 <div id="app" class="hidden h-screen overflow-hidden flex">
   <aside class="w-60 shrink-0 glass border-r border-edge flex flex-col">
     <div class="px-5 py-5 flex items-center gap-3">
-      <div class="h-9 w-9 rounded-xl grad grid place-items-center font-extrabold text-white shadow-lg shadow-indigo-500/30">D</div>
+      <div id="brandBox" class="h-9 w-9 rounded-xl grad grid place-items-center font-extrabold text-white shadow-lg shadow-indigo-500/30 overflow-hidden">D</div>
       <div><div class="font-bold leading-none">DTM AI</div><div class="text-[10px] text-slate-500 mt-1 tracking-wide">MSP OPERATIONS</div></div>
     </div>
     <nav id="nav" class="flex-1 px-3 space-y-1 overflow-y-auto"></nav>
@@ -480,6 +480,13 @@ function openDrawer(opts){ closeDrawer();
   icons();
   requestAnimationFrame(()=>{ back.classList.add('show'); dr.classList.add('show'); });
 }
+// ── branding — owner logo replaces the gradient "D" in the sidebar + login ──
+async function loadBranding(){ try{
+  const b=await api('GET','/api/branding'); window._brandLogo=b.logo||null;
+  for(const id of ['brandBox','brandBoxLogin']){ const el=document.getElementById(id); if(!el)continue;
+    if(b.logo){ el.classList.remove('grad'); el.innerHTML=`<img src="${b.logo}" alt="logo" class="h-full w-full object-contain">`; }
+    else { el.classList.add('grad'); el.innerHTML='D'; } }
+}catch(_){} }
 // ── approvals bell — pending write actions live in the top bar, not a tab ──
 async function refreshApprovalBadge(){ try{
   const d=await api('GET','/api/approvals');
@@ -1489,6 +1496,16 @@ const VIEWS={
             <select id="nu-role" class="bg-ink/80 border border-edge rounded-lg px-3 py-2 text-sm"><option value="user">user</option><option value="admin">admin</option></select></div>
           <button id="nu-create" class="grad text-white rounded-lg px-4 py-2 text-sm font-semibold mt-2 inline-flex items-center gap-1"><i data-lucide="user-plus"></i> Create user</button></div></div>`;
     } else users=`<div class="card p-5 max-w-3xl text-sm text-slate-400">Contact an admin to manage user accounts.</div>`;
+    const branding=me.role!=='admin'?'':`<div class="card p-5 max-w-3xl">
+      <div class="flex items-center gap-2 mb-3 font-semibold"><i data-lucide="image" class="text-accent"></i> Branding</div>
+      <div class="flex items-center gap-4 flex-wrap">
+        <div class="h-14 w-14 rounded-xl grid place-items-center overflow-hidden shrink-0" style="background:rgba(255,255,255,.04);box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)">
+          ${window._brandLogo?`<img src="${window._brandLogo}" class="h-full w-full object-contain">`:'<span class="grad-text font-extrabold text-xl">D</span>'}</div>
+        <div class="text-xs text-slate-500 flex-1 min-w-[14rem]">Your logo, shown in the sidebar and on the login screen. PNG / JPG / SVG / WebP / GIF, up to 2 MB — square works best.</div>
+        <input type="file" id="logoInput" accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif,.svg" class="hidden">
+        <button id="logoUp" class="grad text-white rounded-lg px-3 py-2 text-xs font-semibold inline-flex items-center gap-1.5"><i data-lucide="upload" class="text-[13px]"></i> ${window._brandLogo?'Replace logo':'Upload logo'}</button>
+        ${window._brandLogo?'<button id="logoRm" class="hbtn" style="color:#fda4af">Remove</button>':''}
+      </div></div>`;
     $('#view').innerHTML=`<div class="space-y-4">
       <div class="card p-5 max-w-3xl"><div class="flex items-center gap-2 mb-4 font-semibold"><i data-lucide="user-cog" class="text-accent"></i> My account</div>
         <div class="text-sm text-slate-400 mb-4">Signed in as <span class="text-slate-200 font-medium">${esc(me.username)}</span> <span class="pill bg-indigo-500/15 text-indigo-300">${esc(me.role)}</span>${me.email?' · '+esc(me.email):''}</div>
@@ -1497,10 +1514,22 @@ const VIEWS={
           <input id="cp-cur" type="password" placeholder="current" class="bg-ink/80 border border-edge rounded-lg px-3 py-2 text-sm"/>
           <input id="cp-new" type="password" placeholder="new (min 8)" class="bg-ink/80 border border-edge rounded-lg px-3 py-2 text-sm"/>
           <button id="cp-save" class="grad text-white rounded-lg px-3 py-2 text-sm font-semibold inline-flex items-center justify-center gap-1"><i data-lucide="key-round"></i> Update</button></div></div>
-      ${users}</div>`;
+      ${branding}${users}</div>`;
     $('#cp-save').onclick=async()=>{const r=await api('POST','/api/me/password',{current:$('#cp-cur').value,new:$('#cp-new').value});
       if(r.ok){toast('password updated');$('#cp-cur').value='';$('#cp-new').value='';}else toast(esc(r.error),false);};
     if(me.role==='admin'){
+      $('#logoUp').onclick=()=>$('#logoInput').click();
+      $('#logoInput').onchange=async e=>{ const f=e.target.files[0]; if(!f)return;
+        if(f.size>2*1024*1024){ toast('Logo too large (2 MB max)',false); return; }
+        const b64=await new Promise(res=>{ const rd=new FileReader(); rd.onload=()=>res(rd.result.split(',')[1]); rd.readAsDataURL(f); });
+        const r=await api('POST','/api/branding/logo',{content_b64:b64});
+        if(r&&r.ok){ toast('Logo updated'); await loadBranding(); route('settings'); }
+        else toast((r&&r.error)||'upload failed',false); };
+      const rm=$('#logoRm');
+      if(rm) rm.onclick=async()=>{ if(!confirm('Remove the logo and go back to the default mark?'))return;
+        const r=await api('DELETE','/api/branding/logo');
+        if(r&&r.ok){ toast('Logo removed'); await loadBranding(); route('settings'); }
+        else toast((r&&r.error)||'failed',false); };
       $('#nu-create').onclick=async()=>{const r=await api('POST','/api/users',{username:$('#nu-name').value,email:$('#nu-email').value,password:$('#nu-pass').value,role:$('#nu-role').value});
         r.ok?(toast('user created'),route('settings')):toast(esc(r.error),false);};
       document.querySelectorAll('.udel').forEach(b=>b.onclick=async()=>{if(!confirm('Delete user '+b.dataset.u+'?'))return;
@@ -1763,7 +1792,7 @@ function bubble(who,html,fixedId){const id=fixedId||('m'+Math.random().toString(
     </div></div>`);
   $('#msgs').scrollTop=1e9;icons();return id;}
 
-(async()=>{try{await loadMe();if(!ME)throw 0;showApp();loadClients();route('overview');}catch(_){showLogin();}})();
+(async()=>{loadBranding();try{await loadMe();if(!ME)throw 0;showApp();loadClients();route('overview');}catch(_){showLogin();}})();
 </script>
 </body>
 </html>

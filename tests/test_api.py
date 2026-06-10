@@ -380,3 +380,54 @@ class FilesManager(unittest.TestCase):
             self.assertEqual(self.H(m, p, b, user="tech").status, 403, p)
         self.assertEqual(self.api.fs_download("/etc/hostname", "tech").status, 403)
         self.assertEqual(self.api.fs_download("/etc/hostname", None).status, 401)
+
+
+class Branding(unittest.TestCase):
+    """Owner logo — public read, admin-only write, image sniffing, single-logo invariant."""
+
+    def setUp(self):
+        import os
+        self.tmp = tempfile.TemporaryDirectory()
+        db = Path(self.tmp.name) / "w.db"
+        self.agent = build_agent(db_path=db)
+        self.auth = AuthStore(db)
+        self.auth.ensure_admin("secret")
+        self.api = Api(self.agent, self.auth, SessionSigner(secret=b"0" * 32))
+        self._prev = os.environ.get("DTM_BRANDING_DIR")
+        os.environ["DTM_BRANDING_DIR"] = str(Path(self.tmp.name) / "brand")
+
+    def tearDown(self):
+        import os
+        if self._prev is None:
+            os.environ.pop("DTM_BRANDING_DIR", None)
+        else:
+            os.environ["DTM_BRANDING_DIR"] = self._prev
+        self.auth.close()
+        self.tmp.cleanup()
+
+    def H(self, method, path, body=None, user=None):
+        return self.api.handle(method, path, {}, body or {}, user)
+
+    def test_lifecycle_and_gating(self):
+        import base64
+        png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 20).decode()
+        # public read works logged-out; empty by default
+        self.assertIsNone(self.H("GET", "/api/branding").payload["logo"])
+        # non-admin cannot set
+        self.auth.create_user("tech", "pw12345678", role="user")
+        self.assertEqual(self.H("POST", "/api/branding/logo", {"content_b64": png}, user="tech").status, 403)
+        # admin sets png; public read reflects it
+        r = self.H("POST", "/api/branding/logo", {"content_b64": png}, user="admin")
+        self.assertEqual(r.status, 200, r.payload)
+        self.assertIn("logo.png", self.H("GET", "/api/branding").payload["logo"])
+        # replacing with a jpg removes the png (one logo at a time)
+        jpg = base64.b64encode(b"\xff\xd8\xff\xe0" + b"0" * 20).decode()
+        self.H("POST", "/api/branding/logo", {"content_b64": jpg}, user="admin")
+        self.assertIn("logo.jpg", self.H("GET", "/api/branding").payload["logo"])
+        self.assertFalse((Path(self.tmp.name) / "brand" / "logo.png").exists())
+        # junk rejected; delete clears
+        self.assertEqual(self.H("POST", "/api/branding/logo",
+                                {"content_b64": base64.b64encode(b"not an image").decode()},
+                                user="admin").status, 400)
+        self.H("DELETE", "/api/branding/logo", user="admin")
+        self.assertIsNone(self.H("GET", "/api/branding").payload["logo"])

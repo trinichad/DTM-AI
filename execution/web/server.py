@@ -23,7 +23,8 @@ from .auth import AuthStore, SessionSigner
 _DASHBOARD = Path(__file__).resolve().parents[2] / "dashboard" / "index.html"
 _VENDOR = Path(__file__).resolve().parents[2] / "dashboard" / "vendor"
 _CTYPES = {".js": "application/javascript", ".css": "text/css", ".woff2": "font/woff2",
-           ".woff": "font/woff", ".svg": "image/svg+xml", ".png": "image/png"}
+           ".woff": "font/woff", ".svg": "image/svg+xml", ".png": "image/png",
+           ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif"}
 
 
 def _make_handler(api: Api, signer: SessionSigner, secure_cookie: bool):

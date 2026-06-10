@@ -55,6 +55,8 @@ class Api:
             return self._login(body)
         if method == "POST" and path == "/api/logout":
             return Resp(200, {"ok": True}, clear_cookie=True)
+        if method == "GET" and path == "/api/branding":
+            return Resp(200, self._branding())      # public: just the logo URL (login screen needs it)
 
         # everything else requires a session (fail-closed)
         if not user:
@@ -116,6 +118,10 @@ class Api:
             return self._require_admin(role) or self._approve(int(path.split("/")[3]), user)
         if method == "POST" and path.startswith("/api/approvals/") and path.endswith("/reject"):
             return self._require_admin(role) or self._reject(int(path.split("/")[3]), user)
+        if method == "POST" and path == "/api/branding/logo":
+            return self._require_admin(role) or self._set_logo(body, user)
+        if method == "DELETE" and path == "/api/branding/logo":
+            return self._require_admin(role) or self._del_logo(user)
         if method == "GET" and path == "/api/fs/list":
             return self._require_admin(role) or self._fs_list(query.get("path") or "")
         if method == "GET" and path == "/api/fs/file":
@@ -763,6 +769,81 @@ class Api:
         self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
                                 detail=f"agent_soul={name}")
         return Resp(200, a)
+
+    # ── branding — owner logo for the sidebar + login screen (admin-managed, publicly visible) ──
+    _LOGO_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg")
+    _LOGO_MAX = 2 * 1024 * 1024
+
+    def _branding_dir(self):
+        from pathlib import Path
+        d = get_config().get("DTM_BRANDING_DIR")    # test override; default = served /vendor dir
+        return Path(d) if d else Path(__file__).resolve().parents[2] / "dashboard" / "vendor"
+
+    def _logo_file(self):
+        d = self._branding_dir()
+        for ext in self._LOGO_EXTS:
+            p = d / f"logo{ext}"
+            if p.is_file():
+                return p
+        return None
+
+    def _branding(self) -> dict:
+        p = self._logo_file()
+        return {"logo": f"/vendor/{p.name}?v={int(p.stat().st_mtime)}"} if p else {"logo": None}
+
+    @staticmethod
+    def _sniff_image(data: bytes):
+        if data[:4] == b"\x89PNG":
+            return ".png"
+        if data[:2] == b"\xff\xd8":
+            return ".jpg"
+        if data[:4] == b"GIF8":
+            return ".gif"
+        if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            return ".webp"
+        head = data[:512].lstrip()
+        if head.startswith(b"<") and b"<svg" in data[:2048].lower():
+            return ".svg"
+        return None
+
+    def _set_logo(self, body: dict, user: str) -> Resp:
+        import base64
+        try:
+            data = base64.b64decode(body.get("content_b64") or "", validate=True)
+        except Exception:
+            return Resp(400, {"error": "content_b64 is not valid base64"})
+        if not data:
+            return Resp(400, {"error": "empty file"})
+        if len(data) > self._LOGO_MAX:
+            return Resp(400, {"error": "logo too large (2 MB max)"})
+        ext = self._sniff_image(data)
+        if ext is None:
+            return Resp(400, {"error": "not a recognised image (png / jpg / gif / webp / svg)"})
+        d = self._branding_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        for old in self._LOGO_EXTS:                  # one logo at a time
+            try:
+                (d / f"logo{old}").unlink()
+            except OSError:
+                pass
+        (d / f"logo{ext}").write_bytes(data)
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"branding_logo set ({len(data)} bytes, {ext})")
+        return Resp(200, {"ok": True, **self._branding()})
+
+    def _del_logo(self, user: str) -> Resp:
+        removed = False
+        d = self._branding_dir()
+        for ext in self._LOGO_EXTS:
+            try:
+                (d / f"logo{ext}").unlink()
+                removed = True
+            except OSError:
+                pass
+        if removed:
+            self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                    detail="branding_logo removed")
+        return Resp(200, {"ok": True, "logo": None})
 
     # ── files manager — admin-only, runs as the service user, mutations audited (SOP: admin-terminal) ──
     _FS_ROOTS = ("/opt/dtm-ai", "/home", "/srv", "/etc", "/var/log", "/")
