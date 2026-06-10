@@ -149,6 +149,11 @@ class Api:
             return self._require_admin(role) or self._sync_roster(user)
         if method == "DELETE" and path.startswith("/api/agents/") and len(path.split("/")) == 4:
             return self._require_admin(role) or self._delete_agent(path.split("/")[3], user)
+        if method == "GET" and path == "/api/agents/shared/ops":
+            from ..core.agents import read_shared
+            return Resp(200, {"text": read_shared()})
+        if method == "POST" and path == "/api/agents/shared/ops":
+            return self._require_admin(role) or self._set_shared_ops(body, user)
         if method == "GET" and path.startswith("/api/agents/") and path.endswith("/memory"):
             from ..core.agents import read_memory
             try:
@@ -156,6 +161,10 @@ class Api:
             except ValueError:
                 return Resp(400, {"error": "invalid agent name"})
             return Resp(200, m) if m else Resp(404, {"error": "unknown agent"})
+        if method == "POST" and path.startswith("/api/agents/") and path.endswith("/memory"):
+            return self._require_admin(role) or self._set_agent_memory(path.split("/")[3], body, user)
+        if method == "POST" and path.startswith("/api/agents/") and path.endswith("/identity"):
+            return self._require_admin(role) or self._set_agent_identity(path.split("/")[3], body, user)
         if method == "GET" and path.startswith("/api/agents/") and len(path.split("/")) == 4:
             from ..core.agents import get_agent
             try:
@@ -726,6 +735,60 @@ class Api:
         self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
                                 detail=f"agent_soul={name}")
         return Resp(200, a)
+
+    def _set_agent_memory(self, name: str, body: dict, user: str) -> Resp:
+        """Owner-edit an agent's MEMORY.md / USER.md (admin; audited). Omitted field = untouched."""
+        from ..core.agents import set_memory
+        memory = body.get("memory") if isinstance(body.get("memory"), str) else None
+        user_md = body.get("user") if isinstance(body.get("user"), str) else None
+        if memory is None and user_md is None:
+            return Resp(400, {"error": "memory and/or user text required"})
+        try:
+            m = set_memory(name, memory=memory, user=user_md)
+        except ValueError as e:
+            return Resp(400, {"error": str(e)})
+        except FileNotFoundError as e:
+            return Resp(404, {"error": str(e)})
+        except OSError as e:
+            return Resp(500, {"error": f"cannot write memory: {e}"})
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"agent_memory={name}")
+        return Resp(200, m)
+
+    def _set_agent_identity(self, name: str, body: dict, user: str) -> Resp:
+        """Owner-edit an agent's identity — name/role (SOUL) + emoji/accent/blurb (profile.yaml)."""
+        from ..core.agents import set_identity
+        fields = {k: body.get(k) for k in ("name", "role", "emoji", "accent", "description")
+                  if isinstance(body.get(k), str)}
+        if not fields:
+            return Resp(400, {"error": "nothing to update"})
+        try:
+            a = set_identity(name, display_name=fields.get("name"), role=fields.get("role"),
+                             emoji=fields.get("emoji"), accent=fields.get("accent"),
+                             description=fields.get("description"))
+        except ValueError as e:
+            return Resp(400, {"error": str(e)})
+        except FileNotFoundError as e:
+            return Resp(404, {"error": str(e)})
+        except OSError as e:
+            return Resp(500, {"error": f"cannot write identity: {e}"})
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"agent_identity={name}")
+        return Resp(200, a)
+
+    def _set_shared_ops(self, body: dict, user: str) -> Resp:
+        """Owner-edit the shared operating block appended to every agent's prompt (admin; audited)."""
+        from ..core.agents import write_shared
+        text = body.get("text")
+        if not isinstance(text, str):
+            return Resp(400, {"error": "text required"})
+        try:
+            r = write_shared(text)
+        except OSError as e:
+            return Resp(500, {"error": f"cannot write SHARED.md: {e}"})
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail="agents_shared_ops")
+        return Resp(200, r)
 
     def _set_agent_brain(self, name: str, body: dict, user: str) -> Resp:
         """Pin (or clear) an agent's brain — the model it runs on (owner-gated; audited). Validated

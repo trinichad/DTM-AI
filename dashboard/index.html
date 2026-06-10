@@ -850,75 +850,124 @@ const VIEWS={
   async agents(){
     const {agents}=await api('GET','/api/agents');
     if(!agents||!agents.length){ $('#view').innerHTML=`<div class="card p-8 text-center text-slate-400 max-w-2xl mx-auto">No agents yet — add one with the <span class="text-slate-200">+ Add agent</span> button.</div>`; return; }
-    const bpill=b=>`<span class="pill ${(b&&b.mode==='local')?'bg-emerald-500/15 text-emerald-300':'bg-sky-500/15 text-sky-300'} inline-flex items-center gap-1"><i data-lucide="${(b&&b.mode==='local')?'lock':'cloud'}" class="text-[11px]"></i> ${esc((b&&b.model)||'—')}</span>`;
-    const card=a=>`<div class="card card-hover p-4 cursor-pointer agent-card" data-id="${esc(a.id)}">
-        <div class="flex items-start gap-3">
-          <div class="h-10 w-10 rounded-xl ${a.is_manager?'grad':'bg-edge'} grid place-items-center shrink-0 ${a.is_manager?'shadow-lg shadow-indigo-500/30':''}"><i data-lucide="${a.is_manager?'crown':'bot'}" class="${a.is_manager?'text-white':'text-accent'} text-sm"></i></div>
-          <div class="min-w-0 flex-1"><div class="flex items-center gap-2"><span class="font-semibold truncate">${esc(a.name)}</span>${a.is_manager?'<span class="pill bg-indigo-500/15 text-indigo-300 text-[10px]">manager</span>':''}</div>
-            <div class="text-xs text-slate-400 truncate">${esc(a.role||'')}</div></div></div>
-        <div class="text-xs text-slate-400 mt-3 leading-relaxed">${esc(a.description||'—')}</div>
-        <div class="flex items-center gap-2 mt-3 flex-wrap">${bpill(a.brain)}<span class="text-[11px] text-slate-500">${a.skills} skills · ${a.memories} memories · ${a.sessions} sessions</span></div></div>`;
-    $('#view').innerHTML=`<div class="max-w-5xl">
-      <div class="flex items-center gap-2 text-sm text-slate-400 mb-4"><i data-lucide="users-round" class="text-accent"></i> ${agents.length} agents — AtlasOps Manager delegates to the specialists. Click one to view or edit its soul.
-        <button id="agentSync" class="ml-auto text-xs text-slate-400 hover:text-accent inline-flex items-center gap-1" title="Rewrite AtlasOps' team roster from the current agents, so the manager knows who it can delegate to."><i data-lucide="refresh-cw"></i> Sync roster</button>
-        <button id="agentAdd" class="grad text-white rounded-lg px-3 py-1.5 text-xs font-semibold inline-flex items-center gap-1.5"><i data-lucide="plus"></i> Add agent</button></div>
-      <div class="grid gap-3 md:grid-cols-2 lg:grid-cols-3">${agents.map(card).join('')}</div></div>`;
+    const HEXA={violet:'#8b5cf6',pink:'#ec4899',amber:'#f59e0b',emerald:'#10b981',orange:'#f97316',sky:'#0ea5e9',rose:'#f43f5e',cyan:'#06b6d4',lime:'#84cc16'};
+    const hexOf=a=>HEXA[a&&a.accent]||'#6366f1';
+    if(!window._crewSel||!agents.find(x=>x.id===window._crewSel)) window._crewSel=agents[0].id;
+    if(!window._crewTab) window._crewTab='soul';
+    const admErr=(r,msg)=>toast((r&&r.error&&String(r.error).includes('admin'))?'Owner only — admin required':(msg+': '+((r&&r.error)||'')),false);
+    const chip=a=>{const c=hexOf(a);return a.emoji?esc(a.emoji):`<i data-lucide="${a.is_manager?'crown':'bot'}" style="color:${c}"></i>`;};
+    const item=a=>{const c=hexOf(a);const act=a.id===window._crewSel;
+      return `<button class="crew-item w-full text-left rounded-xl p-2.5 flex items-center gap-2.5 transition ${act?'':'hover:bg-white/5'}" style="${act?`background:${c}1a;box-shadow:inset 0 0 0 1px ${c}55`:''}" data-id="${esc(a.id)}">
+        <span class="h-9 w-9 rounded-xl grid place-items-center text-base shrink-0" style="background:${c}22">${chip(a)}</span>
+        <span class="min-w-0"><span class="block text-sm font-semibold truncate">${esc(a.name)}</span>
+          <span class="block text-[11px] text-slate-500 truncate">${esc(a.role||a.description||'')}</span></span></button>`;};
+    $('#view').innerHTML=`<div class="flex h-full gap-4 min-h-0">
+      <aside class="w-64 shrink-0 card p-3 flex flex-col min-h-0">
+        <div class="flex items-center gap-2 px-1 pb-2"><i data-lucide="users-round" class="text-accent"></i><span class="font-semibold text-sm">Crew Studio</span>
+          <button id="agentSync" title="Re-sync the manager's roster of specialists" class="ml-auto text-slate-500 hover:text-accent"><i data-lucide="refresh-cw" class="text-[13px]"></i></button></div>
+        <div class="flex-1 overflow-auto space-y-1.5">${agents.map(item).join('')}</div>
+        <button id="agentAdd" class="mt-3 w-full rounded-xl py-2.5 text-sm font-semibold" style="background:rgba(99,102,241,.16);color:#a5b4fc;box-shadow:inset 0 0 0 1px rgba(99,102,241,.35)">+ Add agent</button>
+      </aside>
+      <div id="crewPane" class="flex-1 min-w-0 card flex flex-col min-h-0 overflow-hidden"></div></div>`;
     icons();
-    document.querySelectorAll('.agent-card').forEach(el=>el.onclick=()=>openAgent(el.dataset.id));
+    document.querySelectorAll('.crew-item').forEach(el=>el.onclick=()=>{ window._crewSel=el.dataset.id; VIEWS.agents(); });
     $('#agentAdd').onclick=openAddAgent;
     $('#agentSync').onclick=async()=>{ const r=await api('POST','/api/agents/roster/sync',{});
-      if(r&&r.ok) toast(`AtlasOps roster synced — ${r.count} specialist${r.count===1?'':'s'}`);
-      else toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can sync':('Sync failed: '+((r&&r.error)||'')),false); };
-    async function openAgent(id){
+      if(r&&r.ok) toast(`Roster synced — ${r.count} specialist${r.count===1?'':'s'}`); else admErr(r,'Sync failed'); };
+    await openPane();
+
+    async function openPane(){
+      const id=window._crewSel;
       const a=await api('GET','/api/agents/'+encodeURIComponent(id));
-      if(!a||a.error){ toast('Could not load agent',false); return; }
-      const b=a.brain||{};
+      if(!a||a.error){ $('#crewPane').innerHTML='<div class="p-6 text-sm text-rose-400">Could not load agent.</div>'; return; }
+      const c=hexOf(a), b=a.brain||{};
       let cat=[]; try{ cat=(await api('GET','/api/models')).catalog||[]; }catch(_){}
-      $('#view').innerHTML=`<div class="max-w-3xl mx-auto">
-        <button id="agentBack" class="text-xs text-slate-400 hover:text-accent inline-flex items-center gap-1 mb-3"><i data-lucide="arrow-left"></i> All agents</button>
-        <div class="card p-5">
-          <div class="flex items-center gap-3 mb-1">
-            <div class="h-11 w-11 rounded-xl ${a.is_manager?'grad':'bg-edge'} grid place-items-center shrink-0"><i data-lucide="${a.is_manager?'crown':'bot'}" class="${a.is_manager?'text-white':'text-accent'}"></i></div>
-            <div><div class="font-semibold text-lg">${esc(a.name)}</div><div class="text-xs text-slate-400">${esc(a.role||'')} · profile <span class="font-mono">${esc(a.id)}</span></div></div>
-            <label class="ml-auto flex items-center gap-1.5 text-[11px] text-slate-500"><i data-lucide="brain" class="text-[12px]"></i> Brain
-              <select id="brainPick" title="The model this agent runs on. Cloud models go live once the API key is added." class="bg-ink/70 border border-edge rounded-lg px-2 py-1.5 text-xs text-slate-200 focus:border-accent focus:outline-none max-w-[15rem]">
-                <option value="" ${!b.model_id?'selected':''}>Default (run default)</option>
-                ${cat.map(m=>`<option value="${esc(m.id)}" ${m.id===b.model_id?'selected':''}>${esc(m.label)}${m.local?'':(m.available?' ☁':' ☁ — needs key')}</option>`).join('')}
-              </select></label></div>
-          <div class="text-xs text-slate-400 mt-2 mb-3">${esc(a.description||'')}</div>
-          <div class="flex gap-4 text-[11px] text-slate-500 mb-4"><span><b class="text-slate-300">${a.skills}</b> skills</span><span><b class="text-slate-300">${a.memories}</b> memory entries</span><span><b class="text-slate-300">${a.sessions}</b> sessions</span></div>
-          <div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1.5">SOUL.md — personality, mission, hard nos (loaded fresh each message)</div>
-          <textarea id="soulEdit" class="w-full h-80 bg-ink/70 border border-edge rounded-lg p-3 text-xs font-mono text-slate-200 focus:border-accent focus:outline-none" spellcheck="false">${esc(a.soul||'')}</textarea>
-          <div class="flex items-center gap-2 mt-3"><button id="soulSave" class="grad text-white rounded-lg px-4 py-2 text-sm font-semibold inline-flex items-center gap-1.5"><i data-lucide="save"></i> Save soul</button>${a.is_manager?'':'<button id="agentDelete" class="ml-auto rounded-lg px-3 py-2 text-sm font-semibold inline-flex items-center gap-1.5 border border-rose-500/40 text-rose-300 hover:bg-rose-500/10"><i data-lucide="trash-2"></i> Delete agent</button>'}</div>
-          <div class="mt-5 pt-4 border-t border-edge/40">
-            <div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1.5 flex items-center gap-1"><i data-lucide="brain"></i> Long-term memory — how it has compounded</div>
-            <div id="agentMem" class="text-xs text-slate-500">loading…</div></div>
-        </div></div>`;
+      const tabBtn=t=>`<button class="crew-tab px-3 py-1.5 rounded-lg text-xs font-medium transition ${window._crewTab===t?'text-white':'text-slate-400 hover:text-slate-200'}" style="${window._crewTab===t?`background:${c}26;box-shadow:inset 0 0 0 1px ${c}55`:''}" data-t="${t}">${t[0].toUpperCase()+t.slice(1)}</button>`;
+      $('#crewPane').innerHTML=`
+        <div class="shrink-0 px-5 pt-4 pb-3 border-b border-edge flex items-center gap-3 flex-wrap">
+          <span class="h-11 w-11 rounded-xl grid place-items-center text-xl shrink-0" style="background:${c}22">${chip(a)}</span>
+          <div class="min-w-0"><div class="font-semibold text-lg leading-tight">${esc(a.name)}${a.is_manager?' <span class="pill bg-indigo-500/15 text-indigo-300 text-[10px] align-middle">manager</span>':''}</div>
+            <div class="text-[11px] text-slate-500 font-mono">profile: ${esc(a.id)} · ${a.skills} skills · ${a.memories} memory entries</div></div>
+          <div class="ml-auto flex items-center gap-2 flex-wrap">
+            <select id="brainPick" title="The model this agent runs on. Cloud models go live once the API key is added." class="bg-ink/70 border border-edge rounded-lg px-2 py-1.5 text-xs text-slate-200 focus:border-accent focus:outline-none max-w-[13rem]">
+              <option value="" ${!b.model_id?'selected':''}>Brain: default</option>
+              ${cat.map(m=>`<option value="${esc(m.id)}" ${m.id===b.model_id?'selected':''}>${esc(m.label)}${m.local?'':(m.available?' ☁':' ☁ — needs key')}</option>`).join('')}
+            </select>
+            <span class="inline-flex gap-0.5 p-0.5 rounded-lg bg-white/5">${['soul','memory','identity'].map(tabBtn).join('')}</span>
+          </div></div>
+        <div id="crewBody" class="flex-1 min-h-0 overflow-auto p-5"></div>`;
       icons();
-      $('#agentBack').onclick=()=>route('agents');
-      if($('#brainPick'))$('#brainPick').onchange=async e=>{
-        const r=await api('POST','/api/agents/'+encodeURIComponent(id)+'/brain',{model:e.target.value});
-        if(r&&!r.error){ const m=e.target.selectedOptions[0]; toast('Brain set → '+(m?m.textContent.trim():e.target.value)+" — used on this agent's next run"); }
-        else toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can set brains':('Failed: '+((r&&r.error)||'')),false); };
-      $('#soulSave').onclick=async()=>{ const btn=$('#soulSave'); btn.disabled=true;
-        const r=await api('POST','/api/agents/'+encodeURIComponent(id)+'/soul',{soul:$('#soulEdit').value});
-        if(r&&!r.error) toast("Soul saved — used on the agent's next turn");
-        else toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can edit souls':('Save failed: '+((r&&r.error)||'')),false);
-        btn.disabled=false; };
-      const del=$('#agentDelete');
-      if(del) del.onclick=async()=>{
-        const typed=prompt(`⚠ ARE YOU SURE?\n\nThis permanently deletes the "${a.name}" agent — its soul, memory, and learned skills. This cannot be undone.\n\nType the profile name "${id}" to confirm:`);
-        if(typed===null) return;                       // cancelled
-        if(typed.trim()!==id){ toast('Name did not match — agent NOT deleted',false); return; }
-        del.disabled=true;
-        const r=await api('DELETE','/api/agents/'+encodeURIComponent(id));
-        if(r&&r.deleted){ toast(`Agent "${a.name}" deleted`); route('agents'); }
-        else { toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can delete agents':('Delete failed: '+((r&&r.error)||'')),false); del.disabled=false; }
-      };
-      api('GET','/api/agents/'+encodeURIComponent(id)+'/memory').then(m=>{ const el=$('#agentMem'); if(!el)return;
-        const blk=(t,n)=>t?`<div class="mb-2"><div class="text-[10px] text-slate-500 mb-1 font-mono">${n}</div><pre class="bg-ink/60 border border-edge rounded-lg p-2 whitespace-pre-wrap max-h-64 overflow-auto text-slate-300">${esc(t)}</pre></div>`:'';
-        el.innerHTML=(m&&(m.memory||m.user))?(blk(m.memory,'MEMORY.md')+blk(m.user,'USER.md')):'<span class="text-slate-600">No memory yet — fills in as this agent works (facts it saves to MEMORY.md, notes about the team in USER.md).</span>'; });
+      $('#brainPick').onchange=async e=>{ const r=await api('POST','/api/agents/'+encodeURIComponent(id)+'/brain',{model:e.target.value});
+        if(r&&!r.error){ const m=e.target.selectedOptions[0]; toast('Brain set → '+(m?m.textContent.trim():'default')+" — used on the next run"); } else admErr(r,'Failed'); };
+      document.querySelectorAll('.crew-tab').forEach(bn=>bn.onclick=()=>{ window._crewTab=bn.dataset.t; openPane(); });
+      const area=(aid,label,val,h)=>`<div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1.5">${label}</div><textarea id="${aid}" class="w-full ${h||'h-64'} bg-ink/70 border border-edge rounded-lg p-3 text-xs font-mono text-slate-200 focus:border-accent focus:outline-none mb-2" spellcheck="false">${esc(val||'')}</textarea>`;
+      const saveBtn=(bid,label)=>`<button id="${bid}" class="grad text-white rounded-lg px-3.5 py-2 text-xs font-semibold inline-flex items-center gap-1.5 mb-5"><i data-lucide="save" class="text-[13px]"></i> ${label}</button>`;
+      const wire=(bid,fn)=>{ const bn=$('#'+bid); if(bn) bn.onclick=async()=>{ bn.disabled=true; await fn(); bn.disabled=false; }; };
+      const body=$('#crewBody');
+
+      if(window._crewTab==='soul'){
+        let shared={text:''}; try{ shared=await api('GET','/api/agents/shared/ops'); }catch(_){}
+        body.innerHTML=area('soulEdit','SOUL.md — personality, mission, hard nos (loaded fresh each turn)',a.soul,'h-72')+saveBtn('soulSave','Save soul')
+          +`<div class="pt-4 border-t border-edge/40"></div>`
+          +area('sharedEdit','SHARED.md — shared operating principles, appended to EVERY agent\'s prompt',shared.text,'h-56')+saveBtn('sharedSave','Save shared block');
+        icons();
+        wire('soulSave',async()=>{ const r=await api('POST','/api/agents/'+encodeURIComponent(id)+'/soul',{soul:$('#soulEdit').value});
+          if(r&&!r.error) toast("Soul saved — used on the agent's next turn"); else admErr(r,'Save failed'); });
+        wire('sharedSave',async()=>{ const r=await api('POST','/api/agents/shared/ops',{text:$('#sharedEdit').value});
+          if(r&&!r.error) toast('Shared block saved — applies to every agent\'s next turn'); else admErr(r,'Save failed'); });
+      }
+
+      else if(window._crewTab==='memory'){
+        const m=await api('GET','/api/agents/'+encodeURIComponent(id)+'/memory')||{};
+        let lead=null; if(!a.is_manager){ try{ lead=await api('GET','/api/agents/default/memory'); }catch(_){} }
+        body.innerHTML=area('memEdit','MEMORY.md — facts this agent has learned (it appends via agent_memory_note as it works)',m.memory,'h-56')+saveBtn('memSave','Save memory')
+          +area('userEdit','USER.md — what it knows about you & the team',m.user,'h-36')+saveBtn('userSave','Save user notes')
+          +(a.is_manager
+            ?`<div class="text-[11px] text-slate-500 -mt-2 mb-3 flex items-center gap-1.5"><i data-lucide="share-2" class="text-[12px]"></i> As the manager, this MEMORY.md doubles as the <span class="text-slate-300">shared crew memory</span> — every specialist sees it in its prompt.</div>`
+            :`<div class="pt-4 border-t border-edge/40"></div>`
+              +area('leadEdit','Shared crew memory — the manager\'s MEMORY.md (injected read-only into this agent\'s prompt)',lead&&lead.memory,'h-36')+saveBtn('leadSave','Save shared memory'));
+        icons();
+        wire('memSave',async()=>{ const r=await api('POST','/api/agents/'+encodeURIComponent(id)+'/memory',{memory:$('#memEdit').value});
+          if(r&&!r.error) toast('Memory saved (previous kept as .bak)'); else admErr(r,'Save failed'); });
+        wire('userSave',async()=>{ const r=await api('POST','/api/agents/'+encodeURIComponent(id)+'/memory',{user:$('#userEdit').value});
+          if(r&&!r.error) toast('User notes saved'); else admErr(r,'Save failed'); });
+        wire('leadSave',async()=>{ const r=await api('POST','/api/agents/default/memory',{memory:$('#leadEdit').value});
+          if(r&&!r.error) toast('Shared crew memory saved'); else admErr(r,'Save failed'); });
+      }
+
+      else{ // identity
+        let accSel=a.accent||'violet';
+        const inp=(iid,label,val,ph,mono)=>`<label class="block text-[11px] uppercase tracking-wide text-slate-500 mb-1">${label}</label>
+          <input id="${iid}" class="w-full bg-ink/70 border border-edge rounded-lg p-2.5 text-sm ${mono?'font-mono':''} text-slate-200 focus:border-accent focus:outline-none mb-3" value="${esc(val||'')}" placeholder="${ph||''}" spellcheck="false">`;
+        body.innerHTML=`<div class="max-w-xl">
+          <div class="grid grid-cols-[1fr_8rem] gap-3"><div>${inp('idName','Name',a.name)}</div><div>${inp('idEmoji','Emoji',a.emoji,'🤖')}</div></div>
+          ${inp('idRole','Role',a.role,'Kaseya Engineer')}
+          ${inp('idBlurb','Blurb — what the manager delegates to it',a.description,'Runs RMM inventory & patch checks.')}
+          <div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1.5">Accent</div>
+          <div id="accRow" class="flex gap-2 flex-wrap mb-5">${Object.entries(HEXA).map(([k,v])=>`<button class="acc h-8 w-8 rounded-lg transition" data-a="${k}" style="background:${v};${k===accSel?'box-shadow:0 0 0 2px #fff;':''}"></button>`).join('')}</div>
+          <div class="flex items-center gap-2">
+            <button id="idSave" class="grad text-white rounded-lg px-4 py-2 text-sm font-semibold inline-flex items-center gap-1.5"><i data-lucide="save"></i> Save identity</button>
+            ${a.is_manager?'':'<button id="agentDelete" class="ml-auto rounded-lg px-3 py-2 text-sm font-semibold inline-flex items-center gap-1.5 border border-rose-500/40 text-rose-300 hover:bg-rose-500/10"><i data-lucide="trash-2"></i> Delete agent</button>'}
+          </div></div>`;
+        icons();
+        document.querySelectorAll('.acc').forEach(bn=>bn.onclick=()=>{ accSel=bn.dataset.a;
+          document.querySelectorAll('.acc').forEach(x=>x.style.boxShadow=x.dataset.a===accSel?'0 0 0 2px #fff':''); });
+        wire('idSave',async()=>{ const r=await api('POST','/api/agents/'+encodeURIComponent(id)+'/identity',
+            {name:$('#idName').value,role:$('#idRole').value,emoji:$('#idEmoji').value,accent:accSel,description:$('#idBlurb').value});
+          if(r&&!r.error){ toast('Identity saved'); VIEWS.agents(); } else admErr(r,'Save failed'); });
+        const del=$('#agentDelete');
+        if(del) del.onclick=async()=>{
+          const typed=prompt(`⚠ ARE YOU SURE?\n\nThis permanently deletes the "${a.name}" agent — its soul, memory, and learned skills. This cannot be undone.\n\nType the profile name "${id}" to confirm:`);
+          if(typed===null) return;
+          if(typed.trim()!==id){ toast('Name did not match — agent NOT deleted',false); return; }
+          del.disabled=true;
+          const r=await api('DELETE','/api/agents/'+encodeURIComponent(id));
+          if(r&&r.deleted){ toast(`Agent "${a.name}" deleted`); window._crewSel=null; VIEWS.agents(); }
+          else { admErr(r,'Delete failed'); del.disabled=false; }
+        };
+      }
     }
+
     async function openAddAgent(){
       $('#view').innerHTML=`<div class="max-w-2xl mx-auto">
         <button id="addBack" class="text-xs text-slate-400 hover:text-accent inline-flex items-center gap-1 mb-3"><i data-lucide="arrow-left"></i> All agents</button>
@@ -946,8 +995,8 @@ const VIEWS={
         if(!/^[a-z0-9_-]+$/.test(name)){ toast('Id: lowercase letters, numbers, - and _ only',false); return; }
         const btn=$('#agCreate'); btn.disabled=true;
         const r=await api('POST','/api/agents',{name,role:$('#agRole').value,description:$('#agDesc').value,soul:$('#agSoul').value});
-        if(r&&r.id&&!r.error){ toast(`Agent "${r.name}" created`); openAgent(r.id); }
-        else { toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can add agents':('Create failed: '+((r&&r.error)||'')),false); btn.disabled=false; }
+        if(r&&r.id&&!r.error){ toast(`Agent "${r.name}" created`); window._crewSel=r.id; route('agents'); }
+        else { toast((r&&r.error&&String(r.error).includes('admin'))?'Owner only — admin can add agents':('Create failed: '+((r&&r.error)||'')),false); btn.disabled=false; }
       };
     }
   },

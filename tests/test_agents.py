@@ -197,3 +197,75 @@ class Agents(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CrewStudio(Agents):
+    """Memory/identity/shared-ops editing + the agent's own memory notes (Crew Studio backend)."""
+
+    def test_set_memory_and_bak(self):
+        from execution.core.agents import set_memory, read_memory
+        set_memory("patchwright", memory="# Memory\n- first\n", cfg=self.cfg)
+        set_memory("patchwright", memory="# Memory\n- revised\n", cfg=self.cfg)
+        self.assertIn("revised", read_memory("patchwright", self.cfg)["memory"])
+        bak = self.d / "profiles" / "patchwright" / "MEMORY.md.bak"
+        self.assertTrue(bak.is_file())
+        self.assertIn("first", bak.read_text())
+
+    def test_set_user_only_leaves_memory(self):
+        from execution.core.agents import set_memory, read_memory
+        before = read_memory("patchwright", self.cfg)["memory"]
+        set_memory("patchwright", user="Team notes here.", cfg=self.cfg)
+        m = read_memory("patchwright", self.cfg)
+        self.assertEqual(m["memory"], before)
+        self.assertIn("Team notes", m["user"])
+
+    def test_append_agent_memory_dedups(self):
+        from execution.core.agents import append_agent_memory, read_memory
+        r1 = append_agent_memory("patchwright", "always filter by group first", self.cfg)
+        r2 = append_agent_memory("patchwright", "always filter by group first", self.cfg)
+        self.assertTrue(r1["saved"])
+        self.assertFalse(r2["saved"])
+        self.assertEqual(read_memory("patchwright", self.cfg)["memory"].count("filter by group"), 1)
+
+    def test_set_identity_rewrites_soul_and_yaml(self):
+        from execution.core.agents import set_identity, get_agent
+        a = set_identity("patchwright", display_name="Patch", role="RMM Engineer",
+                         emoji="🔧", accent="amber", description="Kaseya RMM ops", cfg=self.cfg)
+        self.assertEqual(a["name"], "Patch")
+        self.assertEqual(a["role"], "RMM Engineer")
+        self.assertEqual(a["emoji"], "🔧")
+        self.assertEqual(a["accent"], "amber")
+        self.assertEqual(a["description"], "Kaseya RMM ops")
+        # SOUL line rewritten in place, not duplicated
+        soul = get_agent("patchwright", self.cfg)["soul"]
+        self.assertEqual(soul.lower().count("- name:"), 1)
+
+    def test_identity_inserts_when_soul_has_no_fields(self):
+        from execution.core.agents import set_identity, get_agent
+        (self.d / "profiles" / "patchwright" / "SOUL.md").write_text("# Just prose\nNo fields.\n")
+        a = set_identity("patchwright", display_name="Patch2", cfg=self.cfg)
+        self.assertEqual(a["name"], "Patch2")
+
+    def test_shared_ops_seed_and_write(self):
+        from execution.core.agents import read_shared, write_shared
+        seeded = read_shared(self.cfg)
+        self.assertIn("Never guess", seeded)              # default seed present before any write
+        write_shared("# House rules\n- be excellent\n", self.cfg)
+        self.assertIn("be excellent", read_shared(self.cfg))
+        self.assertTrue((self.d / "SHARED.md").is_file())
+
+    def test_agent_memory_note_tool_uses_running_profile(self):
+        import os
+        from execution.core.context import ToolContext
+        from execution.skills import agent_memory_note
+        from execution.core.agents import read_memory
+        prev = os.environ.get("DTM_AGENTS_DIR")
+        os.environ["DTM_AGENTS_DIR"] = str(self.d)
+        try:
+            ctx = ToolContext(tenant_id="acme", actor="t", _meta={"profile": "patchwright"})
+            r = agent_memory_note.run(ctx, fact="check skill_search before multi-step work")
+            self.assertTrue(r["saved"])
+            self.assertIn("skill_search", read_memory("patchwright")["memory"])
+        finally:
+            if prev is None: os.environ.pop("DTM_AGENTS_DIR", None)
+            else: os.environ["DTM_AGENTS_DIR"] = prev

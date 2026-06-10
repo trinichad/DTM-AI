@@ -122,25 +122,34 @@ def _brain_for(pd: Path) -> dict:
     return b
 
 
+def _profile_meta(pd: Path) -> dict:
+    """Flat scalars from profile.yaml (description / emoji / accent). Missing file → empty."""
+    out = {"description": "", "emoji": "", "accent": ""}
+    try:
+        for line in (pd / "profile.yaml").read_text(encoding="utf-8").splitlines():
+            s = line.strip()
+            for key in out:
+                if s.startswith(key + ":"):
+                    out[key] = _yaml_unquote(s.split(":", 1)[1].strip())
+    except OSError:
+        pass
+    return out
+
+
 def _read_one(cfg: Config, name: str) -> dict:
     pd = _profile_dir(cfg, name)
     try:
         soul = (pd / "SOUL.md").read_text(encoding="utf-8")
     except OSError:
         soul = ""
-    descr = ""
-    try:
-        for line in (pd / "profile.yaml").read_text(encoding="utf-8").splitlines():
-            if line.strip().startswith("description:"):
-                descr = _yaml_unquote(line.split(":", 1)[1].strip())
-                break
-    except OSError:
-        pass
+    meta = _profile_meta(pd)
     return {
         "id": name,
         "name": _soul_field(soul, "name") or name.replace("_", " ").title(),
         "role": _soul_field(soul, "role"),
-        "description": descr,
+        "description": meta["description"],
+        "emoji": meta["emoji"],
+        "accent": meta["accent"],
         "is_manager": name == "default",
         "brain": _brain_for(pd),
         "skills": _count_skills(pd / "skills"),
@@ -163,6 +172,141 @@ def read_memory(name: str, cfg: Optional[Config] = None) -> Optional[dict]:
         except OSError:
             return ""
     return {"id": name, "memory": _read("MEMORY.md"), "user": _read("USER.md")}
+
+
+def _write_with_bak(path: Path, text: str) -> None:
+    """Overwrite keeping a .bak of the previous content (same rollback pattern as client memory, D-20)."""
+    try:
+        if path.is_file():
+            path.with_suffix(path.suffix + ".bak").write_text(
+                path.read_text(encoding="utf-8"), encoding="utf-8")
+    except OSError:
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def set_memory(name: str, memory: Optional[str] = None, user: Optional[str] = None,
+               cfg: Optional[Config] = None) -> dict:
+    """Owner-edit an agent's MEMORY.md and/or USER.md. None = leave that file untouched."""
+    cfg = cfg or get_config()
+    pd = _profile_dir(cfg, _safe(name))
+    if not pd.is_dir():
+        raise FileNotFoundError(f"unknown agent '{name}'")
+    if memory is not None:
+        _write_with_bak(pd / "MEMORY.md", memory)
+    if user is not None:
+        _write_with_bak(pd / "USER.md", user)
+    return read_memory(name, cfg) or {"id": name, "memory": "", "user": ""}
+
+
+def append_agent_memory(name: str, fact: str, cfg: Optional[Config] = None) -> dict:
+    """The RUNNING agent saves a one-line durable lesson to its own MEMORY.md (agent_memory_note
+    tool). Exact-duplicate lines are skipped so a chatty model can't fill the file with repeats."""
+    cfg = cfg or get_config()
+    pd = _profile_dir(cfg, _safe(name))
+    if not pd.is_dir():
+        raise FileNotFoundError(f"unknown agent '{name}'")
+    fact = " ".join((fact or "").split()).strip()
+    if not fact:
+        raise ValueError("an empty fact cannot be saved")
+    line = "- " + fact
+    f = pd / "MEMORY.md"
+    try:
+        text = f.read_text(encoding="utf-8")
+    except OSError:
+        text = "# Memory\n"
+    if any(l.strip() == line for l in text.splitlines()):
+        return {"ok": True, "saved": False, "reason": "already in memory"}
+    f.write_text(text.rstrip("\n") + "\n" + line + "\n", encoding="utf-8")
+    return {"ok": True, "saved": True, "agent": name}
+
+
+def set_identity(name: str, *, display_name: Optional[str] = None, role: Optional[str] = None,
+                 emoji: Optional[str] = None, accent: Optional[str] = None,
+                 description: Optional[str] = None, cfg: Optional[Config] = None) -> dict:
+    """Owner-edit an agent's identity. name/role rewrite the SOUL's `- name:` / `- role:` lines
+    (inserting an Identity section if absent); emoji/accent/description live in profile.yaml."""
+    cfg = cfg or get_config()
+    pd = _profile_dir(cfg, _safe(name))
+    if not pd.is_dir():
+        raise FileNotFoundError(f"unknown agent '{name}'")
+    # SOUL-backed fields
+    if display_name is not None or role is not None:
+        try:
+            soul = (pd / "SOUL.md").read_text(encoding="utf-8")
+        except OSError:
+            soul = ""
+        for key, val in (("name", display_name), ("role", role)):
+            if val is None:
+                continue
+            val = " ".join(val.split())
+            pat = re.compile(rf"(?mi)^([-*\s]*){key}:\s*.*$")
+            if pat.search(soul):
+                soul = pat.sub(rf"\g<1>{key}: {val}", soul, count=1)
+            else:
+                ident = f"\n## Identity\n- {key}: {val}\n"
+                soul = (soul.rstrip("\n") + "\n" + ident) if soul.strip() else f"# {val}\n{ident}"
+        _write_with_bak(pd / "SOUL.md", soul)
+    # profile.yaml-backed fields (preserve unknown keys)
+    if emoji is not None or accent is not None or description is not None:
+        py = pd / "profile.yaml"
+        try:
+            lines = py.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            lines = []
+        for key, val in (("emoji", emoji), ("accent", accent), ("description", description)):
+            if val is None:
+                continue
+            val_line = f"{key}: {_yaml_str(' '.join(val.split()))}"
+            for i, l in enumerate(lines):
+                if l.strip().startswith(key + ":"):
+                    lines[i] = val_line
+                    break
+            else:
+                lines.append(val_line)
+        py.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if name != "default":                    # name/role/description feed the manager's roster
+        _sync_safe(cfg)
+    return get_agent(name, cfg)
+
+
+# ── shared operating block — appended to EVERY agent's system prompt ─────────────────────────────
+DEFAULT_SHARED = """# Shared operating principles (appended to every DTM AI agent)
+
+> Owner-editable (Agents tab → Soul). Personality lives in each agent's own SOUL; THIS block is the
+> common ground rules, distilled from the owner's System Pilot protocol.
+
+- **Never guess.** If a tool didn't return it, say you don't know. Cite the tool + tenant for every fact.
+- **Verify before claiming.** Don't report something as done/true without evidence from a tool result.
+- **Surgical scope.** Do what was asked — no speculative extras, no touching what wasn't requested.
+- **Read-only posture.** You inspect client systems; you do not change them. Decline write requests
+  and point the owner at the approval workflow.
+- **Compound your knowledge.** Durable CLIENT facts → memory_note (that client's memory). Durable
+  LESSONS about your own work (a procedure that worked, a pitfall) → agent_memory_note (your memory).
+  When a saved fact turns out wrong or stale, correct it — memory is a living record, not a log.
+- **Fail honestly.** If a capability is disabled or a credential is missing, say so plainly instead
+  of pretending or working around it.
+"""
+
+
+def shared_path(cfg: Optional[Config] = None) -> Path:
+    return _data_dir(cfg or get_config()) / "SHARED.md"
+
+
+def read_shared(cfg: Optional[Config] = None) -> str:
+    """The shared operating block; seeded with the default on first read."""
+    p = shared_path(cfg)
+    try:
+        return p.read_text(encoding="utf-8")
+    except OSError:
+        return DEFAULT_SHARED
+
+
+def write_shared(text: str, cfg: Optional[Config] = None) -> dict:
+    p = shared_path(cfg)
+    _write_with_bak(p, text)
+    return {"ok": True, "path": str(p)}
 
 
 def list_agents(cfg: Optional[Config] = None) -> list[dict]:
@@ -321,6 +465,8 @@ def create_agent(name: str, soul: str = "", description: str = "", role: str = "
     name = _safe(name)
     if name == "default":
         raise ValueError("'default' is reserved for the AtlasOps manager")
+    if name == "shared":
+        raise ValueError("'shared' is reserved (crew-wide operating block route)")
     pd = _profile_dir(cfg, name)
     if pd.exists():
         raise FileExistsError(f"agent '{name}' already exists")

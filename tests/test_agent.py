@@ -183,26 +183,32 @@ class ProfileAware(unittest.TestCase):
         self.assertIn("Huntress", sysmsg)             # long-term memory injected
         self.assertIn("DTM Consulting", sysmsg)       # USER.md (about the team)
 
-    def test_no_profile_is_plain_base_prompt(self):
+    def _assert_base_only(self, sysmsg):
+        """Base contract leads; the shared operating block may follow; NO persona/memory content."""
+        self.assertTrue(sysmsg.startswith(SYSTEM_PROMPT))
+        self.assertNotIn("Your persona", sysmsg)
+        self.assertNotIn("long-term memory", sysmsg)
+
+    def test_no_profile_is_base_plus_shared_block_only(self):
         rec = _Recorder()
         ctx = ToolContext(tenant_id="acme", actor="t")
         self.agent.chat(ctx, "hi", provider=rec)
-        self.assertEqual(rec.seen[0]["content"], SYSTEM_PROMPT)
+        self._assert_base_only(rec.seen[0]["content"])
 
     def test_unknown_profile_falls_back_safely(self):
         rec = _Recorder()
         ctx = ToolContext(tenant_id="acme", actor="t")
         self.agent.chat(ctx, "hi", provider=rec, profile="ghost")
-        self.assertEqual(rec.seen[0]["content"], SYSTEM_PROMPT)
+        self._assert_base_only(rec.seen[0]["content"])
 
     def test_invalid_profile_name_does_not_crash(self):
         rec = _Recorder()                              # path-traversal name → fail safe, no raise
         ctx = ToolContext(tenant_id="acme", actor="t")
         self.agent.chat(ctx, "hi", provider=rec, profile="../etc")
-        self.assertEqual(rec.seen[0]["content"], SYSTEM_PROMPT)
+        self._assert_base_only(rec.seen[0]["content"])
 
     def test_build_system_prompt_direct(self):
-        self.assertEqual(build_system_prompt(None, self.cfg), SYSTEM_PROMPT)
+        self.assertTrue(build_system_prompt(None, self.cfg).startswith(SYSTEM_PROMPT))
         self.assertIn("SentinelOps", build_system_prompt("sentinelops", self.cfg))
 
     def test_client_memory_injected_for_bound_tenant(self):
@@ -221,7 +227,8 @@ class ProfileAware(unittest.TestCase):
         rec = _Recorder()
         ctx = ToolContext(tenant_id="*", actor="t")
         self.agent.chat(ctx, "hi", provider=rec)               # '*' = cross-client → no single memory
-        self.assertEqual(rec.seen[0]["content"], SYSTEM_PROMPT)
+        self._assert_base_only(rec.seen[0]["content"])
+        self.assertNotIn("private note", rec.seen[0]["content"])
 
 
 if __name__ == "__main__":

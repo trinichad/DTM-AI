@@ -58,6 +58,13 @@ def build_system_prompt(profile: Optional[str] = None, cfg=None,
     already knows about the client without a tool call. Persona/memory can never loosen the base
     rules (the real guardrails live in dispatch()). Any read error → safe fallback to the base."""
     parts = [SYSTEM_PROMPT]
+    try:                                    # shared operating block — common ground rules, all agents
+        from .core.agents import read_shared
+        shared = (read_shared(cfg) or "").strip()
+        if shared:
+            parts.append(shared)
+    except Exception:
+        pass
     if profile:
         try:
             from .core.agents import get_agent, read_memory
@@ -72,9 +79,17 @@ def build_system_prompt(profile: Optional[str] = None, cfg=None,
                 longterm = (mem.get("memory") or "").strip()
                 about = (mem.get("user") or "").strip()
                 if longterm:
-                    parts.append("# Your long-term memory (facts you have saved)\n" + longterm)
+                    parts.append("# Your long-term memory (facts you have saved — add to it with "
+                                 "agent_memory_note)\n" + longterm)
                 if about:
                     parts.append("# About the team you work with\n" + about)
+                if profile != "default":     # specialists also see the crew-wide (lead's) memory
+                    lead = (read_memory("default", cfg) or {}).get("memory", "").strip()
+                    if lead:
+                        if len(lead) > 3000:
+                            lead = lead[:3000] + "\n…(truncated)"
+                        parts.append("# Shared crew memory (maintained by the manager — read-only "
+                                     "context)\n" + lead)
         except Exception:                   # never let profile loading break a turn
             pass
     if tenant_id and tenant_id != "*":
@@ -213,6 +228,7 @@ class Agent:
             model = (model_id.split(":", 1)[-1] if model_id and ":" in model_id
                      else (model_id or getattr(provider, "name", "mock")))
 
+        ctx._meta.setdefault("profile", profile or "default")   # agent_memory_note → own MEMORY.md
         tools = self._enabled_tool_specs()
         budget = (self.router.budget_for(getattr(provider, "name", "ollama"))
                   if hasattr(self.router, "budget_for")
@@ -292,6 +308,7 @@ class Agent:
         else:
             model = (model_id.split(":", 1)[-1] if model_id and ":" in model_id
                      else (model_id or getattr(provider, "name", "mock")))
+        ctx._meta.setdefault("profile", profile or "default")   # agent_memory_note → own MEMORY.md
         tools = self._enabled_tool_specs()
         budget = (self.router.budget_for(getattr(provider, "name", "ollama"))
                   if hasattr(self.router, "budget_for")

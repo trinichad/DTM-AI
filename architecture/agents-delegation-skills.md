@@ -40,6 +40,28 @@ multi-step turn the chat answer carries `suggest_skill`; the owner confirms via
 existing skill instead of a twin). Brand-new **executable** primitives still go through the
 `builder.py` sandbox + **human merge** (I-5) — that gate stays even fully in-house.
 
+## Crew Studio (Agents tab) — soul / memory / identity, all owner-editable
+The Agents tab is a Crew-Studio layout (RossMeta donor): a roster sidebar + one panel per agent with
+three tabs. Everything is markdown/yaml on disk — git-trackable, hand-editable, no DB.
+- **Soul** — the profile's `SOUL.md` (persona, mission, hard nos), loaded fresh each turn. Below it,
+  the **shared operating block** `(<agents dir>)/SHARED.md`: owner-editable operating principles
+  appended to EVERY agent's system prompt (distilled from the owner's System Pilot protocol — verify
+  before claiming, never invent, cite tools, surgical scope, record lessons). Seeded on first read;
+  `GET/POST /api/agents/shared/ops`.
+- **Memory** — three editable boxes: the agent's `MEMORY.md` (facts it has learned), its `USER.md`
+  (about the team/owner), and the **shared crew memory** = the MANAGER's `MEMORY.md` (the lead's
+  memory doubles as the crew-wide index; specialists get it injected read-only into their prompts,
+  and the owner can edit it from any agent's panel). `POST /api/agents/<name>/memory`; a `.bak` of
+  the previous content is kept on every overwrite (same rollback pattern as client memory, D-20).
+- **Identity** — display name + role (rewrites the SOUL's `- name:` / `- role:` lines), emoji,
+  accent color, and blurb (stored in `profile.yaml`). `POST /api/agents/<name>/identity`. Identity
+  edits on specialists re-sync the manager roster.
+- **Self-updating memory** — the `agent_memory_note` tool (write, `dtm_ai`, no approval — internal
+  vault only) lets the RUNNING agent append a one-line durable lesson to its own `MEMORY.md`; the
+  loop injects the active profile via `ctx._meta["profile"]` (defaults to the manager). The system
+  prompt nudges: client facts → `memory_note` (per-tenant vault), agent lessons → `agent_memory_note`.
+  Exact-duplicate lines are skipped.
+
 ## Self-annealing
 On any failure: read the real error/stack (no guessing), patch `execution/`, test the fix, then
 write the lesson into **this SOP** so it never repeats. Disable-by-config (I-4) is the emergency
