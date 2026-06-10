@@ -567,6 +567,31 @@ function route(id){current=id;const n=NAV.find(x=>x[0]===id);clearInterval(windo
   $('#subtitle').textContent=SUB[id]||'';renderNav();$('#view').classList.remove('animate-fadeup');
   void $('#view').offsetWidth;$('#view').classList.add('animate-fadeup');VIEWS[id]();}
 
+// audit/action display metadata — friendly label + icon per audit action
+const AUD_ACT={tool_call:['Tool ran','wrench'],tool_error:['Tool error','alert-triangle'],tool_denied:['Blocked','ban'],
+  terminal:['Terminal command','terminal'],config_change:['Config change','settings-2'],login:['Signed in','log-in'],
+  approval_requested:['Approval requested','shield-alert'],approval_executed:['Approved & ran','shield-check'],
+  code_view:['Viewed tool code','code'],file_write:['File edited','file-pen-line'],file_upload:['File uploaded','upload'],
+  file_download:['File downloaded','download'],file_delete:['File deleted','trash-2'],file_chmod:['Permissions changed','lock'],
+  file_mkdir:['Folder created','folder-plus'],credential_view:['Credentials viewed','key-round']};
+const audMeta=act=>AUD_ACT[act]||[String(act||'').replace(/_/g,' '),'circle'];
+const AUD_COL={ok:'bg-emerald-500/15 text-emerald-400',fail:'bg-rose-500/15 text-rose-400',none:'bg-white/5 text-slate-500'};
+const audRow=a=>{const [lbl,ic]=audMeta(a.action);
+  const ok=a.result_ok===1||a.result_ok===true, fail=a.result_ok===0||a.result_ok===false;
+  return `<div class="flex items-start gap-3 py-2 border-b border-edge/40 last:border-0">
+    <span class="h-7 w-7 rounded-lg grid place-items-center shrink-0 ${fail?AUD_COL.fail:ok?AUD_COL.ok:AUD_COL.none}"><i data-lucide="${a.action==='tool_call'?(fail?'x':'check'):ic}" class="text-[13px]"></i></span>
+    <div class="min-w-0 flex-1">
+      <div class="flex items-center gap-2 flex-wrap leading-tight">
+        ${a.tool?`<span class="font-mono text-[13px] text-slate-200">${esc(a.tool)}</span>`:''}
+        ${(!a.tool||a.action!=='tool_call')?`<span class="pill bg-white/5 text-slate-400 text-[10px]">${esc(lbl)}</span>`:''}
+        ${fail?'<span class="pill bg-rose-500/15 text-rose-300 text-[10px]">failed</span>':''}
+      </div>
+      <div class="text-[11px] text-slate-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
+        <i data-lucide="user" class="text-[10px]"></i>${esc(a.actor||'—')}
+        <span>·</span><i data-lucide="building-2" class="text-[10px]"></i>${esc(a.tenant_id==='*'?'all clients':(a.tenant_id||'—'))}
+        ${a.detail?`<span>·</span><span class="truncate max-w-[22rem]" title="${esc(a.detail)}">${esc(a.detail)}</span>`:''}
+      </div></div>
+    <span class="text-[11px] text-slate-600 shrink-0 whitespace-nowrap" title="${esc(a.ts||'')}">${esc(ago(a.ts))}</span></div>`;};
 const catChip=c=>{const m={read:['sky','eye'],alert:['amber','bell'],write:['orange','pencil'],destructive:['rose','flame']}[c]||['slate','circle'];
   return `<span class="pill bg-${m[0]}-500/15 text-${m[0]}-300 inline-flex items-center gap-1"><i data-lucide="${m[1]}" class="text-[12px]"></i>${c}</span>`;}
 const riskDot=r=>{const c={none:'slate',low:'emerald',medium:'amber',high:'rose'}[r]||'slate';
@@ -580,7 +605,7 @@ function ring(pct,color='#6366f1',size=54){const r=22,c=2*Math.PI*r,off=c*(1-pct
 const VIEWS={
   async overview(){
     const [tools,ints,aud]=await Promise.all([api('GET','/api/tools'),api('GET','/api/integrations'),
-      api('GET','/api/audit?limit=8'+(TENANT!=='*'?'&tenant='+encodeURIComponent(TENANT):''))]);
+      api('GET','/api/audit?limit=10'+(TENANT!=='*'?'&tenant='+encodeURIComponent(TENANT):''))]);
     const T=tools.tools,I=ints.integrations;
     const cfg=I.filter(i=>i.configured).length, writes=T.filter(t=>t.allow_write).length;
     const stat=(ic,grad,val,label,sub)=>`<div class="card card-hover p-5">
@@ -607,12 +632,7 @@ const VIEWS={
       <div class="grid gap-4 lg:grid-cols-3">
         <div class="card p-5 lg:col-span-2">
           <div class="flex items-center gap-2 mb-4 font-semibold"><i data-lucide="activity" class="text-accent"></i> Recent activity</div>
-          <div class="space-y-2">${aud.audit.length?aud.audit.map(a=>`
-            <div class="flex items-center gap-3 text-sm py-1.5 border-b border-edge/40">
-              <i data-lucide="${a.result_ok?'check':a.result_ok===0?'x':'minus'}" class="${a.result_ok?'text-emerald-400':a.result_ok===0?'text-rose-400':'text-slate-500'}"></i>
-              <span class="text-slate-300">${esc(a.tool||a.action)}</span>
-              <span class="text-slate-500 text-xs">${esc(a.tenant_id)}</span>
-              <span class="ml-auto text-slate-600 text-xs">${esc((a.ts||'').slice(11,19))}</span></div>`).join('')
+          <div>${aud.audit.length?aud.audit.map(audRow).join('')
             :'<div class="text-slate-500 text-sm py-6 text-center">No activity yet — try the Chat.</div>'}</div>
         </div>
         <div class="card p-5">
@@ -1620,19 +1640,45 @@ const VIEWS={
 
   async audit(){
     const {audit}=await api('GET','/api/audit?limit=100'+(TENANT!=='*'?'&tenant='+encodeURIComponent(TENANT):''));
-    $('#view').innerHTML=`<div class="card overflow-hidden max-w-5xl">
+    $('#view').innerHTML=`<div class="card overflow-hidden max-w-6xl">
       <table class="w-full text-sm"><thead class="text-[11px] uppercase tracking-wide text-slate-500 border-b border-edge">
-        <tr><th class="text-left p-3 font-medium">Time</th><th class="text-left p-3 font-medium">Actor</th>
-        <th class="text-left p-3 font-medium">Client</th><th class="text-left p-3 font-medium">Action</th>
-        <th class="text-left p-3 font-medium">Tool</th><th class="p-3 font-medium">Result</th></tr></thead><tbody>`+
-      (audit.length?audit.map(a=>`<tr class="border-b border-edge/30 hover:bg-white/[.02]">
-        <td class="p-3 text-slate-500 font-mono text-xs">${esc((a.ts||'').slice(0,19).replace('T',' '))}</td>
-        <td class="p-3">${esc(a.actor)}</td><td class="p-3 text-slate-400">${esc(a.tenant_id)}</td>
-        <td class="p-3"><span class="pill bg-white/5 text-slate-300">${esc(a.action)}</span></td>
-        <td class="p-3 text-slate-300">${esc(a.tool||'—')}</td>
-        <td class="p-3 text-center">${a.result_ok==null?'<span class="text-slate-600">·</span>':(a.result_ok?'<i data-lucide="check-circle-2" class="text-emerald-400"></i>':'<i data-lucide="x-circle" class="text-rose-400"></i>')}</td></tr>`).join('')
+        <tr><th class="text-left p-3 font-medium">When</th><th class="text-left p-3 font-medium">Who</th>
+        <th class="text-left p-3 font-medium">Client</th><th class="text-left p-3 font-medium">What</th>
+        <th class="text-left p-3 font-medium hidden lg:table-cell">Detail</th><th class="p-3 font-medium">Result</th></tr></thead><tbody>`+
+      (audit.length?audit.map((a,i)=>{const [lbl,ic]=audMeta(a.action);
+        return `<tr class="aud-row border-b border-edge/30 hover:bg-white/[.03] cursor-pointer" data-i="${i}" title="Click for full details">
+        <td class="p-3 text-slate-500 text-xs whitespace-nowrap" title="${esc(a.ts||'')}">${esc(ago(a.ts))}</td>
+        <td class="p-3 text-slate-300">${esc(a.actor)}</td>
+        <td class="p-3 text-slate-400">${esc(a.tenant_id==='*'?'all':a.tenant_id)}</td>
+        <td class="p-3"><span class="inline-flex items-center gap-1.5"><i data-lucide="${ic}" class="text-slate-500 text-[13px]"></i>${a.tool?`<span class="font-mono text-[12.5px] text-slate-200">${esc(a.tool)}</span>`:`<span class="text-slate-300">${esc(lbl)}</span>`}</span></td>
+        <td class="p-3 text-slate-500 text-xs hidden lg:table-cell"><span class="block truncate max-w-[18rem]" title="${esc(a.detail||'')}">${esc(a.detail||'—')}</span></td>
+        <td class="p-3 text-center">${a.result_ok==null?'<span class="text-slate-600">·</span>':(a.result_ok?'<i data-lucide="check-circle-2" class="text-emerald-400"></i>':'<i data-lucide="x-circle" class="text-rose-400"></i>')}</td></tr>`;}).join('')
         :'<tr><td colspan="6" class="text-center text-slate-500 py-10">No audit entries yet.</td></tr>')+
       `</tbody></table></div>`;icons();
+    const fld=(k,v,mono)=>v?`<div class="px-4 py-2 border-b border-edge/30 flex gap-3"><span class="text-[11px] uppercase tracking-wide text-slate-500 w-24 shrink-0 pt-0.5">${k}</span><span class="text-[13px] ${mono?'font-mono':''} text-slate-200 min-w-0 break-words">${v}</span></div>`:'';
+    document.querySelectorAll('.aud-row').forEach(tr=>tr.onclick=()=>{ const a=audit[+tr.dataset.i]; if(!a)return;
+      const [lbl,ic]=audMeta(a.action);
+      const ok=a.result_ok==null?null:!!a.result_ok;
+      let argsBlock='';
+      if(a.args_json){ let pretty=a.args_json; try{ pretty=JSON.stringify(JSON.parse(a.args_json),null,2); }catch(_){}
+        argsBlock=`<div class="px-4 py-2"><div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1.5">What was requested (args)</div>
+          <pre class="text-[11.5px] font-mono text-slate-300 bg-ink/60 border border-edge rounded-lg p-2.5 whitespace-pre-wrap break-words max-h-64 overflow-auto">${esc(pretty)}</pre></div>`; }
+      else if(a.args_hash) argsBlock=`<div class="px-4 py-2 text-[11px] text-slate-500">Args not recorded for this (older) entry — only the fingerprint <span class="font-mono">${esc((a.args_hash||'').slice(0,12))}…</span></div>`;
+      openDrawer({title:lbl,icon:ic,render:body=>{ body.innerHTML=`
+        <div class="px-4 py-3 border-b border-edge flex items-center gap-2.5">
+          <span class="h-9 w-9 rounded-xl grid place-items-center ${ok===false?AUD_COL.fail:ok?AUD_COL.ok:AUD_COL.none}"><i data-lucide="${a.action==='tool_call'?(ok===false?'x':'check'):ic}"></i></span>
+          <div class="min-w-0"><div class="font-semibold text-sm">${a.tool?`<span class="font-mono">${esc(a.tool)}</span>`:esc(lbl)}</div>
+            <div class="text-[11px] text-slate-500">${ok==null?'no result recorded':ok?'succeeded':'failed / blocked'}</div></div></div>
+        ${fld('When',esc((a.ts||'').replace('T',' ').slice(0,19))+' UTC <span class="text-slate-500">('+esc(ago(a.ts))+')</span>')}
+        ${fld('Who',esc(a.actor))}
+        ${fld('Client',esc(a.tenant_id==='*'?'all clients (*)':a.tenant_id))}
+        ${fld('Action',esc(lbl)+(a.category?' · '+catChip(a.category):''))}
+        ${fld('Outcome',ok==null?'<span class="text-slate-500">—</span>':ok?'<span class="text-emerald-300">OK</span>':'<span class="text-rose-300">failed / blocked</span>')}
+        ${fld('Detail',a.detail?esc(a.detail):'' ,false)}
+        ${fld('Approval',a.approval_id?('#'+esc(String(a.approval_id))):'')}
+        ${argsBlock}
+        <div class="px-4 py-3 text-[10px] text-slate-600">Results are never archived in the audit log (client data doesn't accumulate) — the outcome above is the recorded ok/error state.</div>`;
+        icons(); }});});
   },
 };
 

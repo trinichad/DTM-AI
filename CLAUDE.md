@@ -89,7 +89,8 @@ def run(ctx, **kwargs) -> dict | list   # ctx = {tenant_id, clients, actor}; ret
 { "ts": "ISO-8601", "actor": "user@dtm", "tenant_id": "acme",
   "action": "tool_call|approval|login|config_change|credential_view",
   "tool": "kaseya_list_assets", "category": "read",
-  "args_hash": "sha256(...)", "result_ok": true, "approval_id": null }
+  "args_hash": "sha256(...)", "args_json": "{…} (≤2 KB copy for owner review — D-24)",
+  "result_ok": true, "approval_id": null }
 ```
 
 ### 2.5 Snapshot (dashboard live-data — one normalized JSON per client, zod-validated on FE)

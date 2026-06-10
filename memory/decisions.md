@@ -303,3 +303,12 @@ attrs before going live (failed validation → previous file restored); delete m
 `.tmp/deleted_skills/` (recoverable); rename rewrites NAME + filename. Module hot-reloads — no restart.
 Everything remains git-tracked (I-6). The AGENT still cannot call any of these routes (they are web-admin
 only, not tools). I-5 amended in CLAUDE.md to say "human merge OR direct admin edit (D-23)".
+
+## Audit args visibility (2026-06-10)
+
+**D-24 — audit_log additionally stores `args_json` (compact, 2 KB cap) beside `args_hash`.**
+§2.4 stored only a hash of tool args (privacy: client data shouldn't durably accumulate). But the owner
+couldn't answer "what exactly was requested?" when reviewing the log — a hash is not human-readable.
+Trade-off accepted on an owner-controlled box: keep the hash (integrity), add a capped JSON copy of the
+args (readability), shown in the Audit tab's click-through detail. Results are still NOT archived —
+outcome remains ok/error + detail/error text. Older rows show "not recorded".

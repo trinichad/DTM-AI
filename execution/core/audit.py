@@ -81,6 +81,11 @@ class AuditStore:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            # D-24: also keep a compact, capped JSON of the call args so the owner can see WHAT
+            # was requested when clicking into an audit row (args_hash alone is not human-readable).
+            have = {r["name"] for r in self._conn.execute("PRAGMA table_info(audit_log)")}
+            if "args_json" not in have:
+                self._conn.execute("ALTER TABLE audit_log ADD COLUMN args_json TEXT")
             self._conn.commit()
 
     # ── audit ────────────────────────────────────────────────────────────────
@@ -97,16 +102,22 @@ class AuditStore:
         approval_id: Optional[str] = None,
         detail: Optional[str] = None,
     ) -> None:
+        args_json = None
+        if args is not None:
+            try:
+                args_json = json.dumps(args, default=str)[:2000]   # capped (D-24)
+            except Exception:
+                args_json = str(args)[:2000]
         with self._lock:
             self._conn.execute(
                 "INSERT INTO audit_log "
-                "(ts, actor, tenant_id, action, tool, category, args_hash, result_ok, approval_id, detail) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "(ts, actor, tenant_id, action, tool, category, args_hash, result_ok, approval_id, detail, args_json) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     _now(), actor, tenant_id, action, tool, category,
                     hash_args(args) if args is not None else None,
                     None if result_ok is None else int(result_ok),
-                    approval_id, detail,
+                    approval_id, detail, args_json,
                 ),
             )
             self._conn.commit()
