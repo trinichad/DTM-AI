@@ -62,6 +62,10 @@ def build_agent(cfg: Optional[Config] = None, db_path: Optional[Path] = None) ->
     agent.dispatcher = Dispatcher(
         tasks, agent, lambda tenant, actor: make_context(tenant, actor, allow_cloud=False),
         model_resolver=lambda profile: get_brain_model(profile, cfg))
+    # Recurrence tick for scheduled delegation. Constructed here, STARTED only by the long-running
+    # server (create_server) — never in build_agent's test/CLI callers.
+    from .core.scheduler import Scheduler
+    agent.scheduler = Scheduler(tasks, agent.dispatcher)
     return agent
 
 

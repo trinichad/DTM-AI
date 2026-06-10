@@ -53,7 +53,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     last_failure_error   TEXT,
     result        TEXT,
     model_override TEXT,
-    idempotency_key TEXT
+    idempotency_key TEXT,
+    recurring     INTEGER DEFAULT 0,
+    schedule_spec TEXT DEFAULT '',
+    next_run_at   INTEGER,
+    paused        INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE TABLE IF NOT EXISTS task_runs (
@@ -99,7 +103,16 @@ class TaskStore:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            self._migrate()
             self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Add columns missing from a pre-existing tasks table (CREATE IF NOT EXISTS won't). Idempotent."""
+        have = {r["name"] for r in self._conn.execute("PRAGMA table_info(tasks)")}
+        for col, ddl in (("recurring", "INTEGER DEFAULT 0"), ("schedule_spec", "TEXT DEFAULT ''"),
+                         ("next_run_at", "INTEGER"), ("paused", "INTEGER DEFAULT 0")):
+            if col not in have:
+                self._conn.execute(f"ALTER TABLE tasks ADD COLUMN {col} {ddl}")
 
     def close(self) -> None:
         with self._lock:
@@ -118,11 +131,14 @@ class TaskStore:
             "last_failure_error": r["last_failure_error"],
             "goal_mode": False, "model_override": r["model_override"],
             "has_result": bool(r["result"]),
+            "recurring": bool(r["recurring"]), "schedule_spec": r["schedule_spec"] or "",
+            "next_run_ms": r["next_run_at"], "paused": bool(r["paused"]),
         }
 
     # ── writes ──
     def create(self, title: str, body: str = "", assignee: str = "", created_by: str = "dtm-ai",
-               tenant: str = "", idempotency_key: str = "") -> dict:
+               tenant: str = "", idempotency_key: str = "", *, recurring: bool = False,
+               schedule_spec: str = "", next_run_at: Optional[int] = None) -> dict:
         title = (title or "").strip()
         if not title:
             raise ValueError("task title required")
@@ -130,7 +146,11 @@ class TaskStore:
         if assignee:
             _safe_profile(assignee)
         idem = (idempotency_key or "").strip()
-        status = "ready" if assignee else "triage"
+        # A recurring task waits in `scheduled` until the scheduler flips it to `ready` when due.
+        if recurring:
+            status = "scheduled"
+        else:
+            status = "ready" if assignee else "triage"
         now = _now_ms()
         with self._lock:
             if idem:
@@ -141,12 +161,14 @@ class TaskStore:
             tid = "t_" + uuid.uuid4().hex[:8]
             self._conn.execute(
                 "INSERT INTO tasks(id,title,body,assignee,status,created_by,tenant,created_at,"
-                "idempotency_key) VALUES(?,?,?,?,?,?,?,?,?)",
+                "idempotency_key,recurring,schedule_spec,next_run_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (tid, title, body or "", assignee, status, created_by or "dtm-ai",
-                 (tenant or "").strip(), now, idem or None))
+                 (tenant or "").strip(), now, idem or None,
+                 1 if recurring else 0, schedule_spec or "", next_run_at))
             self._conn.execute(
                 "INSERT INTO task_events(task_id,kind,payload,created_at) VALUES(?,?,?,?)",
-                (tid, "created", json.dumps({"assignee": assignee, "status": status}), now))
+                (tid, "created", json.dumps({"assignee": assignee, "status": status,
+                                             "schedule": schedule_spec or None}), now))
             self._conn.commit()
             row = self._conn.execute("SELECT * FROM tasks WHERE id=?", (tid,)).fetchone()
             return self._card(row)
@@ -214,7 +236,8 @@ class TaskStore:
                 (row["id"], "claimed", "", now))
             self._conn.commit()
             return {"id": row["id"], "title": row["title"], "body": row["body"] or "",
-                    "assignee": row["assignee"] or "", "tenant": row["tenant"] or ""}
+                    "assignee": row["assignee"] or "", "tenant": row["tenant"] or "",
+                    "recurring": bool(row["recurring"])}
 
     def start_run(self, task_id: str, profile: Optional[str]) -> int:
         now = _now_ms()
@@ -257,6 +280,75 @@ class TaskStore:
                 "INSERT INTO task_events(task_id,kind,payload,created_at) VALUES(?,?,?,?)",
                 (task_id, "failed", json.dumps({"error": error[:500]}), now))
             self._conn.commit()
+
+    # ── recurrence (driven by the Scheduler) ──
+    def due_recurring(self, now_ms: int) -> list[dict]:
+        """Recurring, un-paused tasks waiting in `scheduled` whose next_run_at has passed."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM tasks WHERE recurring=1 AND paused=0 AND status='scheduled' "
+                "AND next_run_at IS NOT NULL AND next_run_at<=? ORDER BY next_run_at ASC",
+                (now_ms,)).fetchall()
+            out = []
+            for r in rows:
+                t = self._card(r)
+                t["schedule_spec"] = r["schedule_spec"] or ""
+                out.append(t)
+            return out
+
+    def enqueue_recurring(self, task_id: str, next_run_at: Optional[int]) -> bool:
+        """Fire a due recurring task: `scheduled`→`ready` (dispatchable) and advance next_run_at to the
+        NEXT occurrence up front, so a crash mid-run never double-fires. Race-safe via the WHERE guard."""
+        now = _now_ms()
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE tasks SET status='ready', next_run_at=? WHERE id=? AND status='scheduled'",
+                (next_run_at, task_id))
+            if cur.rowcount != 1:
+                self._conn.commit()
+                return False
+            self._conn.execute(
+                "INSERT INTO task_events(task_id,kind,payload,created_at) VALUES(?,?,?,?)",
+                (task_id, "scheduled_fire", json.dumps({"next_run_at": next_run_at}), now))
+            self._conn.commit()
+            return True
+
+    def complete_recurring(self, task_id: str, result: str) -> None:
+        """A recurring run succeeded → return to `scheduled` (NOT `review`); next_run_at already set."""
+        now = _now_ms()
+        with self._lock:
+            self._conn.execute(
+                "UPDATE tasks SET status='scheduled', result=?, completed_at=?, "
+                "consecutive_failures=0, last_failure_error=NULL WHERE id=?", (result, now, task_id))
+            self._conn.execute(
+                "INSERT INTO task_events(task_id,kind,payload,created_at) VALUES(?,?,?,?)",
+                (task_id, "recurred", "", now))
+            self._conn.commit()
+
+    def set_paused(self, task_id: str, paused: bool) -> dict:
+        with self._lock:
+            cur = self._conn.execute("UPDATE tasks SET paused=? WHERE id=?",
+                                     (1 if paused else 0, task_id))
+            if cur.rowcount != 1:
+                raise ValueError(f"unknown task {task_id}")
+            self._conn.execute(
+                "INSERT INTO task_events(task_id,kind,payload,created_at) VALUES(?,?,?,?)",
+                (task_id, "paused" if paused else "resumed", "", _now_ms()))
+            self._conn.commit()
+            return {"ok": True, "id": task_id, "paused": bool(paused)}
+
+    def run_now(self, task_id: str) -> dict:
+        """Fire a scheduled task immediately (next tick claims it). Leaves next_run_at intact."""
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE tasks SET status='ready' WHERE id=? AND status='scheduled'", (task_id,))
+            if cur.rowcount != 1:
+                raise ValueError(f"task {task_id} not in 'scheduled' state")
+            self._conn.execute(
+                "INSERT INTO task_events(task_id,kind,payload,created_at) VALUES(?,?,?,?)",
+                (task_id, "run_now", "", _now_ms()))
+            self._conn.commit()
+            return {"ok": True, "id": task_id, "status": "ready"}
 
     # ── reads (board / task detail) ──
     def list_tasks(self, include_archived: bool = False) -> list[dict]:
@@ -368,7 +460,10 @@ class Dispatcher:
             turn = self.agent.chat(ctx, msg, profile=profile, model_id=model_id)
             summary = (getattr(turn, "answer", "") or "").strip() or "(no answer produced)"
             self.store.finish_run(run_id, ok=True, summary=summary)
-            self.store.complete_task(task["id"], result=summary)
+            if task.get("recurring"):
+                self.store.complete_recurring(task["id"], result=summary)  # back to `scheduled`
+            else:
+                self.store.complete_task(task["id"], result=summary)       # to `review`
         except Exception as e:                       # contained — a failed task blocks, never crashes
             self.store.finish_run(run_id, ok=False, error=str(e))
             self.store.fail_task(task["id"], str(e))

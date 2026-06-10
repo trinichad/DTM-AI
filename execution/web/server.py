@@ -171,6 +171,8 @@ def _make_handler(api: Api, signer: SessionSigner, secure_cookie: bool):
 def create_server(port: int = 8088, host: str = "127.0.0.1", db_path: Optional[Path] = None):
     cfg = get_config()
     agent = build_agent(cfg, db_path)
+    if getattr(agent, "scheduler", None):
+        agent.scheduler.start()       # recurring delegated tasks (scheduled-delegation SOP)
     auth = AuthStore(db_path)
     generated = auth.ensure_admin(cfg.get("DTM_ADMIN_PASSWORD"))
     if generated:
