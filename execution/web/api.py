@@ -772,7 +772,8 @@ class Api:
             conv_id = convs.create(user, tenant_id=tenant)["id"]
         ctx = ToolContext(tenant_id=tenant, actor=user,
                           allow_cloud=bool(model_id and not model_id.startswith("ollama:")),
-                          client_factory=get_client_factory())
+                          client_factory=get_client_factory(),
+                          _meta={"tasks": self.agent.tasks})   # lets schedule_task reach the board
         # Server-side history is authoritative (the browser no longer holds the transcript).
         history = convs.history(user, conv_id)
         convs.add_message(user, conv_id, "user", message)
@@ -820,7 +821,8 @@ class Api:
                 ctx = ToolContext(
                     tenant_id=tenant, actor=user,
                     allow_cloud=bool(model_id and not model_id.startswith("ollama:")),
-                    client_factory=get_client_factory())
+                    client_factory=get_client_factory(),
+                    _meta={"tasks": self.agent.tasks})   # lets schedule_task reach the board
                 result["turn"] = self.agent.chat_stream(
                     ctx, message, lambda e: q.put(e), model_id=model_id, history=prior,
                     profile=body.get("agent") or body.get("profile"))
