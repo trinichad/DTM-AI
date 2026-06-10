@@ -608,19 +608,19 @@ const VIEWS={
       api('GET','/api/audit?limit=10'+(TENANT!=='*'?'&tenant='+encodeURIComponent(TENANT):''))]);
     const T=tools.tools,I=ints.integrations;
     const cfg=I.filter(i=>i.configured).length, writes=T.filter(t=>t.allow_write).length;
-    const stat=(ic,grad,val,label,sub)=>`<div class="card card-hover p-5">
+    const stat=(ic,grad,val,label,sub,go)=>`<div class="card card-hover p-5 ${go?'stat-go cursor-pointer':''}" ${go?`data-go="${go}" role="button" title="Open ${go}"`:''}>
       <div class="flex items-start justify-between">
         <div class="h-10 w-10 rounded-xl grid place-items-center text-white" style="background:${grad}"><i data-lucide="${ic}"></i></div>
         ${sub?`<span class="text-[11px] text-slate-500">${sub}</span>`:''}
       </div>
       <div class="text-3xl font-bold mt-4">${val}</div>
-      <div class="text-sm text-slate-400">${label}</div></div>`;
+      <div class="text-sm text-slate-400 flex items-center gap-1">${label}${go?'<i data-lucide="arrow-right" class="text-[12px] text-slate-600"></i>':''}</div></div>`;
     $('#view').innerHTML=`
       <div class="grid gap-4 md:grid-cols-4 mb-5">
-        ${stat('wrench','linear-gradient(135deg,#6366f1,#8b5cf6)',T.length,'Capabilities','enabled tools')}
-        ${stat('plug-zap','linear-gradient(135deg,#22d3ee,#3b82f6)',cfg+' / '+I.length,'Integrations','configured')}
-        ${stat('shield-check','linear-gradient(135deg,#34d399,#10b981)',T.length-writes,'Read-only tools','safe by default')}
-        ${stat('pencil','linear-gradient(135deg,#fb923c,#f43f5e)',writes,'Write-enabled','via console')}
+        ${stat('wrench','linear-gradient(135deg,#6366f1,#8b5cf6)',T.length,'Capabilities','enabled tools','capabilities')}
+        ${stat('plug-zap','linear-gradient(135deg,#22d3ee,#3b82f6)',cfg+' / '+I.length,'Integrations','configured','integrations')}
+        ${stat('shield-check','linear-gradient(135deg,#34d399,#10b981)',T.length-writes,'Read-only tools','safe by default','capabilities')}
+        ${stat('pencil','linear-gradient(135deg,#fb923c,#f43f5e)',writes,'Write-enabled','via console','capabilities')}
       </div>
       <div class="card p-5 mb-4">
         <div class="flex items-center gap-2 mb-4 font-semibold"><i data-lucide="server" class="text-accent"></i> Fleet
@@ -649,6 +649,7 @@ const VIEWS={
           <div id="hoststats" class="grid gap-x-8 gap-y-1 md:grid-cols-2"><div class="text-slate-500 text-sm">loading…</div></div>
         </div>
       </div>`;icons();
+    document.querySelectorAll('.stat-go').forEach(c=>c.onclick=()=>route(c.dataset.go));
     loadHostStats(); clearInterval(window._statPoll); window._statPoll=setInterval(loadHostStats,4000);
     loadFleet(); if($('#fleetRefresh')) $('#fleetRefresh').onclick=()=>loadFleet(true);
   },
