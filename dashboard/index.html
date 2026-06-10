@@ -201,10 +201,14 @@
           <button id="cvLock" class="h-9 w-9 grid place-items-center rounded-lg text-slate-400 hover:text-slate-200 hover:bg-white/5 transition" title="Credential vault"><i data-lucide="lock"></i></button>
           <div id="cvPanel" class="hidden absolute right-0 top-full mt-2 w-[340px] max-w-[92vw] rounded-2xl overflow-hidden z-50" style="background:#0d1018;box-shadow:0 16px 50px rgba(0,0,0,.6),inset 0 0 0 1px rgba(99,102,241,.32)"></div>
         </div>
-        <div class="relative"><i data-lucide="building-2" class="absolute left-3 top-2.5 text-slate-500 text-sm"></i>
-          <input id="tenant" value="*" aria-label="Client / tenant filter" title="Client / tenant — type or pick" list="clientDL"
-            class="w-36 bg-ink/70 border border-edge rounded-xl pl-9 pr-3 py-2 text-sm focus:border-accent focus:outline-none"/>
-          <datalist id="clientDL"></datalist></div>
+        <div class="relative" id="cliWrap">
+          <button id="cliBtn" aria-label="Client / tenant filter" class="h-9 pl-3 pr-2 rounded-xl flex items-center gap-2 text-sm bg-ink/70 border border-edge hover:border-accent/60 transition min-w-[11rem] max-w-[16rem]">
+            <i data-lucide="building-2" class="text-slate-500 text-sm shrink-0"></i>
+            <span id="cliLabel" class="flex-1 text-left truncate">All clients</span>
+            <i data-lucide="chevron-down" class="text-slate-500 text-[13px] shrink-0"></i>
+          </button>
+          <div id="cliPanel" class="hidden absolute right-0 top-full mt-2 w-72 rounded-2xl overflow-hidden z-50" style="background:#0d1018;box-shadow:0 16px 50px rgba(0,0,0,.6),inset 0 0 0 1px rgba(99,102,241,.32)"></div>
+        </div>
       </div>
     </header>
     <section id="view" class="flex-1 overflow-auto p-6"></section>
@@ -667,10 +671,49 @@ $('#loginForm').onsubmit=async e=>{e.preventDefault();
   catch(_){$('#loginErr').textContent='login failed';}};
 $('#logout').onclick=async()=>{await api('POST','/api/logout');showLogin();};
 $('#userCard').onclick=()=>route('settings');
-$('#tenant').onchange=e=>{TENANT=e.target.value.trim()||'*';route(current);};
+// ── client picker — searchable dropdown; '*' is shown as "All clients" ──
+let CLIENTS=[];
+const tenantLabel=t=>t==='*'?'All clients':t;
+function setTenant(t,opts){ TENANT=(t||'*').trim()||'*';
+  const l=$('#cliLabel'); if(l)l.textContent=tenantLabel(TENANT);
+  if(!opts||opts.nav!==false) route(current); }
+function closeCliPanel(){ const p=$('#cliPanel'); if(p)p.classList.add('hidden'); document.removeEventListener('click',cliOutside,true); }
+function cliOutside(e){ if(!e.target.closest('#cliWrap')) closeCliPanel(); }
+function openCliPanel(){
+  const p=$('#cliPanel'); if(!p)return;
+  if(!p.classList.contains('hidden')){ closeCliPanel(); return; }
+  let q='', sel=0;
+  const opts=()=>['*',...CLIENTS.filter(c=>!q||c.toLowerCase().includes(q))];
+  const paint=()=>{ const list=opts(); if(sel>=list.length)sel=Math.max(0,list.length-1);
+    $('#cliList').innerHTML=list.map((c,i)=>{ const active=c===TENANT, hot=i===sel;
+      return `<button class="cli-opt w-full text-left px-3 py-2 flex items-center gap-2.5 transition ${hot?'bg-accent/15':'hover:bg-white/5'}" data-t="${esc(c)}" data-i="${i}">
+        <span class="h-7 w-7 rounded-lg grid place-items-center shrink-0 ${c==='*'?'bg-accent/15 text-accent':'bg-white/5 text-slate-400'}"><i data-lucide="${c==='*'?'layers':'building-2'}" class="text-[13px]"></i></span>
+        <span class="flex-1 min-w-0 text-[13px] truncate ${active?'text-slate-100 font-medium':'text-slate-300'}">${esc(tenantLabel(c))}</span>
+        ${active?'<i data-lucide="check" class="text-accent text-[14px] shrink-0"></i>':''}</button>`; }).join('')
+      ||'<div class="px-3 py-4 text-xs text-slate-600 text-center">No matching clients</div>';
+    icons();
+    $('#cliList').querySelectorAll('.cli-opt').forEach(b=>{
+      b.onclick=()=>{ closeCliPanel(); setTenant(b.dataset.t); };
+      b.onmouseenter=()=>{ sel=+b.dataset.i; paint(); }; }); };
+  p.innerHTML=`<div class="p-2 border-b border-edge" style="background:rgba(255,255,255,.02)">
+      <div class="relative"><i data-lucide="search" class="absolute left-2.5 top-2 text-slate-500 text-[13px]"></i>
+        <input id="cliQ" placeholder="Search clients…" autocomplete="off"
+          class="w-full bg-ink/70 border border-edge rounded-lg pl-8 pr-3 py-1.5 text-sm focus:border-accent focus:outline-none"></div></div>
+    <div id="cliList" class="max-h-72 overflow-auto py-1"></div>
+    <div class="px-3 py-1.5 border-t border-edge/60 text-[10px] text-slate-600">${CLIENTS.length} client${CLIENTS.length===1?'':'s'} · ↑↓ + Enter</div>`;
+  p.classList.remove('hidden'); paint(); icons();
+  const qi=$('#cliQ'); qi.focus();
+  qi.addEventListener('input',()=>{ q=qi.value.toLowerCase().trim(); sel=0; paint(); });
+  qi.addEventListener('keydown',e=>{ const list=opts();
+    if(e.key==='ArrowDown'){ e.preventDefault(); sel=(sel+1)%list.length; paint(); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); sel=(sel-1+list.length)%list.length; paint(); }
+    else if(e.key==='Enter'){ e.preventDefault(); if(list[sel]!=null){ closeCliPanel(); setTenant(list[sel]); } }
+    else if(e.key==='Escape'){ closeCliPanel(); } });
+  document.addEventListener('click',cliOutside,true);
+}
+$('#cliBtn').onclick=openCliPanel;
 async function loadMe(){ try{ ME=await api('GET','/api/me'); renderUser(); }catch(_){} }
-function fillClientDL(clients){ const dl=$('#clientDL'); if(!dl)return;
-  dl.innerHTML='<option value="*">All clients</option>'+(clients||[]).map(c=>`<option value="${esc(c)}"></option>`).join(''); }
+function fillClientDL(clients){ CLIENTS=clients||[]; }   // feeds the client picker dropdown
 async function loadClients(){ try{ const r=await api('GET','/api/clients'); fillClientDL(r.clients||[]); }catch(_){} }
 function renderUser(){ if(!ME)return; $('#userName').textContent=ME.username;
   $('#userRole').textContent=ME.role; $('#userAvatar').textContent=(ME.username||'?')[0].toUpperCase(); }
@@ -862,7 +905,7 @@ const VIEWS={
       icons(); };
     async function loadMsgs(){ if(!CONV){ MSGS=[]; return; }
       try{ const conv=await api('GET','/api/conversations/'+CONV); MSGS=(conv.messages||[]).map(normMsg);
-        if(conv.tenant_id&&conv.tenant_id!==TENANT){ TENANT=conv.tenant_id; const ts=$('#tenant'); if(ts)ts.value=TENANT; } }
+        if(conv.tenant_id&&conv.tenant_id!==TENANT){ setTenant(conv.tenant_id,{nav:false}); } }
       catch(_){ MSGS=[]; CONV=null; } }
     const openConv=async id=>{ closeDrawer(); CONV=id; await loadMsgs(); renderChatLog(); showSuggest(); updateMeter(); renderRail();
       const ip=$('#msg'); if(ip)ip.focus(); };
@@ -1532,15 +1575,15 @@ const VIEWS={
     const cs=$('#cliSearch'); if(cs) cs.oninput=()=>{const q=cs.value.trim().toLowerCase(); let n=0;
       document.querySelectorAll('#cliList .cli-row').forEach(r=>{const hit=!q||r.dataset.name.includes(q); r.style.display=hit?'':'none'; if(hit)n++;});
       const e=$('#cliEmpty'); if(e) e.classList.toggle('hidden', n>0);};
-    document.querySelectorAll('.memcli').forEach(b=>b.onclick=()=>{TENANT=b.dataset.c;$('#tenant').value=TENANT;route('memory');});
+    document.querySelectorAll('.memcli').forEach(b=>b.onclick=()=>{setTenant(b.dataset.c,{nav:false});route('memory');});
     document.querySelectorAll('.memdel').forEach(b=>b.onclick=async()=>{const c=b.dataset.c;
       if(!confirm(`Delete client “${c}” and its saved memory? This cannot be undone.`))return;
       const r=await api('DELETE','/api/clients/'+encodeURIComponent(c));
-      if(r&&r.removed){ toast('Client removed'); if(TENANT===c){TENANT='*';$('#tenant').value='*';} loadClients(); route('memory'); }
+      if(r&&r.removed){ toast('Client removed'); if(TENANT===c)setTenant('*',{nav:false}); loadClients(); route('memory'); }
       else toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can manage clients':('Failed: '+((r&&r.error)||'')),false);});
     $('#cliAdd').onclick=async()=>{const id=prompt('New client id (short slug, e.g. acme or northwind-co):'); if(id===null)return;
       const r=await api('POST','/api/clients',{id});
-      if(r&&r.ok){ toast('Client added: '+r.id); TENANT=r.id; $('#tenant').value=r.id; loadClients(); route('memory'); }
+      if(r&&r.ok){ toast('Client added: '+r.id); setTenant(r.id,{nav:false}); loadClients(); route('memory'); }
       else toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can add clients':('Failed: '+((r&&r.error)||'')),false);};
     const ms=$('#memSave'); if(ms) ms.onclick=async()=>{const content=$('#memBody').value;
       ms.disabled=true; const r=await api('POST','/api/memory',{tenant:TENANT,content});
