@@ -191,6 +191,13 @@
         <div id="subtitle" class="text-xs text-slate-500"></div></div>
       <span class="pill bg-emerald-500/15 text-emerald-300 ml-1 flex items-center gap-1"><i data-lucide="shield-check" class="text-[13px]"></i> READ-ONLY</span>
       <div class="ml-auto flex items-center gap-2">
+        <div class="relative">
+          <button id="apBell" class="relative h-9 w-9 grid place-items-center rounded-lg text-slate-400 hover:text-slate-200 hover:bg-white/5 transition" title="Approvals — write actions awaiting your sign-off">
+            <i data-lucide="bell"></i>
+            <span id="apBadge" class="hidden absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold grid place-items-center"></span>
+          </button>
+          <div id="apPanel" class="hidden absolute right-0 top-full mt-2 w-[400px] max-w-[92vw] rounded-2xl overflow-hidden z-50" style="background:#0d1018;box-shadow:0 16px 50px rgba(0,0,0,.6),inset 0 0 0 1px rgba(99,102,241,.32)"></div>
+        </div>
         <div class="relative"><i data-lucide="building-2" class="absolute left-3 top-2.5 text-slate-500 text-sm"></i>
           <input id="tenant" value="*" aria-label="Client / tenant filter" title="Client / tenant — type or pick" list="clientDL"
             class="w-36 bg-ink/70 border border-edge rounded-xl pl-9 pr-3 py-2 text-sm focus:border-accent focus:outline-none"/>
@@ -210,14 +217,14 @@ const NAV=[['overview','Overview','layout-dashboard'],['chat','Chat','message-sq
   ['agents','Agents','users-round'],['board','Delegation','layout-grid'],
   ['integrations','Integrations','plug-zap'],['capabilities','Capabilities','sliders-horizontal'],
   ['skills','Skills','graduation-cap'],['memory','Memory','brain'],
-  ['approvals','Approvals','shield-alert'],['build','Build','hammer'],
+  ['build','Build','hammer'],
   ['terminal','Terminal','terminal'],['audit','Audit','scroll-text']];
 const SUB={overview:'Live health across your clients',chat:'Ask about a client — read-only',
   agents:'Your specialist team — souls, roles & memory',
   board:'Watch & assign work across your specialist team',
   integrations:'Connections, knowledge & credentials',capabilities:'Primitives the AI may use',
   skills:'Reusable procedures the AI has saved',memory:'Knowledge base & per-client notes',
-  approvals:'Write actions awaiting your sign-off',build:'Draft new tools — sandboxed, you approve',
+  build:'Draft new tools — sandboxed, you approve',
   terminal:'Run commands on the server — admin only, audited',
   audit:'Every action, logged',settings:'Account & users'};
 let ME=null, MODEL='';
@@ -473,12 +480,63 @@ function openDrawer(opts){ closeDrawer();
   icons();
   requestAnimationFrame(()=>{ back.classList.add('show'); dr.classList.add('show'); });
 }
+// ── approvals bell — pending write actions live in the top bar, not a tab ──
+async function refreshApprovalBadge(){ try{
+  const d=await api('GET','/api/approvals');
+  window._apData=d; const n=d.pending||0; const b=$('#apBadge');
+  if(b){ b.textContent=n>9?'9+':String(n); b.classList.toggle('hidden',!n); }
+}catch(_){} }
+function closeApPanel(){ const p=$('#apPanel'); if(p)p.classList.add('hidden'); document.removeEventListener('click',apOutside,true); }
+function apOutside(e){ if(!e.target.closest('#apPanel')&&!e.target.closest('#apBell')) closeApPanel(); }
+async function openApPanel(){
+  const p=$('#apPanel'); if(!p)return;
+  if(!p.classList.contains('hidden')){ closeApPanel(); return; }
+  await refreshApprovalBadge();
+  const d=window._apData||{approvals:[]};
+  const pending=(d.approvals||[]).filter(a=>a.status==='pending');
+  const recent=(d.approvals||[]).filter(a=>a.status!=='pending').slice(0,5);
+  const admin=ME&&ME.role==='admin';
+  const card=a=>`<div class="px-4 py-3 border-b border-edge/40">
+    <div class="flex items-center gap-2"><i data-lucide="alert-triangle" class="text-amber-400 text-[14px]"></i>
+      <span class="font-medium text-sm font-mono">${esc(a.tool)}</span>${catChip(a.category)}
+      <span class="ml-auto text-[10px] text-slate-600">${esc((a.ts||'').slice(5,16).replace('T',' '))}</span></div>
+    <div class="text-[11px] text-slate-500 mt-1">client <span class="text-slate-300">${esc(a.tenant_id)}</span> · by ${esc(a.actor)}</div>
+    <pre class="text-[11px] text-slate-300 bg-ink/60 border border-edge rounded-lg p-2 mt-1.5 whitespace-pre-wrap font-mono max-h-28 overflow-auto">${esc(JSON.stringify(a.args,null,1))}</pre>
+    ${admin?`<div class="flex gap-2 mt-2">
+      <button class="ap-approve grad text-white rounded-lg px-3 py-1.5 text-xs font-semibold inline-flex items-center gap-1" data-a="${a.id}"><i data-lucide="check" class="text-[12px]"></i> Approve &amp; run</button>
+      <button class="ap-reject bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/20 rounded-lg px-3 py-1.5 text-xs" data-a="${a.id}">Reject</button></div>`
+      :'<div class="text-[10px] text-slate-600 mt-1.5">Only an admin can decide.</div>'}</div>`;
+  p.innerHTML=`<div class="px-4 py-2.5 border-b border-edge flex items-center gap-2" style="background:rgba(255,255,255,.02)">
+      <i data-lucide="shield-alert" class="text-accent text-[14px]"></i><span class="font-semibold text-sm">Approvals</span>
+      <span class="text-[11px] text-slate-500">${pending.length?pending.length+' waiting for your sign-off':'nothing waiting'}</span></div>
+    <div class="max-h-[60vh] overflow-auto">
+      ${pending.length?pending.map(card).join(''):`<div class="px-4 py-6 text-center text-xs text-slate-500">DTM AI is read-only by default. When an agent proposes a write action that needs sign-off, it appears here — nothing runs until you approve it.</div>`}
+      ${recent.length?`<div class="px-4 pt-2 pb-1 text-[10px] uppercase tracking-wide text-slate-600">Recent decisions</div>`+recent.map(a=>`
+        <div class="px-4 py-1.5 flex items-center gap-2 text-xs">
+          <i data-lucide="${a.status==='executed'?'check-circle-2':'x-circle'}" class="${a.status==='executed'?'text-emerald-400':'text-rose-400'} text-[12px]"></i>
+          <span class="font-mono">${esc(a.tool)}</span><span class="text-slate-600">${esc(a.tenant_id)}</span>
+          <span class="ml-auto text-slate-600">${esc(a.status)}</span></div>`).join('')+'<div class="pb-2"></div>':''}
+    </div>`;
+  p.classList.remove('hidden'); icons();
+  document.addEventListener('click',apOutside,true);
+  p.querySelectorAll('.ap-approve').forEach(b=>b.onclick=async()=>{ b.disabled=true;
+    const r=await api('POST','/api/approvals/'+b.dataset.a+'/approve');
+    if(r&&r.ok) toast(r.executed?'Approved & executed':'Approved — action failed',!!r.executed);
+    else toast((r&&r.error)||'failed',false);
+    closeApPanel(); refreshApprovalBadge(); });
+  p.querySelectorAll('.ap-reject').forEach(b=>b.onclick=async()=>{ b.disabled=true;
+    const r=await api('POST','/api/approvals/'+b.dataset.a+'/reject');
+    toast(r&&r.ok?'Rejected':'failed',!!(r&&r.ok));
+    closeApPanel(); refreshApprovalBadge(); });
+}
 function icons(){ if(window.lucide) lucide.createIcons(); }
 async function api(m,p,b){const r=await fetch(p,{method:m,credentials:'same-origin',
   headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined});
   if(r.status===401){showLogin();throw new Error('auth');}return r.json();}
 function showLogin(){$('#login').classList.remove('hidden');$('#app').classList.add('hidden');icons();}
-function showApp(){$('#login').classList.add('hidden');$('#app').classList.remove('hidden');}
+function showApp(){$('#login').classList.add('hidden');$('#app').classList.remove('hidden');
+  const bell=$('#apBell'); if(bell&&!bell._wired){ bell._wired=true; bell.onclick=openApPanel; }
+  refreshApprovalBadge(); clearInterval(window._apPoll); window._apPoll=setInterval(refreshApprovalBadge,45000);}
 function toast(msg,ok=true){const t=document.createElement('div');
   t.className=`card glass px-4 py-2.5 text-sm flex items-center gap-2 animate-fadeup ${ok?'text-emerald-300':'text-rose-300'}`;
   t.innerHTML=`<i data-lucide="${ok?'check-circle-2':'alert-circle'}"></i> ${msg}`;
@@ -500,7 +558,7 @@ function renderUser(){ if(!ME)return; $('#userName').textContent=ME.username;
   $('#userRole').textContent=ME.role; $('#userAvatar').textContent=(ME.username||'?')[0].toUpperCase(); }
 
 function renderNav(){$('#nav').innerHTML=NAV.filter(n=>!(n[0]==='build'||n[0]==='terminal')||(ME&&ME.role==='admin')).map(([id,label,ic])=>{
-  const badge=(id==='approvals'&&ME&&ME.pending_approvals)?`<span class="ml-auto pill bg-rose-500/20 text-rose-300">${ME.pending_approvals}</span>`:'';
+  const badge='';   // approvals moved to the top-bar bell
   return `<a data-id="${id}" class="navi ${id===current?'active':''}"><i data-lucide="${ic}"></i><span>${label}</span>${badge}</a>`;}).join('');
   document.querySelectorAll('[data-id]').forEach(a=>a.onclick=()=>route(a.dataset.id));icons();}
 function route(id){current=id;const n=NAV.find(x=>x[0]===id);clearInterval(window._statPoll);
@@ -1366,7 +1424,7 @@ const VIEWS={
           <span id="termStat" class="text-[11px] text-slate-500 inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-amber-400"></span>connecting…</span>
           <span class="text-[11px] text-slate-500 ml-auto">Interactive shell on the server — install &amp; run <span class="font-mono text-slate-300">claude</span>, edit files, <span class="font-mono text-slate-300">sudo</span>, vim, top…</span>
         </div>
-        <div id="termHost" class="flex-1 min-h-0 rounded-xl border border-edge overflow-hidden" style="background:#0b0b10"></div></div>`;
+        <div id="termHost" class="flex-1 min-h-0 rounded-xl border border-edge overflow-hidden" style="background:#0b0b10;padding:10px 0 0 14px"></div></div>`;
     icons();
     if(typeof Terminal==='undefined'){$('#termHost').innerHTML='<div class="p-4 text-sm text-rose-300">xterm.js failed to load (/vendor/xterm.js) — hard-refresh.</div>';return;}
     const host=$('#termHost');
@@ -1425,42 +1483,6 @@ const VIEWS={
       document.querySelectorAll('.udel').forEach(b=>b.onclick=async()=>{if(!confirm('Delete user '+b.dataset.u+'?'))return;
         const r=await api('DELETE','/api/users/'+encodeURIComponent(b.dataset.u));r.ok?(toast('user deleted'),route('settings')):toast(esc(r.error),false);});
       document.querySelectorAll('.uedit').forEach(b=>b.onclick=()=>editUser(b.dataset.u,b.dataset.role,b.dataset.email));
-    }
-    icons();
-  },
-
-  async approvals(){
-    const d=await api('GET','/api/approvals');
-    const pending=d.approvals.filter(a=>a.status==='pending');
-    const admin=ME&&ME.role==='admin';
-    const card=a=>`<div class="card p-4">
-      <div class="flex items-center gap-2"><i data-lucide="alert-triangle" class="text-amber-400"></i>
-        <span class="font-medium">${esc(a.tool)}</span>${catChip(a.category)}
-        <span class="text-xs text-slate-500">client ${esc(a.tenant_id)}</span>
-        <span class="ml-auto text-[11px] text-slate-600">${esc((a.ts||'').slice(0,19).replace('T',' '))}</span></div>
-      <div class="text-xs text-slate-400 mt-2">requested by <span class="text-slate-300">${esc(a.actor)}</span></div>
-      <pre class="text-xs text-slate-300 bg-ink/60 border border-edge rounded-lg p-2 mt-2 whitespace-pre-wrap font-mono">${esc(JSON.stringify(a.args,null,2))}</pre>
-      ${admin?`<div class="flex gap-2 mt-3">
-        <button class="ap-approve grad text-white rounded-lg px-3 py-1.5 text-xs font-semibold inline-flex items-center gap-1" data-a="${a.id}"><i data-lucide="check"></i> Approve &amp; run</button>
-        <button class="ap-reject bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/20 rounded-lg px-3 py-1.5 text-xs" data-a="${a.id}">Reject</button></div>`
-        :`<div class="text-[11px] text-slate-500 mt-3">Only an admin can approve this action.</div>`}</div>`;
-    const empty=`<div class="card glass p-10 text-center max-w-2xl mx-auto">
-      <div class="h-12 w-12 rounded-2xl grad grid place-items-center mx-auto mb-3"><i data-lucide="shield-check" class="text-white text-xl"></i></div>
-      <div class="font-semibold">Nothing awaiting approval</div>
-      <div class="text-sm text-slate-400 mt-1 max-w-md mx-auto">DTM AI is read-only by default. When a write tool is enabled and the AI proposes an action, it lands here for your sign-off — nothing runs until you approve it.</div></div>`;
-    const recent=d.approvals.filter(a=>a.status!=='pending').slice(0,12);
-    const rec=recent.length?`<div class="text-[11px] uppercase tracking-wide text-slate-500 mt-5 mb-1">Recent decisions</div>`+
-      recent.map(a=>`<div class="flex items-center gap-2 text-sm border-b border-edge/40 py-2">
-        <i data-lucide="${a.status==='executed'?'check-circle-2':(a.status==='rejected'||a.status==='failed')?'x-circle':'circle'}" class="${a.status==='executed'?'text-emerald-400':(a.status==='rejected'||a.status==='failed')?'text-rose-400':'text-slate-500'}"></i>
-        <span>${esc(a.tool)}</span><span class="text-xs text-slate-500">${esc(a.tenant_id)}</span>
-        <span class="pill bg-white/5 text-slate-300">${esc(a.status)}</span>
-        <span class="ml-auto text-[11px] text-slate-600">${esc(a.decided_by||'')}</span></div>`).join(''):'';
-    $('#view').innerHTML=`<div class="max-w-3xl space-y-3">${pending.length?pending.map(card).join(''):empty}${rec}</div>`;
-    if(admin){
-      document.querySelectorAll('.ap-approve').forEach(b=>b.onclick=async()=>{const r=await api('POST','/api/approvals/'+b.dataset.a+'/approve');
-        r.ok?(toast(r.executed?'approved & executed':'approved — action failed',!!r.executed),await loadMe(),route('approvals')):toast(esc(r.error),false);});
-      document.querySelectorAll('.ap-reject').forEach(b=>b.onclick=async()=>{const r=await api('POST','/api/approvals/'+b.dataset.a+'/reject');
-        r.ok?(toast('rejected'),await loadMe(),route('approvals')):toast(esc(r.error),false);});
     }
     icons();
   },
