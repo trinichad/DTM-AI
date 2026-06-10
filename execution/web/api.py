@@ -124,8 +124,12 @@ class Api:
             return self._require_admin(role) or self._tool_add(body, user)
         if method == "POST" and path.startswith("/api/tools/") and path.endswith("/code"):
             return self._require_admin(role) or self._tool_edit(path.split("/")[3], body, user)
+        if method == "POST" and path == "/api/tools/groups/rename":   # before the per-tool route
+            return self._require_admin(role) or self._group_rename(body, user)
         if method == "POST" and path.startswith("/api/tools/") and path.endswith("/rename"):
             return self._require_admin(role) or self._tool_rename(path.split("/")[3], body, user)
+        if method == "POST" and path.startswith("/api/tools/") and path.endswith("/source"):
+            return self._require_admin(role) or self._tool_move(path.split("/")[3], body, user)
         if method == "DELETE" and path.startswith("/api/tools/") and len(path.split("/")) == 4:
             return self._require_admin(role) or self._tool_delete(path.split("/")[3], user)
         if method == "GET" and path == "/api/models":
@@ -897,6 +901,70 @@ class Api:
         self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
                                 detail=f"tool_rename={name}->{new}")
         return Resp(200, {"ok": True, "name": new, "was": name})
+
+    def _rewrite_source(self, info, new_source: str) -> Optional[str]:
+        """Rewrite (or insert, anchored after NAME) the SOURCE line in a skill file, then reload.
+        Restores the previous file on any failure. Returns an error string or None."""
+        import re as _re
+        path = self._skills_dir() / (info.module.rsplit(".", 1)[-1] + ".py")
+        src = path.read_text(encoding="utf-8")
+        s2, n = _re.subn(r"(?m)^(SOURCE\s*=\s*)(['\"]).*?\2",
+                         rf"\g<1>\g<2>{new_source}\g<2>", src, count=1)
+        if n == 0:   # module relied on the NAME-prefix default — make SOURCE explicit
+            s2, n = _re.subn(r"(?m)^(NAME\s*=\s*['\"].*?['\"].*)$",
+                             rf'\g<1>\nSOURCE = "{new_source}"', src, count=1)
+            if n == 0:
+                return "couldn't find a NAME line to anchor a SOURCE assignment — edit the code instead"
+        path.write_text(s2, encoding="utf-8")
+        err = self._reload_skill(info.module)
+        if err is None:
+            t = self.agent.registry.get(info.name)
+            if t is None or t.source != new_source:
+                err = "the SOURCE edit didn't take — edit the code by hand instead"
+        if err:
+            path.write_text(src, encoding="utf-8")
+            self._reload_skill(info.module)
+            return err
+        return None
+
+    def _tool_move(self, name: str, body: dict, user: str) -> Resp:
+        """Move ONE tool to another group (D-23): the Capabilities groups ARE the tools' SOURCE
+        labels, so this rewrites the SOURCE line. A new group name simply creates that group."""
+        new = (body.get("source") or "").strip().lower()
+        if not self._TOOL_NAME_RE.match(new):
+            return Resp(400, {"error": "group must be snake_case (lowercase letters, digits, _)"})
+        info = self.agent.registry.get(name)
+        if info is None:
+            return Resp(404, {"error": f"unknown tool '{name}'"})
+        if info.source == new:
+            return Resp(400, {"error": f"'{name}' is already in group '{new}'"})
+        err = self._rewrite_source(info, new)
+        if err:
+            return Resp(400, {"error": err})
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"tool_move={name}:{info.source}->{new}")
+        return Resp(200, {"ok": True, "name": name, "source": new})
+
+    def _group_rename(self, body: dict, user: str) -> Resp:
+        """Rename a whole group (D-23): rewrites SOURCE for every tool currently in it."""
+        frm = (body.get("from") or "").strip().lower()
+        to = (body.get("to") or "").strip().lower()
+        if not self._TOOL_NAME_RE.match(to):
+            return Resp(400, {"error": "new group must be snake_case (lowercase letters, digits, _)"})
+        if frm == to:
+            return Resp(400, {"error": "that is already the group's name"})
+        tools = [t for t in self.agent.registry.all() if t.source == frm]
+        if not tools:
+            return Resp(404, {"error": f"no tools in group '{frm}'"})
+        moved = []
+        for t in tools:
+            err = self._rewrite_source(t, to)
+            if err:   # stop at the first failure; already-moved tools stay moved (each was atomic)
+                return Resp(500, {"error": f"failed at '{t.name}': {err}", "moved": moved})
+            moved.append(t.name)
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"group_rename={frm}->{to} ({len(moved)} tools)")
+        return Resp(200, {"ok": True, "from": frm, "to": to, "moved": moved})
 
     def _tool_delete(self, name: str, user: str) -> Resp:
         """Delete a live skill (D-23): the file moves to .tmp/deleted_skills/ (recoverable), the

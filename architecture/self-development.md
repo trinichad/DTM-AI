@@ -32,6 +32,12 @@ skills from the Capabilities tab (`/api/tools*`, admin-gated, audited `config_ch
   collisions.
 - **Delete** `DELETE /api/tools/<name>` — moves the file to `.tmp/deleted_skills/<name>.py` (I-8,
   recoverable by hand), drops it from `sys.modules`, re-discovers.
+- **Move / group management** — the Capabilities groups ARE the tools' `SOURCE` labels (also used in
+  result citations). `POST /api/tools/<name>/source` rewrites one tool's SOURCE line (inserting it
+  after NAME when the module relied on the prefix default); a NEW group name simply creates that
+  group (groups are derived — empty ones can't exist). `POST /api/tools/groups/rename` rewrites
+  SOURCE on every tool in a group. The security CATEGORY enum (read/alert/write/destructive) is NOT
+  group metadata — it's enforced in dispatch() and changes only via a deliberate code edit.
 Safety model: the owner is the trust anchor (the admin Terminal already grants root, D-22) — these
 routes never appear as agent tools, so the LLM cannot reach them. Everything stays git-tracked (I-6);
 the kill switch (I-4) and the Capability Console still gate execution.

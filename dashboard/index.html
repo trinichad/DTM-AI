@@ -872,6 +872,7 @@ const VIEWS={
       <div class="flex items-center gap-1 shrink-0">
         <button class="cap-code hbtn justify-center" style="width:32px;height:32px;padding:0" title="View / edit this tool's source code" data-name="${esc(t.name)}"><i data-lucide="code" class="text-[13px]"></i></button>
         <button class="cap-ren hbtn justify-center" style="width:32px;height:32px;padding:0" title="Rename this tool" data-name="${esc(t.name)}"><i data-lucide="pencil" class="text-[13px]"></i></button>
+        <button class="cap-mv hbtn justify-center" style="width:32px;height:32px;padding:0" title="Move to another group (type a new name to create a group)" data-name="${esc(t.name)}" data-src="${esc(t.source)}"><i data-lucide="folder-input" class="text-[13px]"></i></button>
         <button class="cap-del hbtn justify-center" style="width:32px;height:32px;padding:0;color:#fda4af" title="Delete this tool (file moves to .tmp/deleted_skills — recoverable)" data-name="${esc(t.name)}"><i data-lucide="trash-2" class="text-[13px]"></i></button>
       </div>
       <div class="flex items-center gap-5 text-center shrink-0">
@@ -888,7 +889,8 @@ const VIEWS={
           <span class="pill bg-white/5 text-slate-300">${tools.length} tool${tools.length===1?'':'s'}</span>
           <span class="pill ${en?'bg-emerald-500/15 text-emerald-300':'bg-slate-600/30 text-slate-400'}">${en} enabled</span>
           ${w?`<span class="pill bg-orange-500/15 text-orange-300">${w} write</span>`:''}
-          <i data-lucide="chevron-${open?'up':'down'}" class="ml-auto text-slate-500 shrink-0"></i>
+          <span class="grp-ren ml-auto h-7 w-7 grid place-items-center rounded-md text-slate-500 hover:text-slate-200 hover:bg-white/5 shrink-0" title="Rename this group (rewrites SOURCE on all its tools)" data-src="${esc(src)}" role="button"><i data-lucide="pencil" class="text-[12px]"></i></span>
+          <i data-lucide="chevron-${open?'up':'down'}" class="text-slate-500 shrink-0"></i>
         </button>
         ${open?`<div class="border-t border-edge/40 divide-y divide-edge/30">${tools.map(row).join('')}</div>`:''}
       </div>`; };
@@ -916,7 +918,21 @@ const VIEWS={
       $('#codeSave').onclick=async()=>{ const btn=$('#codeSave'); btn.disabled=true;
         await onSave($('#codeText').value); btn.disabled=false; };
     }});
-    document.querySelectorAll('.cap-grp').forEach(b=>b.onclick=()=>{ window._capOpen[b.dataset.src]=!window._capOpen[b.dataset.src]; VIEWS.capabilities(); });
+    document.querySelectorAll('.cap-grp').forEach(b=>b.onclick=e=>{ if(e.target.closest('.grp-ren'))return;
+      window._capOpen[b.dataset.src]=!window._capOpen[b.dataset.src]; VIEWS.capabilities(); });
+    document.querySelectorAll('.grp-ren').forEach(b=>b.onclick=async e=>{ e.stopPropagation();
+      const frm=b.dataset.src;
+      const to=prompt(`Rename group "${LBL[frm]||frm}" (snake_case id — rewrites SOURCE on all ${groups[frm].length} of its tools):`,frm); if(to===null)return;
+      const r=await api('POST','/api/tools/groups/rename',{from:frm,to:to.trim().toLowerCase()});
+      if(r&&r.ok){ toast(`Group renamed → ${r.to} (${r.moved.length} tools)`); window._capOpen[r.to]=window._capOpen[frm]; VIEWS.capabilities(); }
+      else admErr(r,'Rename failed'); });
+    document.querySelectorAll('.cap-mv').forEach(b=>b.onclick=async e=>{ e.stopPropagation();
+      const name=b.dataset.name, cur=b.dataset.src;
+      const others=order.filter(s=>s!==cur).join(', ');
+      const to=prompt(`Move "${name}" to group:\n\nExisting: ${others}\n(or type a NEW name to create a group)`,''); if(to===null||!to.trim())return;
+      const r=await api('POST','/api/tools/'+encodeURIComponent(name)+'/source',{source:to.trim().toLowerCase()});
+      if(r&&r.ok){ toast(`${name} → ${r.source}`); window._capOpen[r.source]=true; VIEWS.capabilities(); }
+      else admErr(r,'Move failed'); });
     document.querySelectorAll('.cap-code').forEach(b=>b.onclick=async e=>{ e.stopPropagation();
       const name=b.dataset.name;
       const r=await api('GET','/api/tools/'+encodeURIComponent(name)+'/code');

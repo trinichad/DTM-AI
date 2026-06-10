@@ -286,6 +286,21 @@ class OwnerToolAuthoring(unittest.TestCase):
         self.assertIsNone(self.agent.registry.get(self.NAME2))
         self.assertTrue((Path(__file__).resolve().parents[1] / ".tmp" / "deleted_skills" / f"{self.NAME2}.py").is_file())
 
+    def test_move_and_group_rename(self):
+        self.H("POST", "/api/tools", {"name": self.NAME, "code": self.CODE})
+        # move the tool to a brand-new group — creating the group implicitly
+        r = self.H("POST", f"/api/tools/{self.NAME}/source", {"source": "zz_custom"})
+        self.assertEqual(r.status, 200, r.payload)
+        self.assertEqual(self.agent.registry.get(self.NAME).source, "zz_custom")
+        # rename that group — rewrites SOURCE on its (one) tool
+        r = self.H("POST", "/api/tools/groups/rename", {"from": "zz_custom", "to": "zz_relabeled"})
+        self.assertEqual(r.status, 200, r.payload)
+        self.assertEqual(r.payload["moved"], [self.NAME])
+        self.assertEqual(self.agent.registry.get(self.NAME).source, "zz_relabeled")
+        # unknown group 404s
+        self.assertEqual(self.H("POST", "/api/tools/groups/rename",
+                                {"from": "ghost_grp", "to": "x_y"}).status, 404)
+
     def test_add_requires_valid_tool_shape(self):
         r = self.H("POST", "/api/tools", {"name": self.NAME, "code": "x = 1\n"})
         self.assertEqual(r.status, 400)
