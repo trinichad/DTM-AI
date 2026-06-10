@@ -975,14 +975,23 @@ const VIEWS={
           <button class="sched-run text-[10px] px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 text-slate-300 inline-flex items-center gap-1" data-id="${esc(t.id)}"><i data-lucide="play" class="w-3 h-3"></i>Run now</button>
           <button class="sched-pause text-[10px] px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 text-slate-300 inline-flex items-center gap-1" data-id="${esc(t.id)}" data-paused="${t.paused?1:0}"><i data-lucide="${t.paused?'play-circle':'pause'}" class="w-3 h-3"></i>${t.paused?'Resume':'Pause'}</button>
         </div>`:''}</div>`;
-    const column=c=>{const col=COLORS[c.status]||'slate';return `<div class="shrink-0 w-64">
+    // `todo` and `done` are legacy Hermes columns — the native flow never uses them
+    // (create → triage/ready/scheduled; worker → running → review | blocked). Show them
+    // only if old data is still sitting there.
+    const HIDE_EMPTY=new Set(['todo','done']);
+    const cols=data.columns.filter(c=>c.tasks.length||!HIDE_EMPTY.has(c.status));
+    const column=c=>{const col=COLORS[c.status]||'slate';return `<div class="min-w-0">
         <div class="flex items-center gap-2 mb-2 text-[11px] uppercase tracking-wide text-${col}-300"><span class="h-2 w-2 rounded-full bg-${col}-400"></span>${c.status}<span class="text-slate-600">${c.tasks.length}</span></div>
-        <div class="space-y-2">${c.tasks.map(card).join('')||'<div class="text-[11px] text-slate-600 px-1 py-3">—</div>'}</div></div>`;};
+        <div class="space-y-2">${c.tasks.map(card).join('')||'<div class="rounded-xl border border-dashed border-edge/70 text-[11px] text-slate-600 px-3 py-5 text-center">empty</div>'}</div></div>`;};
+    const empty=`<div class="card glass p-10 max-w-xl mx-auto text-center mt-6">
+        <div class="h-12 w-12 rounded-2xl grad grid place-items-center mx-auto mb-3 shadow-lg shadow-indigo-500/30"><i data-lucide="layout-grid" class="text-white text-xl"></i></div>
+        <div class="font-semibold">No tasks yet</div>
+        <div class="text-sm text-slate-400 mt-1.5">Delegate work to a specialist — one-off or on a repeat schedule — and watch it run here.</div></div>`;
     $('#view').innerHTML=`<div>
-      <div class="flex items-center gap-2 mb-4 text-sm text-slate-400"><i data-lucide="layout-grid" class="text-accent"></i> ${data.total} task${data.total===1?'':'s'} — specialists run with their own soul/memory, through the fence.
+      <div class="flex items-center gap-2 mb-4 text-sm text-slate-400"><i data-lucide="layout-grid" class="text-accent"></i> ${data.total} task${data.total===1?'':'s'} on the board
         <button id="bRefresh" class="ml-auto text-xs text-slate-400 hover:text-accent inline-flex items-center gap-1"><i data-lucide="refresh-cw"></i> Refresh</button>
         <button id="bDelegate" class="grad text-white rounded-lg px-3 py-1.5 text-xs font-semibold inline-flex items-center gap-1.5"><i data-lucide="plus"></i> Delegate task</button></div>
-      <div class="flex gap-4 overflow-x-auto pb-3">${data.columns.map(column).join('')}</div></div>`;
+      ${data.total?`<div class="grid gap-4 grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">${cols.map(column).join('')}</div>`:empty}</div>`;
     icons();
     document.querySelectorAll('.board-card').forEach(el=>el.onclick=()=>openTask(el.dataset.id));
     document.querySelectorAll('.sched-run').forEach(b=>b.onclick=async e=>{ e.stopPropagation();
