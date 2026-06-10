@@ -92,7 +92,8 @@
     .chat-name{font-size:11px;color:#6e7d96;margin:0 0 4px 4px}
     .bub{border-radius:18px;padding:11px 16px;font-size:14.5px;line-height:1.6}
     .bub-you{background:rgba(255,255,255,.06)}
-    .bub-ai{background:rgba(255,255,255,.028);box-shadow:inset 0 0 0 1px rgba(139,92,246,.22)}
+    /* assistant accent follows the selected agent via --ca-* vars set on the chat root */
+    .bub-ai{background:rgba(255,255,255,.028);box-shadow:inset 0 0 0 1px var(--ca-ring,rgba(139,92,246,.22))}
     .prose-chat{line-height:1.65;word-break:break-word}
     .prose-chat code{font-family:ui-monospace,monospace;font-size:.85em;background:rgba(255,255,255,.06);padding:.1em .35em;border-radius:6px}
 
@@ -101,7 +102,7 @@
 
     /* composer — glass pill that lights up with an accent glow on focus */
     .composer{border-radius:18px;transition:box-shadow var(--t) var(--ease),border-color var(--t) var(--ease)}
-    .composer:focus-within{box-shadow:0 0 0 1px rgba(99,102,241,.45),0 14px 44px rgba(99,102,241,.16)}
+    .composer:focus-within{box-shadow:0 0 0 1px var(--ca-45,rgba(99,102,241,.45)),0 14px 44px var(--ca-16,rgba(99,102,241,.16))}
 
     /* chat header control buttons (New / History / Activity …) */
     .hbtn{height:36px;padding:0 12px;border-radius:10px;font-size:12px;font-weight:600;display:inline-flex;align-items:center;gap:6px;color:#8a8f98;background:rgba(255,255,255,.04);transition:.15s var(--ease);white-space:nowrap}
@@ -220,6 +221,11 @@ const SUB={overview:'Live health across your clients',chat:'Ask about a client �
   terminal:'Run commands on the server — admin only, audited',
   audit:'Every action, logged',settings:'Account & users'};
 let ME=null, MODEL='';
+// agent accents (Identity tab) — also theme the chat when that agent is selected
+const ACCENT_HEX={violet:'#8b5cf6',pink:'#ec4899',amber:'#f59e0b',emerald:'#10b981',orange:'#f97316',sky:'#0ea5e9',rose:'#f43f5e',cyan:'#06b6d4',lime:'#84cc16'};
+const agentHex=a=>ACCENT_HEX[a&&a.accent]||'#8b5cf6';
+let AGENTS=[];        // cached roster for the chat crew picker
+let CHAT_AGENT=null;  // who you're talking to (defaults to the manager)
 let TERM_CLEANUP=null;   // disposes the live xterm + WebSocket when leaving the Terminal tab
 let STREAM=null;   // in-flight chat turn, at module scope so it survives tab switches
 // Chat history lives on the SERVER now (per-user, multi-conversation) — it persists across
@@ -571,27 +577,43 @@ const VIEWS={
   async chat(){
     const mm=await api('GET','/api/models'); const models=mm.models||[];
     if(!MODEL||!models.find(m=>m.id===MODEL)) MODEL=(models.find(m=>m.default)||models[0]||{}).id||'';
-    // Chat runs on DTM AI's own agent loop; the model is chosen below.
+    // The crew roster — who you're talking to. Manager is the default.
+    try{ AGENTS=(await api('GET','/api/agents')).agents||[]; }catch(_){ AGENTS=[]; }
+    if(!CHAT_AGENT||!AGENTS.find(a=>a.id===CHAT_AGENT.id)) CHAT_AGENT=AGENTS.find(a=>a.is_manager)||AGENTS[0]||null;
+    const HX=agentHex(CHAT_AGENT);
+    const face=a=>{const c=agentHex(a);return a.emoji?esc(a.emoji):`<i data-lucide="${a.is_manager?'crown':'bot'}" style="color:${c}"></i>`;};
     try{ CONVS=(await api('GET','/api/conversations')).conversations||[]; }catch(_){ CONVS=[]; }
     // Choose which conversation to open: keep the current one if still valid; else the newest for
     // this client; else start a fresh (unsaved) chat.
     if(CONV && !CONVS.find(c=>c.id===CONV)) CONV=null;
     if(!CONV){ const mine=CONVS.find(c=>c.tenant_id===TENANT); CONV=mine?mine.id:null; }
-    $('#view').innerHTML=`<div class="flex flex-col h-full min-h-0">
-      <div class="flex items-center gap-2 mb-4 shrink-0">
-        <span class="inline-flex items-center gap-2 min-w-0">
-          <i data-lucide="cpu" class="text-slate-500 text-sm shrink-0"></i>
-          <select id="model" class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none" title="Model for this chat">
-            ${models.map(m=>`<option value="${esc(m.id)}" ${m.id===MODEL?'selected':''}>${esc(m.label)}${m.local?'':' ☁'}</option>`).join('')}
-          </select>
-          ${models.length<2?`<a class="text-[11px] text-slate-500 hover:text-slate-300 cursor-pointer shrink-0" id="addModel">+ add a cloud model</a>`:''}
-        </span>
+    const crewItem=a=>{const c=agentHex(a);const act=CHAT_AGENT&&a.id===CHAT_AGENT.id;
+      return `<button class="crew-pick w-full text-left rounded-xl p-2.5 flex items-center gap-2.5 transition ${act?'':'hover:bg-white/5'}" style="${act?`background:${c}1a;box-shadow:inset 0 0 0 1px ${c}55`:''}" data-id="${esc(a.id)}">
+        <span class="h-9 w-9 rounded-xl grid place-items-center text-base shrink-0" style="background:${c}22">${face(a)}</span>
+        <span class="min-w-0"><span class="block text-sm font-semibold truncate">${esc(a.name)}${a.is_manager?` <span class="pill text-[9px] align-middle" style="background:${c}26;color:${c}">LEAD</span>`:''}</span>
+          <span class="block text-[11px] text-slate-500 truncate">${esc(a.role||a.description||'')}</span></span></button>`;};
+    $('#view').innerHTML=`<div class="flex h-full gap-4 min-h-0" style="--ca-ring:${HX}38;--ca-45:${HX}73;--ca-16:${HX}29">
+      ${AGENTS.length>1?`<aside class="w-56 shrink-0 hidden lg:flex flex-col card p-3 min-h-0">
+        <div class="text-[11px] uppercase tracking-wide text-slate-500 px-1 pb-2">The crew</div>
+        <div class="flex-1 overflow-auto space-y-1.5">${AGENTS.map(crewItem).join('')}</div>
+      </aside>`:''}
+      <div class="flex-1 flex flex-col min-w-0 min-h-0">
+      <div class="flex items-center gap-2.5 mb-4 shrink-0 flex-wrap">
+        <span class="h-10 w-10 rounded-xl grid place-items-center text-lg shrink-0" style="background:${HX}22">${CHAT_AGENT?face(CHAT_AGENT):'<i data-lucide="sparkles"></i>'}</span>
+        <div class="min-w-0"><div class="font-semibold leading-tight">${esc(CHAT_AGENT?CHAT_AGENT.name:'DTM AI')}</div>
+          <div class="text-[11px] text-slate-500 truncate max-w-[16rem]">${esc(CHAT_AGENT?(CHAT_AGENT.description||CHAT_AGENT.role||''):'')}</div></div>
         <span id="ctxMeter" class="text-[11px] text-slate-500 truncate" title="Conversation context sent to the model"></span>
-        <div class="ml-auto flex items-center gap-1.5 shrink-0">
+        <div class="ml-auto flex items-center gap-1.5 shrink-0 flex-wrap">
+          <span class="inline-flex items-center gap-1.5">
+            <select id="model" class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none" title="Model for this chat">
+              ${models.map(m=>`<option value="${esc(m.id)}" ${m.id===MODEL?'selected':''}>${esc(m.label)}${m.local?'':' ☁'}</option>`).join('')}
+            </select>
+            ${models.length<2?`<a class="text-[11px] text-slate-500 hover:text-slate-300 cursor-pointer shrink-0" id="addModel">+ cloud</a>`:''}
+          </span>
           <button id="newChatTop" class="hbtn hbtn-accent"><i data-lucide="plus" class="text-[13px]"></i> New</button>
           <button id="histBtn" class="hbtn" title="Past conversations"><i data-lucide="history" class="text-[13px]"></i> <span class="hidden sm:inline">History</span></button>
           <button id="actBtn" class="hbtn" title="Recent logged actions"><i data-lucide="scroll-text" class="text-[13px]"></i> <span class="hidden sm:inline">Activity</span></button>
-          <button id="compactChat" class="hbtn" title="Summarise older turns to shrink context, keeping the recent ones"><i data-lucide="archive-restore" class="text-[13px]"></i> <span class="hidden lg:inline">Compact</span></button>
+          <button id="compactChat" class="hbtn" title="Summarise older turns to shrink context, keeping the recent ones"><i data-lucide="archive-restore" class="text-[13px]"></i> <span class="hidden xl:inline">Compact</span></button>
           <button id="delChat" class="hbtn" title="Delete this conversation"><i data-lucide="trash-2" class="text-[13px]"></i></button>
         </div>
       </div>
@@ -600,12 +622,12 @@ const VIEWS={
       <div class="relative shrink-0">
         <div id="slash" class="slash hidden"></div>
         <form id="chatForm" class="composer glass flex items-end gap-2 p-2 pl-4">
-          <textarea id="msg" rows="1" placeholder="Message DTM AI…    ( / for commands )"
+          <textarea id="msg" rows="1" placeholder="Message ${esc(CHAT_AGENT?CHAT_AGENT.name:'DTM AI')}…    ( / for commands )"
             class="flex-1 bg-transparent py-2 text-sm leading-relaxed resize-none focus:outline-none max-h-40 self-center"></textarea>
-          <button type="submit" aria-label="Send" class="grad text-white rounded-xl h-9 px-4 shrink-0 text-sm font-semibold inline-flex items-center gap-1.5"><i data-lucide="send" class="text-[14px]"></i> Send</button>
+          <button type="submit" aria-label="Send" class="text-white rounded-xl h-9 px-4 shrink-0 text-sm font-semibold inline-flex items-center gap-1.5" style="background:linear-gradient(135deg,${HX},${HX}cc)"><i data-lucide="send" class="text-[14px]"></i> Send</button>
         </form>
         <div class="text-[11px] text-slate-500 mt-2 flex items-center gap-1.5"><i data-lucide="shield-check" class="text-[12px]"></i> Analysing only — DTM AI never changes client systems in this mode · ☁ = cloud model · type <span class="font-mono text-slate-400">/</span> for commands</div>
-      </div></div>`;
+      </div></div></div>`;
     const sg=['How many assets does this client have?','Any open Huntress incidents?','Summarise this client’s security posture'];
     const showSuggest=()=>{ const el=$('#suggest'); if(!el)return; el.innerHTML=MSGS.length?'':sg.map(s=>`<button class="pill bg-white/5 hover:bg-white/10 text-slate-300 border border-edge">${esc(s)}</button>`).join('');
       el.querySelectorAll('button').forEach(b=>b.onclick=()=>{$('#msg').value=b.textContent;$('#msg').dispatchEvent(new Event('input'));$('#msg').focus();}); };
@@ -648,6 +670,10 @@ const VIEWS={
       if(c)c.title=(t.trim()||'New chat'); renderRail(); };
     const refreshConvs=async()=>{ try{ CONVS=(await api('GET','/api/conversations')).conversations||[]; }catch(_){} renderRail(); };
     $('#model').onchange=e=>{MODEL=e.target.value; updateMeter();};
+    // crew picker — switch who you're talking to; the whole chat re-themes to that agent's accent
+    document.querySelectorAll('.crew-pick').forEach(el=>el.onclick=()=>{
+      const a=AGENTS.find(x=>x.id===el.dataset.id); if(!a||(CHAT_AGENT&&a.id===CHAT_AGENT.id))return;
+      CHAT_AGENT=a; VIEWS.chat(); });
     // ── History drawer: searchable list of past conversations ──
     const openHistory=()=>openDrawer({title:'Chat history',icon:'history',render:body=>{
       body.innerHTML=`<div class="p-3 border-b border-edge space-y-2">
@@ -733,7 +759,8 @@ const VIEWS={
       try{
         const resp=await fetch('/api/chat/stream',{method:'POST',credentials:'same-origin',
           headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({conversation_id:CONV,tenant:TENANT,message:m,model:MODEL})});
+          body:JSON.stringify({conversation_id:CONV,tenant:TENANT,message:m,model:MODEL,
+            agent:CHAT_AGENT?CHAT_AGENT.id:undefined})});
         if(resp.status===401){ showLogin(); throw new Error('auth'); }
         if(!resp.body) throw new Error('no stream');
         const reader=resp.body.getReader(), dec=new TextDecoder(); let buf='';
@@ -1457,12 +1484,14 @@ function toggle(name,field,val,disabled,label){
     <div class="switch ${val?'on':''} ${disabled?'disabled':''}" data-name="${esc(name)}" data-field="${field}"></div>
     <span class="text-[10px] text-slate-600 md:hidden">${label}</span></div>`;}
 function bubble(who,html,fixedId){const id=fixedId||('m'+Math.random().toString(36).slice(2));const mine=who==='you';
+  const ag=CHAT_AGENT||{}, hx=agentHex(ag);
+  const face=ag.emoji?esc(ag.emoji):`<i data-lucide="${ag.is_manager===false?'bot':'sparkles'}" class="text-sm" style="color:${hx}"></i>`;
   const avatar=mine
     ?`<div class="h-8 w-8 rounded-xl bg-white/[.06] grid place-items-center shrink-0 mt-0.5"><i data-lucide="user" class="text-slate-300 text-sm"></i></div>`
-    :`<div class="h-8 w-8 rounded-xl grid place-items-center shrink-0 mt-0.5" style="background:rgba(139,92,246,.16);box-shadow:inset 0 0 0 1px rgba(139,92,246,.35)"><i data-lucide="sparkles" class="text-violet-300 text-sm"></i></div>`;
+    :`<div class="h-8 w-8 rounded-xl grid place-items-center shrink-0 mt-0.5 text-base" style="background:${hx}29;box-shadow:inset 0 0 0 1px ${hx}59">${face}</div>`;
   $('#msgs').insertAdjacentHTML('beforeend',`<div class="chat-row rise ${mine?'flex-row-reverse':''}">
     ${avatar}<div class="max-w-[78%] min-w-0 ${mine?'flex flex-col items-end':''}">
-      <div class="chat-name ${mine?'pr-1':''}">${mine?'You':'DTM AI'}</div>
+      <div class="chat-name ${mine?'pr-1':''}">${mine?'You':esc(ag.name||'DTM AI')}</div>
       <div id="${id}" class="bub ${mine?'bub-you':'bub-ai prose-chat'}">${html}</div>
     </div></div>`);
   $('#msgs').scrollTop=1e9;icons();return id;}
