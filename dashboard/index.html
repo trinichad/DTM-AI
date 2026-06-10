@@ -1067,12 +1067,16 @@ const VIEWS={
             <input id="dSchedule" class="flex-1 bg-ink/70 border border-edge rounded-lg p-2.5 text-sm text-slate-200 focus:border-accent focus:outline-none" placeholder="e.g. daily 07:00" spellcheck="false" list="schedDL">
             <datalist id="schedDL"><option value="every 30m"><option value="hourly"><option value="daily 07:00"><option value="weekdays 09:30"></datalist>
           </div>
-          <div class="text-[11px] text-slate-500 mb-4 flex items-center gap-1.5"><i data-lucide="repeat" class="text-[11px]"></i> Formats: <span class="font-mono text-slate-400">every 30m</span> · <span class="font-mono text-slate-400">hourly</span> · <span class="font-mono text-slate-400">daily 07:00</span> · <span class="font-mono text-slate-400">weekdays 09:30</span>. Recurring jobs wait in <span class="text-slate-400">scheduled</span> and fire automatically.</div>
+          <div class="flex items-center gap-1.5 flex-wrap mb-2">
+            ${['every 30m','hourly','daily 07:00','weekdays 09:30'].map(s=>`<button type="button" class="sched-eg font-mono text-[11px] px-2 py-1 rounded-md bg-white/5 hover:bg-accent/20 text-slate-300 hover:text-accent border border-edge" data-s="${s}">${s}</button>`).join('')}
+          </div>
+          <div class="text-[11px] text-slate-500 mb-4">A repeating task runs by itself on that schedule — you'll find it in the <span class="text-slate-300">scheduled</span> column with its next run time, and each run's result in the task's history.</div>
           <div class="flex items-center gap-2"><button id="dCreate" class="grad text-white rounded-lg px-4 py-2 text-sm font-semibold inline-flex items-center gap-1.5"><i data-lucide="send"></i> Delegate</button>
             <button id="dCancel" class="text-slate-400 hover:text-slate-200 text-sm px-3 py-2">Cancel</button></div>
         </div></div>`;
       icons();
       $('#dAssignee').innerHTML=await agentOptions('');
+      document.querySelectorAll('.sched-eg').forEach(b=>b.onclick=()=>{ $('#dSchedule').value=b.dataset.s; $('#dSchedule').focus(); });
       $('#dBack').onclick=()=>route('board');
       $('#dCancel').onclick=()=>route('board');
       $('#dTitle').focus();
