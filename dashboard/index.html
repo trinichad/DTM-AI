@@ -594,16 +594,16 @@ const VIEWS={
         <span class="min-w-0"><span class="block text-sm font-semibold truncate">${esc(a.name)}${a.is_manager?` <span class="pill text-[9px] align-middle" style="background:${c}26;color:${c}">LEAD</span>`:''}</span>
           <span class="block text-[11px] text-slate-500 truncate">${esc(a.role||a.description||'')}</span></span></button>`;};
     const crewChip=a=>{const c=agentHex(a);const act=CHAT_AGENT&&a.id===CHAT_AGENT.id;
-      return `<button class="crew-pick h-10 w-10 rounded-xl grid place-items-center text-lg transition ${act?'':'hover:bg-white/5'}" style="background:${c}${act?'2e':'14'};${act?`box-shadow:inset 0 0 0 1px ${c}66`:''}" title="${esc(a.name)}${a.role?' — '+esc(a.role):''}" data-id="${esc(a.id)}">${face(a)}</button>`;};
+      return `<button class="crew-pick h-8 w-8 rounded-lg grid place-items-center text-sm transition ${act?'':'hover:bg-white/5'}" style="background:${c}${act?'2e':'14'};${act?`box-shadow:inset 0 0 0 1px ${c}66`:''}" title="${esc(a.name)}${a.role?' — '+esc(a.role):''}" data-id="${esc(a.id)}">${face(a)}</button>`;};
     const rail=(crewOpen
       ?`<aside class="w-56 shrink-0 hidden lg:flex flex-col card p-3 min-h-0">
           <div class="flex items-center px-1 pb-2"><span class="text-[11px] uppercase tracking-wide text-slate-500">The crew</span>
             <button id="crewToggle" title="Hide crew — more chat space" class="ml-auto h-6 w-6 grid place-items-center rounded-md text-slate-500 hover:text-slate-200 hover:bg-white/5"><i data-lucide="chevrons-left" class="text-[13px]"></i></button></div>
           <div class="flex-1 overflow-auto space-y-1.5">${AGENTS.map(crewItem).join('')}</div>
         </aside>`
-      :`<aside class="w-14 shrink-0 hidden lg:flex flex-col items-center card px-2 py-3 min-h-0">
-          <button id="crewToggle" title="Show crew" class="h-7 w-7 grid place-items-center rounded-md text-slate-500 hover:text-slate-200 hover:bg-white/5 mb-2"><i data-lucide="chevrons-right" class="text-[13px]"></i></button>
-          <div class="flex-1 overflow-auto space-y-2 flex flex-col items-center">${AGENTS.map(crewChip).join('')}</div>
+      :`<aside class="w-10 -ml-4 shrink-0 hidden lg:flex flex-col items-center px-1 py-1.5 min-h-0 self-start max-h-full rounded-xl" style="background:rgba(255,255,255,.025);box-shadow:inset 0 0 0 1px rgba(255,255,255,.07)">
+          <button id="crewToggle" title="Show crew" class="h-6 w-6 grid place-items-center rounded-md text-slate-500 hover:text-slate-200 hover:bg-white/5 mb-1"><i data-lucide="chevrons-right" class="text-[12px]"></i></button>
+          <div class="overflow-auto space-y-1 flex flex-col items-center">${AGENTS.map(crewChip).join('')}</div>
         </aside>`);
     const ibtn=(bid,icon,tip)=>`<button id="${bid}" class="hbtn justify-center" style="width:36px;padding:0" title="${tip}"><i data-lucide="${icon}" class="text-[14px]"></i></button>`;
     $('#view').innerHTML=`<div class="flex h-full gap-3 min-h-0" style="--ca-ring:${HX}38;--ca-45:${HX}73;--ca-16:${HX}29">
