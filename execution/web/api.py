@@ -116,6 +116,20 @@ class Api:
             return self._require_admin(role) or self._approve(int(path.split("/")[3]), user)
         if method == "POST" and path.startswith("/api/approvals/") and path.endswith("/reject"):
             return self._require_admin(role) or self._reject(int(path.split("/")[3]), user)
+        if method == "GET" and path == "/api/fs/list":
+            return self._require_admin(role) or self._fs_list(query.get("path") or "")
+        if method == "GET" and path == "/api/fs/file":
+            return self._require_admin(role) or self._fs_file(query.get("path") or "")
+        if method == "POST" and path == "/api/fs/save":
+            return self._require_admin(role) or self._fs_save(body, user)
+        if method == "POST" and path == "/api/fs/upload":
+            return self._require_admin(role) or self._fs_upload(body, user)
+        if method == "POST" and path == "/api/fs/mkdir":
+            return self._require_admin(role) or self._fs_mkdir(body, user)
+        if method == "POST" and path == "/api/fs/chmod":
+            return self._require_admin(role) or self._fs_chmod(body, user)
+        if method == "POST" and path == "/api/fs/delete":
+            return self._require_admin(role) or self._fs_delete(body, user)
         if method == "GET" and path == "/api/tools":
             return Resp(200, {"tools": self._tools()})
         if method == "GET" and path.startswith("/api/tools/") and path.endswith("/code"):
@@ -749,6 +763,158 @@ class Api:
         self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
                                 detail=f"agent_soul={name}")
         return Resp(200, a)
+
+    # ── files manager — admin-only, runs as the service user, mutations audited (SOP: admin-terminal) ──
+    _FS_ROOTS = ("/opt/dtm-ai", "/home", "/srv", "/etc", "/var/log", "/")
+    _FS_PREVIEW_MAX = 256 * 1024
+    _FS_UPLOAD_MAX = 25 * 1024 * 1024
+
+    @staticmethod
+    def _fs_norm(p: str):
+        import os
+        from pathlib import Path
+        return Path(os.path.realpath(p or "/"))
+
+    def _fs_list(self, pathq: str) -> Resp:
+        import stat as _stat
+        p = self._fs_norm(pathq or "/opt/dtm-ai")
+        if not p.is_dir():
+            return Resp(404, {"error": f"not a directory: {p}"})
+        entries = []
+        try:
+            for c in p.iterdir():
+                try:
+                    st = c.lstat()
+                    entries.append({
+                        "name": c.name, "path": str(c), "dir": c.is_dir(),
+                        "size": st.st_size, "mode": _stat.filemode(st.st_mode),
+                        "octal": oct(st.st_mode & 0o7777)[2:], "mtime": int(st.st_mtime),
+                        "hidden": c.name.startswith("."), "link": c.is_symlink(),
+                    })
+                except OSError:
+                    continue
+        except PermissionError as e:
+            return Resp(403, {"error": str(e)})
+        entries.sort(key=lambda e: (not e["dir"], e["name"].lower()))
+        return Resp(200, {"path": str(p), "parent": (str(p.parent) if str(p) != "/" else None),
+                          "roots": list(self._FS_ROOTS), "entries": entries})
+
+    def _fs_file(self, pathq: str) -> Resp:
+        p = self._fs_norm(pathq)
+        if not p.is_file():
+            return Resp(404, {"error": f"not a file: {p}"})
+        try:
+            size = p.stat().st_size
+            raw = p.open("rb").read(self._FS_PREVIEW_MAX + 1)
+        except OSError as e:
+            return Resp(403, {"error": str(e)})
+        if b"\x00" in raw[:8000]:
+            return Resp(200, {"ok": False, "path": str(p), "size": size, "binary": True,
+                              "error": "binary file — download it instead"})
+        truncated = len(raw) > self._FS_PREVIEW_MAX
+        return Resp(200, {"ok": True, "path": str(p), "size": size, "truncated": truncated,
+                          "content": raw[:self._FS_PREVIEW_MAX].decode("utf-8", "replace")})
+
+    def fs_download(self, pathq: str, user: Optional[str]):
+        """Raw download — returns Resp on error, else (filename, bytes). Streamed by server.py."""
+        if not user:
+            return Resp(401, {"error": "authentication required"})
+        if self.auth.get_role(user) != "admin":
+            return Resp(403, {"error": "admin only"})
+        p = self._fs_norm(pathq)
+        if not p.is_file():
+            return Resp(404, {"error": f"not a file: {p}"})
+        try:
+            data = p.read_bytes()
+        except OSError as e:
+            return Resp(403, {"error": str(e)})
+        self.agent.audit.record(actor=user, tenant_id="*", action="file_download", detail=str(p))
+        return (p.name, data)
+
+    def _fs_save(self, body: dict, user: str) -> Resp:
+        p = self._fs_norm(body.get("path") or "")
+        content = body.get("content")
+        if not isinstance(content, str):
+            return Resp(400, {"error": "content required"})
+        if p.is_dir():
+            return Resp(400, {"error": "that is a directory"})
+        try:
+            p.write_text(content, encoding="utf-8")
+        except OSError as e:
+            return Resp(403, {"error": str(e)})
+        self.agent.audit.record(actor=user, tenant_id="*", action="file_write", detail=str(p))
+        return Resp(200, {"ok": True, "path": str(p), "size": p.stat().st_size})
+
+    def _fs_upload(self, body: dict, user: str) -> Resp:
+        import base64
+        d = self._fs_norm(body.get("dir") or "")
+        name = (body.get("name") or "").strip()
+        if not d.is_dir():
+            return Resp(404, {"error": f"not a directory: {d}"})
+        if not name or "/" in name or "\\" in name or name in (".", ".."):
+            return Resp(400, {"error": "invalid file name"})
+        try:
+            data = base64.b64decode(body.get("content_b64") or "", validate=True)
+        except Exception:
+            return Resp(400, {"error": "content_b64 is not valid base64"})
+        if len(data) > self._FS_UPLOAD_MAX:
+            return Resp(400, {"error": "file too large (25 MB max)"})
+        target = d / name
+        try:
+            target.write_bytes(data)
+        except OSError as e:
+            return Resp(403, {"error": str(e)})
+        self.agent.audit.record(actor=user, tenant_id="*", action="file_upload",
+                                detail=f"{target} ({len(data)} bytes)")
+        return Resp(200, {"ok": True, "path": str(target), "size": len(data)})
+
+    def _fs_mkdir(self, body: dict, user: str) -> Resp:
+        d = self._fs_norm(body.get("dir") or "")
+        name = (body.get("name") or "").strip()
+        if not d.is_dir():
+            return Resp(404, {"error": f"not a directory: {d}"})
+        if not name or "/" in name or "\\" in name or name in (".", ".."):
+            return Resp(400, {"error": "invalid folder name"})
+        try:
+            (d / name).mkdir(exist_ok=False)
+        except OSError as e:
+            return Resp(403, {"error": str(e)})
+        self.agent.audit.record(actor=user, tenant_id="*", action="file_mkdir", detail=str(d / name))
+        return Resp(200, {"ok": True, "path": str(d / name)})
+
+    def _fs_chmod(self, body: dict, user: str) -> Resp:
+        import re as _re
+        p = self._fs_norm(body.get("path") or "")
+        mode = (body.get("mode") or "").strip()
+        if not p.exists():
+            return Resp(404, {"error": f"no such path: {p}"})
+        if not _re.fullmatch(r"[0-7]{3,4}", mode):
+            return Resp(400, {"error": "mode must be octal like 644 or 0755"})
+        try:
+            p.chmod(int(mode, 8))
+        except OSError as e:
+            return Resp(403, {"error": str(e)})
+        self.agent.audit.record(actor=user, tenant_id="*", action="file_chmod", detail=f"{p} -> {mode}")
+        return Resp(200, {"ok": True, "path": str(p), "mode": mode})
+
+    def _fs_delete(self, body: dict, user: str) -> Resp:
+        import shutil
+        p = self._fs_norm(body.get("path") or "")
+        if str(p) in ("/", "/opt/dtm-ai"):
+            return Resp(400, {"error": "refusing to delete that path"})
+        if not p.exists() and not p.is_symlink():
+            return Resp(404, {"error": f"no such path: {p}"})
+        try:
+            if p.is_dir() and not p.is_symlink():
+                if not body.get("recursive"):
+                    return Resp(400, {"error": "directory — set recursive=true to delete it and its contents"})
+                shutil.rmtree(p)
+            else:
+                p.unlink()
+        except OSError as e:
+            return Resp(403, {"error": str(e)})
+        self.agent.audit.record(actor=user, tenant_id="*", action="file_delete", detail=str(p))
+        return Resp(200, {"ok": True, "deleted": str(p)})
 
     def _tool_code(self, name: str, user: str) -> Resp:
         """READ-ONLY source view of a live skill (admin; audited). Editing stays out of the

@@ -84,3 +84,20 @@ Levers to reduce it later: put TLS in front; scope the sudoers grant; keep admin
 - Command that exits non-zero with no stderr → UI shows `(exit N)`.
 - Timeout → `{exit_code: 124, stderr: "(timed out after 30s)"}`.
 - `ThreadingHTTPServer` means a long command runs in its own thread and does not block the dashboard.
+
+## Files manager (Files tab) — same human-only trust class as the Terminal
+Admin-only file browser/editor over the whole filesystem, running AS THE SERVICE USER (`dtm-ai`) —
+unreadable/unwritable paths fail honestly with the OS error; root work belongs in the Terminal.
+Never reachable by the agent loop (web-admin routes, not tools). Every MUTATION is audited
+(`action="file_write|file_upload|file_chmod|file_delete|file_mkdir"`, plus `file_download`).
+- `GET  /api/fs/list?path=`   dirs-first listing: name/path/dir/size/mode/mtime/hidden + parent + root shortcuts
+- `GET  /api/fs/file?path=`   text preview (≤256 KB shown; binary detected and refused for preview)
+- `GET  /api/fs/download?path=` raw bytes with Content-Disposition (streamed by server.py, not JSON)
+- `POST /api/fs/save {path, content}`        text edit (overwrites)
+- `POST /api/fs/upload {dir, name, content_b64}`  base64 upload, ≤25 MB, name sanitised (no separators)
+- `POST /api/fs/mkdir {dir, name}`
+- `POST /api/fs/chmod {path, mode}`          octal string, e.g. "755"
+- `POST /api/fs/delete {path, recursive}`    file unlink; a directory requires recursive=true (UI demands
+                                             the name typed back first)
+UI: breadcrumb + root chips + hidden-files toggle; left pane = entries, right pane = preview/editor with
+Save / Download / chmod / Delete. The Files tab is hidden from non-admin users (and the API 403s them).

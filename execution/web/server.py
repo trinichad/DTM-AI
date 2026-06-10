@@ -120,6 +120,20 @@ def _make_handler(api: Api, signer: SessionSigner, secure_cookie: bool):
             parsed = urlparse(self.path)
             if parsed.path == "/ws/terminal":
                 return self._ws_terminal()
+            if parsed.path == "/api/fs/download":      # raw bytes, not JSON (admin-gated inside)
+                query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+                r = api.fs_download(query.get("path") or "", self._user())
+                if not isinstance(r, tuple):
+                    return self._send_json(r)
+                filename, data = r
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Disposition",
+                                 f'attachment; filename="{filename.replace(chr(34), "")}"')
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
             if parsed.path.startswith("/api/"):
                 query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
                 self._send_json(api.handle("GET", parsed.path, query, {}, self._user()))

@@ -216,7 +216,7 @@ const NAV=[['overview','Overview','layout-dashboard'],['chat','Chat','message-sq
   ['agents','Agents','users-round'],['board','Delegation','layout-grid'],
   ['integrations','Integrations','plug-zap'],['capabilities','Capabilities','sliders-horizontal'],
   ['skills','Skills','graduation-cap'],['memory','Memory','brain'],
-  ['build','Build','hammer'],
+  ['build','Build','hammer'],['files','Files','folder-open'],
   ['terminal','Terminal','terminal'],['audit','Audit','scroll-text']];
 const SUB={overview:'Live health across your clients',chat:'Ask about a client — read-only',
   agents:'Your specialist team — souls, roles & memory',
@@ -224,6 +224,7 @@ const SUB={overview:'Live health across your clients',chat:'Ask about a client �
   integrations:'Connections, knowledge & credentials',capabilities:'Primitives the AI may use',
   skills:'Reusable procedures the AI has saved',memory:'Knowledge base & per-client notes',
   build:'Draft new tools — sandboxed, you approve',
+  files:'Browse, edit & manage files on the server — admin only',
   terminal:'Run commands on the server — admin only, audited',
   audit:'Every action, logged',settings:'Account & users'};
 let ME=null, MODEL='';
@@ -556,7 +557,7 @@ async function loadClients(){ try{ const r=await api('GET','/api/clients'); fill
 function renderUser(){ if(!ME)return; $('#userName').textContent=ME.username;
   $('#userRole').textContent=ME.role; $('#userAvatar').textContent=(ME.username||'?')[0].toUpperCase(); }
 
-function renderNav(){$('#nav').innerHTML=NAV.filter(n=>!(n[0]==='build'||n[0]==='terminal')||(ME&&ME.role==='admin')).map(([id,label,ic])=>{
+function renderNav(){$('#nav').innerHTML=NAV.filter(n=>!(n[0]==='build'||n[0]==='terminal'||n[0]==='files')||(ME&&ME.role==='admin')).map(([id,label,ic])=>{
   const badge='';   // approvals moved to the top-bar bell
   return `<a data-id="${id}" class="navi ${id===current?'active':''}"><i data-lucide="${ic}"></i><span>${label}</span>${badge}</a>`;}).join('');
   document.querySelectorAll('[data-id]').forEach(a=>a.onclick=()=>route(a.dataset.id));icons();}
@@ -1541,6 +1542,80 @@ const VIEWS={
       r.ok?(toast('promoted — find it in Capabilities (disabled)'),route('build')):toast(esc(r.error||'promote failed'),false);});
     document.querySelectorAll('.bp-reject').forEach(b=>b.onclick=async()=>{await api('POST','/api/build/'+encodeURIComponent(b.dataset.n)+'/reject');toast('discarded');route('build');});
     icons();
+  },
+
+  async files(){
+    if(!ME||ME.role!=='admin'){$('#view').innerHTML=`<div class="card p-5 max-w-2xl text-sm text-slate-400">The file manager is admin-only.</div>`;return;}
+    window._fsPath=window._fsPath||'/opt/dtm-ai';
+    let d; try{ d=await api('GET','/api/fs/list?path='+encodeURIComponent(window._fsPath)); }catch(_){ d={error:'request failed'}; }
+    if(d.error){ toast(d.error,false); if(window._fsPath!=='/opt/dtm-ai'){ window._fsPath='/opt/dtm-ai'; return VIEWS.files(); } return; }
+    window._fsPath=d.path;
+    const showH=!!window._fsHidden;
+    const fmt=n=>n==null?'':n<1024?n+' B':n<1048576?(n/1024).toFixed(0)+' KB':(n/1048576).toFixed(1)+' MB';
+    const entries=d.entries.filter(e=>showH||!e.hidden);
+    const row=e=>`<button class="fs-ent w-full text-left px-3 py-2 flex items-center gap-2.5 hover:bg-white/5 transition rounded-lg" data-path="${esc(e.path)}" data-dir="${e.dir?1:0}" style="opacity:${e.hidden?.6:1}">
+        <i data-lucide="${e.dir?'folder':'file-text'}" class="${e.dir?'text-accent':'text-slate-500'} shrink-0"></i>
+        <span class="flex-1 min-w-0 text-[13px] truncate">${esc(e.name)}${e.link?' <span class="text-slate-600">→</span>':''}</span>
+        <span class="text-[10px] font-mono text-slate-600 shrink-0">${esc(e.octal||'')}</span>
+        ${e.dir?'':`<span class="text-[10px] text-slate-500 shrink-0 w-14 text-right">${fmt(e.size)}</span>`}</button>`;
+    $('#view').innerHTML=`<div class="flex flex-col h-full min-h-0">
+      <div class="flex items-center gap-2 mb-2 shrink-0 flex-wrap">
+        <span class="font-mono text-[13px] text-slate-300 truncate max-w-[40vw]" title="${esc(d.path)}">${esc(d.path)}</span>
+        <label class="text-[11px] text-slate-500 flex items-center gap-1.5 cursor-pointer ml-2"><input type="checkbox" id="fsHidden" ${showH?'checked':''}> hidden</label>
+        <div class="ml-auto flex items-center gap-1.5">
+          <input type="file" id="fsUpInput" multiple class="hidden">
+          <button id="fsUpload" class="hbtn hbtn-accent"><i data-lucide="upload" class="text-[13px]"></i> Upload</button>
+          <button id="fsMkdir" class="hbtn"><i data-lucide="folder-plus" class="text-[13px]"></i> <span class="hidden sm:inline">New folder</span></button>
+        </div></div>
+      <div class="flex items-center gap-1.5 mb-3 shrink-0 flex-wrap">${d.roots.map(r=>`<button class="fs-root font-mono text-[11px] px-2 py-1 rounded-md ${r===d.path?'text-accent':'text-slate-500 hover:text-slate-300'} bg-white/[.04]" data-path="${esc(r)}">${esc(r)}</button>`).join('')}</div>
+      <div class="flex-1 min-h-0 flex gap-3">
+        <div class="w-80 shrink-0 card p-2 overflow-auto">
+          ${d.parent?`<button class="fs-ent w-full text-left px-3 py-2 flex items-center gap-2.5 hover:bg-white/5 rounded-lg text-slate-400" data-path="${esc(d.parent)}" data-dir="1"><i data-lucide="corner-left-up" class="shrink-0"></i><span class="text-[13px]">..</span></button>`:''}
+          ${entries.map(row).join('')||'<div class="px-3 py-4 text-xs text-slate-600">Empty.</div>'}
+        </div>
+        <div id="fsPane" class="flex-1 min-w-0 card flex flex-col min-h-0 overflow-hidden">
+          <div class="flex-1 grid place-items-center text-center p-6 text-sm text-slate-500">Pick a file to preview or edit it.<br>Folders open on click.</div>
+        </div></div></div>`;
+    icons();
+    $('#fsHidden').onchange=e=>{ window._fsHidden=e.target.checked; VIEWS.files(); };
+    document.querySelectorAll('.fs-root').forEach(b=>b.onclick=()=>{ window._fsPath=b.dataset.path; VIEWS.files(); });
+    document.querySelectorAll('.fs-ent').forEach(b=>b.onclick=()=>{ if(b.dataset.dir==='1'){ window._fsPath=b.dataset.path; VIEWS.files(); } else openFile(b.dataset.path); });
+    $('#fsMkdir').onclick=async()=>{ const n=prompt('New folder name:'); if(n===null||!n.trim())return;
+      const r=await api('POST','/api/fs/mkdir',{dir:d.path,name:n.trim()});
+      if(r&&r.ok){ toast('Folder created'); VIEWS.files(); } else toast((r&&r.error)||'failed',false); };
+    $('#fsUpload').onclick=()=>$('#fsUpInput').click();
+    $('#fsUpInput').onchange=async e=>{ const files=[...e.target.files]; if(!files.length)return;
+      for(const f of files){ if(f.size>25*1024*1024){ toast(`${f.name}: too large (25 MB max)`,false); continue; }
+        const b64=await new Promise(res=>{ const rd=new FileReader(); rd.onload=()=>res(rd.result.split(',')[1]); rd.readAsDataURL(f); });
+        const r=await api('POST','/api/fs/upload',{dir:d.path,name:f.name,content_b64:b64});
+        if(r&&r.ok) toast(`Uploaded ${f.name} (${fmt(r.size)})`); else toast(`${f.name}: ${(r&&r.error)||'failed'}`,false); }
+      VIEWS.files(); };
+    async function act(p,kind){ // shared chmod/delete/download actions for the pane
+      if(kind==='chmod'){ const cur=(d.entries.find(x=>x.path===p)||{}).octal||'644';
+        const m=prompt('Permissions (octal, e.g. 644 / 755):',cur); if(m===null)return;
+        const r=await api('POST','/api/fs/chmod',{path:p,mode:m.trim()});
+        if(r&&r.ok){ toast('Permissions set → '+r.mode); VIEWS.files(); } else toast((r&&r.error)||'failed',false); }
+      else if(kind==='delete'){ if(!confirm(`Delete ${p}?`))return;
+        const r=await api('POST','/api/fs/delete',{path:p});
+        if(r&&r.ok){ toast('Deleted'); VIEWS.files(); } else toast((r&&r.error)||'failed',false); }
+      else if(kind==='download'){ window.open('/api/fs/download?path='+encodeURIComponent(p),'_blank'); } }
+    async function openFile(p){
+      const pane=$('#fsPane'); pane.innerHTML='<div class="p-4 text-sm text-slate-500">loading…</div>';
+      let f; try{ f=await api('GET','/api/fs/file?path='+encodeURIComponent(p)); }catch(_){ f={error:'request failed'}; }
+      const bar=`<div class="px-3 py-2 border-b border-edge flex items-center gap-1.5 shrink-0 flex-wrap">
+          <span class="font-mono text-[11px] text-slate-500 truncate flex-1 min-w-[8rem]" title="${esc(p)}">${esc(p.split('/').pop())}${f.size!=null?` · ${fmt(f.size)}`:''}</span>
+          ${f.ok?`<button id="fsSave" class="grad text-white rounded-lg text-[11px] font-semibold" style="height:26px;padding:0 12px">Save</button>`:''}
+          <button id="fsDl" class="hbtn" style="height:26px;padding:0 10px;font-size:11px">Download</button>
+          <button id="fsChmod" class="hbtn" style="height:26px;padding:0 10px;font-size:11px">chmod</button>
+          <button id="fsDel" class="hbtn" style="height:26px;padding:0 10px;font-size:11px;color:#fda4af">Delete</button></div>`;
+      if(f.ok){ pane.innerHTML=bar+`<textarea id="fsEdit" class="flex-1 min-h-0 w-full bg-ink/60 p-3 text-[12px] font-mono leading-relaxed text-slate-200 focus:outline-none resize-none" spellcheck="false">${esc(f.content)}</textarea>`
+          +(f.truncated?'<div class="px-3 py-1.5 text-[10px] text-amber-400 border-t border-edge shrink-0">Preview truncated at 256 KB — saving would write ONLY this portion. Download for the full file.</div>':'');
+        $('#fsSave').onclick=async()=>{ if(f.truncated&&!confirm('This preview is TRUNCATED — saving overwrites the file with only what you see. Continue?'))return;
+          const r=await api('POST','/api/fs/save',{path:p,content:$('#fsEdit').value});
+          if(r&&r.ok) toast('Saved · '+fmt(r.size)); else toast((r&&r.error)||'failed',false); }; }
+      else pane.innerHTML=bar+`<div class="flex-1 grid place-items-center p-6 text-sm text-slate-500">${esc(f.error||'cannot preview')}</div>`;
+      $('#fsDl').onclick=()=>act(p,'download'); $('#fsChmod').onclick=()=>act(p,'chmod'); $('#fsDel').onclick=()=>act(p,'delete');
+    }
   },
 
   async audit(){

@@ -312,3 +312,71 @@ class OwnerToolAuthoring(unittest.TestCase):
         self.auth.create_user("tech", "pw12345678", role="user")
         r = self.api.handle("POST", "/api/tools", {}, {"name": self.NAME, "code": self.CODE}, "tech")
         self.assertEqual(r.status, 403)
+
+
+class FilesManager(unittest.TestCase):
+    """Admin-only filesystem manager (SOP: admin-terminal) — CRUD in a temp dir + role gating."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        db = Path(self.tmp.name) / "w.db"
+        self.agent = build_agent(db_path=db)
+        self.auth = AuthStore(db)
+        self.auth.ensure_admin("secret")
+        self.api = Api(self.agent, self.auth, SessionSigner(secret=b"0" * 32))
+        self.work = Path(self.tmp.name) / "work"
+        self.work.mkdir()
+
+    def tearDown(self):
+        self.auth.close()
+        self.tmp.cleanup()
+
+    def H(self, method, path, body=None, query=None, user="admin"):
+        return self.api.handle(method, path, query or {}, body or {}, user)
+
+    def test_lifecycle(self):
+        import base64
+        w = str(self.work)
+        # upload
+        r = self.H("POST", "/api/fs/upload", {"dir": w, "name": "a.txt",
+                   "content_b64": base64.b64encode(b"hello files").decode()})
+        self.assertEqual(r.status, 200, r.payload)
+        # list shows it with mode info
+        r = self.H("GET", "/api/fs/list", query={"path": w})
+        names = {e["name"]: e for e in r.payload["entries"]}
+        self.assertIn("a.txt", names)
+        self.assertEqual(names["a.txt"]["size"], 11)
+        # preview + edit
+        self.assertIn("hello", self.H("GET", "/api/fs/file", query={"path": w + "/a.txt"}).payload["content"])
+        self.assertEqual(self.H("POST", "/api/fs/save", {"path": w + "/a.txt", "content": "edited"}).status, 200)
+        self.assertEqual((self.work / "a.txt").read_text(), "edited")
+        # download (raw path)
+        fn, data = self.api.fs_download(w + "/a.txt", "admin")
+        self.assertEqual((fn, data), ("a.txt", b"edited"))
+        # chmod
+        self.assertEqual(self.H("POST", "/api/fs/chmod", {"path": w + "/a.txt", "mode": "600"}).status, 200)
+        self.assertEqual(oct((self.work / "a.txt").stat().st_mode & 0o777), "0o600")
+        self.assertEqual(self.H("POST", "/api/fs/chmod", {"path": w + "/a.txt", "mode": "99"}).status, 400)
+        # mkdir + dir-delete guard + recursive delete
+        self.assertEqual(self.H("POST", "/api/fs/mkdir", {"dir": w, "name": "sub"}).status, 200)
+        self.assertEqual(self.H("POST", "/api/fs/delete", {"path": w + "/sub"}).status, 400)   # needs recursive
+        self.assertEqual(self.H("POST", "/api/fs/delete", {"path": w + "/sub", "recursive": True}).status, 200)
+        self.assertEqual(self.H("POST", "/api/fs/delete", {"path": w + "/a.txt"}).status, 200)
+        self.assertFalse((self.work / "a.txt").exists())
+
+    def test_binary_preview_refused(self):
+        (self.work / "b.bin").write_bytes(b"\x00\x01\x02data")
+        r = self.H("GET", "/api/fs/file", query={"path": str(self.work / "b.bin")})
+        self.assertTrue(r.payload.get("binary"))
+
+    def test_root_delete_refused(self):
+        self.assertEqual(self.H("POST", "/api/fs/delete", {"path": "/", "recursive": True}).status, 400)
+
+    def test_non_admin_blocked_everywhere(self):
+        self.auth.create_user("tech", "pw12345678", role="user")
+        for m, p, b in (("GET", "/api/fs/list", None), ("GET", "/api/fs/file", None),
+                        ("POST", "/api/fs/save", {"path": "/x", "content": ""}),
+                        ("POST", "/api/fs/delete", {"path": "/x"})):
+            self.assertEqual(self.H(m, p, b, user="tech").status, 403, p)
+        self.assertEqual(self.api.fs_download("/etc/hostname", "tech").status, 403)
+        self.assertEqual(self.api.fs_download("/etc/hostname", None).status, 401)
