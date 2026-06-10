@@ -178,6 +178,10 @@ class Api:
             return self._require_admin(role) or self._kanban_assign(path.split("/")[4], body, user)
         if method == "POST" and path.startswith("/api/kanban/tasks/") and path.endswith("/archive"):
             return self._require_admin(role) or self._kanban_archive(path.split("/")[4], user)
+        if method == "POST" and path.startswith("/api/kanban/tasks/") and path.endswith("/pause"):
+            return self._require_admin(role) or self._kanban_pause(path.split("/")[4], body, user)
+        if method == "POST" and path.startswith("/api/kanban/tasks/") and path.endswith("/run-now"):
+            return self._require_admin(role) or self._kanban_run_now(path.split("/")[4], user)
         if method == "POST" and path == "/api/kanban/dispatch":
             return self._require_admin(role) or self._kanban_dispatch(user)
         if method == "POST" and path.startswith("/api/capabilities/"):
@@ -663,6 +667,28 @@ class Api:
             return Resp(400, {"error": str(e)})
         self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
                                 detail=f"delegate_archive={task_id}")
+        return Resp(200, r)
+
+    def _kanban_pause(self, task_id: str, body: dict, user: str) -> Resp:
+        """Pause/resume a recurring scheduled task — paused tasks never fire (owner-gated; audited)."""
+        paused = bool(body.get("paused", True))
+        try:
+            r = self.agent.tasks.set_paused(task_id, paused)
+        except ValueError as e:
+            return Resp(400, {"error": str(e)})
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"schedule_{'pause' if paused else 'resume'}={task_id}")
+        return Resp(200, r)
+
+    def _kanban_run_now(self, task_id: str, user: str) -> Resp:
+        """Fire a scheduled task immediately (owner-gated; audited). Next dispatcher pass runs it."""
+        try:
+            r = self.agent.tasks.run_now(task_id)
+        except ValueError as e:
+            return Resp(400, {"error": str(e)})
+        self.agent.dispatcher.dispatch()
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"schedule_run_now={task_id}")
         return Resp(200, r)
 
     def _kanban_dispatch(self, user: str) -> Resp:
