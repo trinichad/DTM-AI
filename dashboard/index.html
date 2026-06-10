@@ -460,6 +460,7 @@ function closeDrawer(){ const dr=$('#drawer'), back=$('#drawerBack'); document.r
 function openDrawer(opts){ closeDrawer();
   const back=document.createElement('div'); back.className='drawer-backdrop'; back.id='drawerBack';
   const dr=document.createElement('div'); dr.className='drawer'; dr.id='drawer';
+  if(opts.wide) dr.style.width='680px';
   dr.innerHTML=`<div class="flex items-center gap-2 px-4 h-14 border-b border-edge shrink-0">
       <i data-lucide="${opts.icon||'panel-right'}" class="text-slate-400"></i>
       <div class="font-semibold text-sm">${esc(opts.title||'')}</div>
@@ -856,30 +857,65 @@ const VIEWS={
 
   async capabilities(){
     const {capabilities}=await api('GET','/api/capabilities');
-    const rows=t=>`<div class="card p-4 flex items-center gap-4 card-hover" data-name="${esc(t.name)}">
+    const total=capabilities.length, totalOn=capabilities.filter(t=>t.enabled).length;
+    // group by source (the integration each tool reads from)
+    const groups={};
+    capabilities.forEach(t=>{ (groups[t.source]=groups[t.source]||[]).push(t); });
+    const LBL={dtm_ai:'DTM AI — internal',kaseya:'Kaseya VSA',cylance:'Cylance',huntress:'Huntress',obsidian:'Obsidian vault',system:'System',echo:'Dev / test'};
+    const ICO={dtm_ai:'sparkles',kaseya:'monitor-dot',cylance:'shield',huntress:'radar',obsidian:'notebook-pen',system:'cpu',echo:'flask-conical'};
+    window._capOpen=window._capOpen||{};   // which groups are expanded (collapsed by default)
+    const row=t=>`<div class="px-4 py-3 flex items-center gap-4 hover:bg-white/[.015]" data-name="${esc(t.name)}">
       <div class="min-w-0 flex-1">
-        <div class="flex items-center gap-2"><span class="font-medium truncate">${esc(t.name)}</span>${catChip(t.category)}</div>
-        <div class="text-xs text-slate-500 mt-0.5 truncate">${esc(t.description)}</div>
-        <div class="flex items-center gap-3 mt-1.5">${riskDot(t.risk)}<span class="text-xs text-slate-600">· ${esc(t.source)}</span></div>
+        <div class="flex items-center gap-2 flex-wrap"><span class="font-medium font-mono text-[13px] truncate">${esc(t.name)}</span>${catChip(t.category)}${riskDot(t.risk)}</div>
+        <div class="text-xs text-slate-500 mt-0.5">${esc(t.description)}</div>
       </div>
-      <div class="flex items-center gap-5 text-center">
+      <button class="cap-code hbtn justify-center shrink-0" style="width:32px;height:32px;padding:0" title="View this tool's source code (read-only)" data-name="${esc(t.name)}"><i data-lucide="code" class="text-[13px]"></i></button>
+      <div class="flex items-center gap-5 text-center shrink-0">
         ${toggle(t.name,'enabled',t.enabled,false,'Enabled')}
         ${toggle(t.name,'allow_write',t.allow_write,(t.category==='read'||t.category==='alert'),'Write')}
         ${toggle(t.name,'require_approval',t.require_approval,(t.category==='destructive'),'Approval')}
       </div></div>`;
+    const group=(src,tools)=>{ const open=!!window._capOpen[src]; const en=tools.filter(t=>t.enabled).length;
+      const w=tools.filter(t=>t.category==='write'||t.category==='destructive').length;
+      return `<div class="card overflow-hidden">
+        <button class="cap-grp w-full flex items-center gap-3 px-4 py-3.5 text-left hover:bg-white/[.02] transition" data-src="${esc(src)}">
+          <i data-lucide="${ICO[src]||'box'}" class="text-accent"></i>
+          <span class="font-semibold">${esc(LBL[src]||src)}</span>
+          <span class="pill bg-white/5 text-slate-300">${tools.length} tool${tools.length===1?'':'s'}</span>
+          <span class="pill ${en?'bg-emerald-500/15 text-emerald-300':'bg-slate-600/30 text-slate-400'}">${en} enabled</span>
+          ${w?`<span class="pill bg-orange-500/15 text-orange-300">${w} write</span>`:''}
+          <i data-lucide="chevron-${open?'up':'down'}" class="ml-auto text-slate-500 shrink-0"></i>
+        </button>
+        ${open?`<div class="border-t border-edge/40 divide-y divide-edge/30">${tools.map(row).join('')}</div>`:''}
+      </div>`; };
+    const order=Object.keys(groups).sort((a,b)=>(LBL[a]||a).localeCompare(LBL[b]||b));
     $('#view').innerHTML=`
-      <div class="card glass p-4 mb-4 flex items-start gap-3 max-w-5xl">
-        <i data-lucide="shield-half" class="text-accent mt-0.5"></i>
-        <div class="text-sm text-slate-400">Open capabilities tool-by-tool as you build trust. <span class="text-slate-200">Read-only by default.</span> Destructive tools always require per-action approval — that floor can't be turned off.</div></div>
-      <div class="hidden md:flex items-center gap-5 px-4 pb-2 text-[11px] uppercase tracking-wide text-slate-500 max-w-5xl">
-        <div class="flex-1">Tool</div><div class="w-12">Enabled</div><div class="w-12">Write</div><div class="w-14">Approval</div></div>
-      <div class="space-y-2 max-w-5xl">${capabilities.map(rows).join('')}</div>`;
+      <div class="card glass p-4 mb-4 flex items-center gap-3 max-w-5xl flex-wrap">
+        <i data-lucide="shield-half" class="text-accent"></i>
+        <div class="text-sm text-slate-400 flex-1 min-w-[16rem]">Open capabilities tool-by-tool as you build trust. <span class="text-slate-200">Read-only by default.</span> Destructive tools always require per-action approval.</div>
+        <span class="pill bg-white/5 text-slate-200 text-sm">${total} capabilities</span>
+        <span class="pill bg-emerald-500/15 text-emerald-300 text-sm">${totalOn} enabled</span></div>
+      <div class="space-y-2.5 max-w-5xl">${order.map(s=>group(s,groups[s])).join('')}</div>`;
+    icons();
+    document.querySelectorAll('.cap-grp').forEach(b=>b.onclick=()=>{ window._capOpen[b.dataset.src]=!window._capOpen[b.dataset.src]; VIEWS.capabilities(); });
+    document.querySelectorAll('.cap-code').forEach(b=>b.onclick=async e=>{ e.stopPropagation();
+      const name=b.dataset.name;
+      const r=await api('GET','/api/tools/'+encodeURIComponent(name)+'/code');
+      if(!r||r.error){ toast((r&&r.error&&String(r.error).includes('admin'))?'Owner only — admin can view code':('Failed: '+((r&&r.error)||'')),false); return; }
+      openDrawer({title:name,icon:'code',wide:true,render:body=>{
+        body.innerHTML=`<div class="px-4 py-2 text-[11px] font-mono text-slate-500 border-b border-edge flex items-center gap-2 sticky top-0" style="background:rgba(11,15,24,.95)">
+            <span class="truncate">${esc(r.path)}</span>
+            <button id="codeCopy" class="ml-auto hbtn shrink-0" style="height:26px;padding:0 10px;font-size:11px">Copy</button></div>
+          <pre class="p-4 text-[11.5px] font-mono leading-relaxed whitespace-pre-wrap break-words text-slate-300">${esc(r.code)}</pre>
+          <div class="px-4 pb-4 text-[11px] text-slate-500 flex items-start gap-1.5"><i data-lucide="lock" class="text-[12px] mt-0.5 shrink-0"></i><span>Read-only by design: live tool code is git-tracked and changes only through the Build flow (sandboxed draft → your review → merge). Use the switches to enable/disable, or the Build tab to draft a new version.</span></div>`;
+        icons();
+        $('#codeCopy').onclick=()=>{ navigator.clipboard.writeText(r.code).then(()=>toast('Source copied')); };
+      }}); });
     document.querySelectorAll('.switch:not(.disabled)').forEach(sw=>sw.onclick=async()=>{
       const name=sw.dataset.name,field=sw.dataset.field,val=!sw.classList.contains('on');
       sw.classList.toggle('on',val);
       await api('POST','/api/capabilities/'+encodeURIComponent(name),{[field]:val});
       toast(`${name}: ${field.replace('_',' ')} ${val?'on':'off'}`);});
-    icons();
   },
 
   async agents(){

@@ -118,6 +118,8 @@ class Api:
             return self._require_admin(role) or self._reject(int(path.split("/")[3]), user)
         if method == "GET" and path == "/api/tools":
             return Resp(200, {"tools": self._tools()})
+        if method == "GET" and path.startswith("/api/tools/") and path.endswith("/code"):
+            return self._require_admin(role) or self._tool_code(path.split("/")[3], user)
         if method == "GET" and path == "/api/models":
             r = self.agent.router
             return Resp(200, {"models": r.available_models(),
@@ -735,6 +737,24 @@ class Api:
         self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
                                 detail=f"agent_soul={name}")
         return Resp(200, a)
+
+    def _tool_code(self, name: str, user: str) -> Resp:
+        """READ-ONLY source view of a live skill (admin; audited). Editing stays out of the
+        dashboard on purpose: live tool code is git-tracked and changes only via the Build
+        sandbox + human merge (Invariants I-5 / I-6)."""
+        import importlib
+        import inspect
+        info = self.agent.registry.get(name)
+        if info is None:
+            return Resp(404, {"error": f"unknown tool '{name}'"})
+        try:
+            mod = importlib.import_module(info.module)
+            src = inspect.getsource(mod)
+            path_ = inspect.getsourcefile(mod) or info.module
+        except (OSError, TypeError) as e:
+            return Resp(500, {"error": f"cannot read source: {e}"})
+        self.agent.audit.record(actor=user, tenant_id="*", action="code_view", tool=name)
+        return Resp(200, {"name": name, "module": info.module, "path": str(path_), "code": src})
 
     def _set_agent_memory(self, name: str, body: dict, user: str) -> Resp:
         """Owner-edit an agent's MEMORY.md / USER.md (admin; audited). Omitted field = untouched."""
