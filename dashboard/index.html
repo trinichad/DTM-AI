@@ -103,6 +103,29 @@
     .composer{border-radius:18px;transition:box-shadow var(--t) var(--ease),border-color var(--t) var(--ease)}
     .composer:focus-within{box-shadow:0 0 0 1px rgba(99,102,241,.45),0 14px 44px rgba(99,102,241,.16)}
 
+    /* chat header control buttons (New / History / Activity …) */
+    .hbtn{height:36px;padding:0 12px;border-radius:10px;font-size:12px;font-weight:600;display:inline-flex;align-items:center;gap:6px;color:#8a8f98;background:rgba(255,255,255,.04);transition:.15s var(--ease);white-space:nowrap}
+    .hbtn:hover{color:#e2e8f0;background:rgba(255,255,255,.08)}
+    .hbtn-accent{color:#a5b4fc;background:rgba(99,102,241,.16);box-shadow:inset 0 0 0 1px rgba(99,102,241,.38)}
+    .hbtn-accent:hover{color:#c7d2fe;background:rgba(99,102,241,.24)}
+
+    /* slide-over drawer (History / Activity) */
+    .drawer-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.5);backdrop-filter:blur(2px);z-index:60;opacity:0;transition:opacity .2s var(--ease)}
+    .drawer-backdrop.show{opacity:1}
+    .drawer{position:fixed;top:0;right:0;height:100%;width:380px;max-width:92vw;z-index:61;display:flex;flex-direction:column;
+      background:rgba(11,15,24,.94);backdrop-filter:blur(22px) saturate(140%);border-left:1px solid rgba(255,255,255,.1);
+      transform:translateX(100%);transition:transform .26s var(--ease);box-shadow:-24px 0 64px rgba(0,0,0,.55)}
+    .drawer.show{transform:translateX(0)}
+
+    /* slash-command palette above the composer */
+    .slash{position:absolute;left:0;right:0;bottom:100%;margin-bottom:8px;border-radius:14px;overflow:hidden;z-index:30;
+      background:#0d1018;box-shadow:0 16px 50px rgba(0,0,0,.6),inset 0 0 0 1px rgba(99,102,241,.32)}
+    .slash-head{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#595e68;padding:8px 14px;border-bottom:1px solid rgba(255,255,255,.07);background:rgba(255,255,255,.02)}
+    .slash-item{display:flex;align-items:baseline;gap:10px;padding:9px 14px;cursor:pointer}
+    .slash-item.sel{background:rgba(99,102,241,.18)}
+    .slash-cmd{font-family:ui-monospace,monospace;font-size:13px;color:#a5b4fc}
+    .slash-desc{font-size:11px;color:#8a8f98}
+
     /* respect reduced-motion: kill animation + transition + smooth scroll */
     @media (prefers-reduced-motion: reduce){
       *,*::before,*::after{animation-duration:.001ms !important;animation-iteration-count:1 !important;
@@ -423,6 +446,26 @@ async function loadFleet(force){ const el=$('#fleet'); if(!el) return;
         ${!f.ok?`<div class="text-[10px] text-rose-400 mt-0.5">${esc((f.error||'unavailable').slice(0,40))}</div>`:''}</div>
     </div>`).join(''); icons(); }
 
+// ── slide-over drawer (History / Activity) — RossMeta-style overlay ──
+function drawerEsc(e){ if(e.key==='Escape') closeDrawer(); }
+function closeDrawer(){ const dr=$('#drawer'), back=$('#drawerBack'); document.removeEventListener('keydown',drawerEsc);
+  if(dr){ dr.classList.remove('show'); setTimeout(()=>dr.remove(),260); }
+  if(back){ back.classList.remove('show'); setTimeout(()=>back.remove(),260); } }
+function openDrawer(opts){ closeDrawer();
+  const back=document.createElement('div'); back.className='drawer-backdrop'; back.id='drawerBack';
+  const dr=document.createElement('div'); dr.className='drawer'; dr.id='drawer';
+  dr.innerHTML=`<div class="flex items-center gap-2 px-4 h-14 border-b border-edge shrink-0">
+      <i data-lucide="${opts.icon||'panel-right'}" class="text-slate-400"></i>
+      <div class="font-semibold text-sm">${esc(opts.title||'')}</div>
+      <button id="drawerClose" aria-label="Close" class="ml-auto h-8 w-8 grid place-items-center rounded-lg text-slate-400 hover:text-slate-100 hover:bg-white/5"><i data-lucide="x"></i></button>
+    </div><div id="drawerBody" class="flex-1 min-h-0 overflow-auto"></div>`;
+  document.body.appendChild(back); document.body.appendChild(dr);
+  back.onclick=closeDrawer; $('#drawerClose').onclick=closeDrawer;
+  document.addEventListener('keydown',drawerEsc);
+  if(opts.render) opts.render($('#drawerBody'));
+  icons();
+  requestAnimationFrame(()=>{ back.classList.add('show'); dr.classList.add('show'); });
+}
 function icons(){ if(window.lucide) lucide.createIcons(); }
 async function api(m,p,b){const r=await fetch(p,{method:m,credentials:'same-origin',
   headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined});
@@ -534,33 +577,34 @@ const VIEWS={
     // this client; else start a fresh (unsaved) chat.
     if(CONV && !CONVS.find(c=>c.id===CONV)) CONV=null;
     if(!CONV){ const mine=CONVS.find(c=>c.tenant_id===TENANT); CONV=mine?mine.id:null; }
-    $('#view').innerHTML=`<div class="flex h-full gap-4">
-      <aside class="w-60 shrink-0 hidden md:flex flex-col">
-        <button id="newChat" class="grad text-white rounded-xl px-3 py-2 text-sm font-semibold inline-flex items-center justify-center gap-1.5 mb-3"><i data-lucide="plus"></i> New chat</button>
-        <div id="convList" class="flex-1 overflow-auto space-y-1 -mx-1 px-1"></div>
-      </aside>
-      <div class="flex-1 flex flex-col min-w-0 max-w-3xl mx-auto w-full">
-        <div class="flex items-center gap-2 mb-3">
-          <span id="modelCtl" class="inline-flex items-center gap-2">
-            <i data-lucide="cpu" class="text-slate-500 text-sm"></i>
-            <select id="model" class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none" title="Model for this chat">
-              ${models.map(m=>`<option value="${esc(m.id)}" ${m.id===MODEL?'selected':''}>${esc(m.label)}${m.local?'':' ☁'}</option>`).join('')}
-            </select>
-            ${models.length<2?`<a class="text-[11px] text-slate-500 hover:text-slate-300 cursor-pointer" id="addModel">+ add a cloud model</a>`:''}
-          </span>
-          <span id="ctxMeter" class="ml-auto text-[11px] text-slate-500" title="Conversation context sent to the model"></span>
-          <button id="compactChat" class="text-[11px] text-slate-500 hover:text-accent inline-flex items-center gap-1" title="Summarise older turns to shrink context, keeping the recent ones"><i data-lucide="archive-restore" class="text-[12px]"></i> Compact</button>
-          <button id="delChat" class="text-[11px] text-slate-500 hover:text-rose-300 inline-flex items-center gap-1" title="Delete this conversation"><i data-lucide="trash-2" class="text-[12px]"></i> Delete</button>
-          <button id="newChatTop" class="md:hidden text-[11px] text-slate-500 hover:text-accent inline-flex items-center gap-1"><i data-lucide="plus" class="text-[12px]"></i> New</button>
+    $('#view').innerHTML=`<div class="flex flex-col h-full min-h-0">
+      <div class="flex items-center gap-2 mb-4 shrink-0">
+        <span class="inline-flex items-center gap-2 min-w-0">
+          <i data-lucide="cpu" class="text-slate-500 text-sm shrink-0"></i>
+          <select id="model" class="bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs focus:border-accent focus:outline-none" title="Model for this chat">
+            ${models.map(m=>`<option value="${esc(m.id)}" ${m.id===MODEL?'selected':''}>${esc(m.label)}${m.local?'':' ☁'}</option>`).join('')}
+          </select>
+          ${models.length<2?`<a class="text-[11px] text-slate-500 hover:text-slate-300 cursor-pointer shrink-0" id="addModel">+ add a cloud model</a>`:''}
+        </span>
+        <span id="ctxMeter" class="text-[11px] text-slate-500 truncate" title="Conversation context sent to the model"></span>
+        <div class="ml-auto flex items-center gap-1.5 shrink-0">
+          <button id="newChatTop" class="hbtn hbtn-accent"><i data-lucide="plus" class="text-[13px]"></i> New</button>
+          <button id="histBtn" class="hbtn" title="Past conversations"><i data-lucide="history" class="text-[13px]"></i> <span class="hidden sm:inline">History</span></button>
+          <button id="actBtn" class="hbtn" title="Recent logged actions"><i data-lucide="scroll-text" class="text-[13px]"></i> <span class="hidden sm:inline">Activity</span></button>
+          <button id="compactChat" class="hbtn" title="Summarise older turns to shrink context, keeping the recent ones"><i data-lucide="archive-restore" class="text-[13px]"></i> <span class="hidden lg:inline">Compact</span></button>
+          <button id="delChat" class="hbtn" title="Delete this conversation"><i data-lucide="trash-2" class="text-[13px]"></i></button>
         </div>
-        <div id="msgs" class="flex-1 space-y-5 mb-3 overflow-auto"></div>
-        <div id="suggest" class="flex flex-wrap gap-2 mb-3"></div>
+      </div>
+      <div id="msgs" class="flex-1 min-h-0 overflow-auto space-y-5"></div>
+      <div id="suggest" class="flex flex-wrap gap-2 my-3 shrink-0"></div>
+      <div class="relative shrink-0">
+        <div id="slash" class="slash hidden"></div>
         <form id="chatForm" class="composer glass flex items-end gap-2 p-2 pl-4">
-          <textarea id="msg" rows="1" placeholder="Ask about ${esc(TENANT==='*'?'all clients':TENANT)} …"
+          <textarea id="msg" rows="1" placeholder="Message DTM AI…    ( / for commands )"
             class="flex-1 bg-transparent py-2 text-sm leading-relaxed resize-none focus:outline-none max-h-40 self-center"></textarea>
-          <button type="submit" aria-label="Send" class="grad text-white rounded-xl h-9 w-9 grid place-items-center shrink-0"><i data-lucide="send" class="text-[15px]"></i></button>
+          <button type="submit" aria-label="Send" class="grad text-white rounded-xl h-9 px-4 shrink-0 text-sm font-semibold inline-flex items-center gap-1.5"><i data-lucide="send" class="text-[14px]"></i> Send</button>
         </form>
-        <div class="text-[11px] text-slate-500 mt-2 flex items-center gap-1.5"><i data-lucide="shield-check"></i> Analysing only — DTM AI never changes client systems in this mode. ☁ = cloud model.</div>
+        <div class="text-[11px] text-slate-500 mt-2 flex items-center gap-1.5"><i data-lucide="shield-check" class="text-[12px]"></i> Analysing only — DTM AI never changes client systems in this mode · ☁ = cloud model · type <span class="font-mono text-slate-400">/</span> for commands</div>
       </div></div>`;
     const sg=['How many assets does this client have?','Any open Huntress incidents?','Summarise this client’s security posture'];
     const showSuggest=()=>{ const el=$('#suggest'); if(!el)return; el.innerHTML=MSGS.length?'':sg.map(s=>`<button class="pill bg-white/5 hover:bg-white/10 text-slate-300 border border-edge">${esc(s)}</button>`).join('');
@@ -571,9 +615,11 @@ const VIEWS={
       const chars=h.reduce((a,m)=>a+m.content.length,0); const over=chars>cap;
       el.className='ml-auto text-[11px] '+(over?'text-amber-400':'text-slate-500');
       el.textContent=`ctx ${h.length} msg${h.length===1?'':'s'} · ~${(chars/1000).toFixed(1)}k/${Math.round(cap/1000)}k`; };
+    let histQuery='';
     const renderRail=()=>{ const el=$('#convList'); if(!el)return;
-      if(!CONVS.length){ el.innerHTML='<div class="text-[11px] text-slate-600 px-2 py-3">No conversations yet</div>'; return; }
-      el.innerHTML=CONVS.map(c=>{ const active=c.id===CONV;
+      const list=CONVS.filter(c=>!histQuery||(c.title||'').toLowerCase().includes(histQuery)||(c.tenant_id||'').toLowerCase().includes(histQuery));
+      if(!list.length){ el.innerHTML='<div class="text-[11px] text-slate-600 px-2 py-6 text-center">'+(CONVS.length?'No matches':'No conversations yet')+'</div>'; return; }
+      el.innerHTML=list.map(c=>{ const active=c.id===CONV;
         return `<div class="convItem group flex items-center gap-1.5 rounded-lg px-2 py-1.5 cursor-pointer ${active?'bg-white/10':'hover:bg-white/5'}" data-id="${esc(c.id)}">
           <div class="flex-1 min-w-0">
             <div class="text-[12px] truncate ${active?'text-slate-100':'text-slate-300'}">${esc(c.title||'New chat')}</div>
@@ -590,8 +636,8 @@ const VIEWS={
       try{ const conv=await api('GET','/api/conversations/'+CONV); MSGS=(conv.messages||[]).map(normMsg);
         if(conv.tenant_id&&conv.tenant_id!==TENANT){ TENANT=conv.tenant_id; const ts=$('#tenant'); if(ts)ts.value=TENANT; } }
       catch(_){ MSGS=[]; CONV=null; } }
-    const openConv=async id=>{ CONV=id; await loadMsgs(); renderChatLog(); showSuggest(); updateMeter(); renderRail();
-      const ip=$('#msg'); if(ip)ip.placeholder=`Ask about ${TENANT==='*'?'all clients':TENANT} …`; };
+    const openConv=async id=>{ closeDrawer(); CONV=id; await loadMsgs(); renderChatLog(); showSuggest(); updateMeter(); renderRail();
+      const ip=$('#msg'); if(ip)ip.focus(); };
     const newChat=()=>{ CONV=null; MSGS=[]; renderChatLog(); showSuggest(); updateMeter(); renderRail(); const ip=$('#msg'); if(ip)ip.focus(); };
     const delConv=async id=>{ if(!confirm('Delete this chat? This cannot be undone.'))return;
       try{ await api('DELETE','/api/conversations/'+id); }catch(_){}
@@ -602,13 +648,72 @@ const VIEWS={
       if(c)c.title=(t.trim()||'New chat'); renderRail(); };
     const refreshConvs=async()=>{ try{ CONVS=(await api('GET','/api/conversations')).conversations||[]; }catch(_){} renderRail(); };
     $('#model').onchange=e=>{MODEL=e.target.value; updateMeter();};
-    // auto-grow composer + Enter to send / Shift+Enter for a newline
+    // ── History drawer: searchable list of past conversations ──
+    const openHistory=()=>openDrawer({title:'Chat history',icon:'history',render:body=>{
+      body.innerHTML=`<div class="p-3 border-b border-edge space-y-2">
+          <div class="relative"><i data-lucide="search" class="absolute left-3 top-2.5 text-slate-500 text-sm"></i>
+            <input id="histQ" placeholder="Search conversations…" class="w-full bg-ink/70 border border-edge rounded-lg pl-9 pr-3 py-2 text-sm focus:border-accent focus:outline-none"></div>
+          <button id="histNew" class="grad text-white rounded-lg w-full py-2 text-sm font-semibold inline-flex items-center justify-center gap-1.5"><i data-lucide="plus" class="text-[14px]"></i> New chat</button>
+        </div><div id="convList" class="p-2 space-y-1"></div>`;
+      icons();
+      $('#histNew').onclick=()=>{ newChat(); closeDrawer(); };
+      $('#histQ').addEventListener('input',e=>{ histQuery=e.target.value.toLowerCase().trim(); renderRail(); });
+      renderRail();
+    }});
+    // ── Activity drawer: recent audit entries (read-only) ──
+    const openActivity=()=>openDrawer({title:'Activity',icon:'scroll-text',render:async body=>{
+      body.innerHTML='<div class="p-4 text-sm text-slate-500">Loading…</div>';
+      let r; try{ r=await api('GET','/api/audit?limit=60'+(TENANT!=='*'?'&tenant='+encodeURIComponent(TENANT):'')); }
+      catch(_){ body.innerHTML='<div class="p-4 text-sm text-rose-400">Failed to load activity.</div>'; return; }
+      const rows=r.audit||[]; const dot=ok=>ok==null?'bg-slate-500':ok?'bg-emerald-400':'bg-rose-400';
+      body.innerHTML='<div class="p-2 space-y-0.5">'+(rows.length?rows.map(a=>`
+        <div class="rounded-lg px-3 py-2 hover:bg-white/[.03]">
+          <div class="flex items-center gap-2">
+            <span class="h-1.5 w-1.5 rounded-full shrink-0 ${dot(a.result_ok)}"></span>
+            <span class="text-[12px] text-slate-200 truncate">${esc(a.tool||a.action)}</span>
+            <span class="ml-auto text-[10px] font-mono text-slate-500 shrink-0">${esc((a.ts||'').slice(11,19))}</span>
+          </div>
+          <div class="text-[10px] text-slate-500 mt-0.5 flex items-center gap-1.5 flex-wrap"><span class="pill bg-white/5 text-slate-400">${esc(a.action)}</span><span>${esc(a.actor)}</span><span>·</span><span>${esc(a.tenant_id)}</span></div>
+        </div>`).join(''):'<div class="p-4 text-sm text-slate-500 text-center">No activity yet.</div>')+'</div>';
+      icons();
+    }});
+    // ── slash commands (client-side) — typing "/" opens a command palette ──
+    const SLASH=[
+      {cmd:'new',      desc:'Start a fresh conversation',                 run:()=>newChat()},
+      {cmd:'history',  desc:'Browse & search past conversations',         run:()=>openHistory()},
+      {cmd:'activity', desc:'Recent logged actions',                      run:()=>openActivity()},
+      {cmd:'compact',  desc:'Summarise older turns to shrink context',    run:()=>$('#compactChat')&&$('#compactChat').click()},
+      {cmd:'delete',   desc:'Delete this conversation',                   run:()=>$('#delChat')&&$('#delChat').click()},
+    ];
+    // ── auto-grow composer + slash palette + Enter-to-send ──
     const ta=$('#msg');
-    if(ta){ const grow=()=>{ ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,160)+'px'; };
-      ta.addEventListener('input',grow);
-      ta.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); $('#chatForm').requestSubmit(); } }); }
+    const grow=()=>{ ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,160)+'px'; };
+    let slashList=[], slashSel=0;
+    const closeSlash=()=>{ const s=$('#slash'); if(s){ s.classList.add('hidden'); s.innerHTML=''; } slashList=[]; slashSel=0; };
+    const renderSlash=()=>{ const s=$('#slash'); if(!s)return; const m=/^\/(\w*)$/.exec(ta.value);
+      if(!m){ closeSlash(); return; } const q=m[1].toLowerCase();
+      slashList=SLASH.filter(c=>c.cmd.startsWith(q)); if(!slashList.length){ closeSlash(); return; }
+      if(slashSel>=slashList.length) slashSel=0;
+      s.innerHTML='<div class="slash-head">Commands</div>'+slashList.map((c,i)=>`<div class="slash-item ${i===slashSel?'sel':''}" data-i="${i}"><span class="slash-cmd">/${esc(c.cmd)}</span><span class="slash-desc">${esc(c.desc)}</span></div>`).join('');
+      s.classList.remove('hidden');
+      s.querySelectorAll('.slash-item').forEach(it=>{ it.onmousedown=e=>{ e.preventDefault(); runSlash(+it.dataset.i); }; it.onmouseenter=()=>{ slashSel=+it.dataset.i; renderSlash(); }; }); };
+    const runSlash=i=>{ const c=slashList[i]; closeSlash(); ta.value=''; grow(); if(c)c.run(); };
+    if(ta){
+      ta.addEventListener('input',()=>{ grow(); renderSlash(); });
+      ta.addEventListener('keydown',e=>{
+        if(slashList.length){
+          if(e.key==='ArrowDown'){ e.preventDefault(); slashSel=(slashSel+1)%slashList.length; renderSlash(); return; }
+          if(e.key==='ArrowUp'){ e.preventDefault(); slashSel=(slashSel-1+slashList.length)%slashList.length; renderSlash(); return; }
+          if(e.key==='Enter'||e.key==='Tab'){ e.preventDefault(); runSlash(slashSel); return; }
+          if(e.key==='Escape'){ e.preventDefault(); closeSlash(); return; }
+        }
+        if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); $('#chatForm').requestSubmit(); }
+      });
+      ta.addEventListener('blur',()=>setTimeout(closeSlash,150));
+    }
+    if($('#histBtn'))$('#histBtn').onclick=openHistory;
+    if($('#actBtn'))$('#actBtn').onclick=openActivity;
     if($('#addModel'))$('#addModel').onclick=()=>route('integrations');
-    if($('#newChat'))$('#newChat').onclick=newChat;
     if($('#newChatTop'))$('#newChatTop').onclick=newChat;
     if($('#delChat'))$('#delChat').onclick=()=>{ if(!CONV){ toast('No saved conversation to delete yet',false); return; } delConv(CONV); };
     $('#compactChat').onclick=async()=>{ if(!CONV||MSGS.length<4){ toast('Not enough conversation to compact yet',false); return; }
@@ -768,13 +873,18 @@ const VIEWS={
       const a=await api('GET','/api/agents/'+encodeURIComponent(id));
       if(!a||a.error){ toast('Could not load agent',false); return; }
       const b=a.brain||{};
+      let cat=[]; try{ cat=(await api('GET','/api/models')).catalog||[]; }catch(_){}
       $('#view').innerHTML=`<div class="max-w-3xl mx-auto">
         <button id="agentBack" class="text-xs text-slate-400 hover:text-accent inline-flex items-center gap-1 mb-3"><i data-lucide="arrow-left"></i> All agents</button>
         <div class="card p-5">
           <div class="flex items-center gap-3 mb-1">
             <div class="h-11 w-11 rounded-xl ${a.is_manager?'grad':'bg-edge'} grid place-items-center shrink-0"><i data-lucide="${a.is_manager?'crown':'bot'}" class="${a.is_manager?'text-white':'text-accent'}"></i></div>
             <div><div class="font-semibold text-lg">${esc(a.name)}</div><div class="text-xs text-slate-400">${esc(a.role||'')} · profile <span class="font-mono">${esc(a.id)}</span></div></div>
-            <span class="ml-auto pill ${b.mode==='local'?'bg-emerald-500/15 text-emerald-300':'bg-sky-500/15 text-sky-300'} inline-flex items-center gap-1" title="The model this agent runs on (from its config.yaml)."><i data-lucide="${b.mode==='local'?'lock':'cloud'}" class="text-[11px]"></i> ${esc(b.model||'—')}</span></div>
+            <label class="ml-auto flex items-center gap-1.5 text-[11px] text-slate-500"><i data-lucide="brain" class="text-[12px]"></i> Brain
+              <select id="brainPick" title="The model this agent runs on. Cloud models go live once the API key is added." class="bg-ink/70 border border-edge rounded-lg px-2 py-1.5 text-xs text-slate-200 focus:border-accent focus:outline-none max-w-[15rem]">
+                <option value="" ${!b.model_id?'selected':''}>Default (run default)</option>
+                ${cat.map(m=>`<option value="${esc(m.id)}" ${m.id===b.model_id?'selected':''}>${esc(m.label)}${m.local?'':(m.available?' ☁':' ☁ — needs key')}</option>`).join('')}
+              </select></label></div>
           <div class="text-xs text-slate-400 mt-2 mb-3">${esc(a.description||'')}</div>
           <div class="flex gap-4 text-[11px] text-slate-500 mb-4"><span><b class="text-slate-300">${a.skills}</b> skills</span><span><b class="text-slate-300">${a.memories}</b> memory entries</span><span><b class="text-slate-300">${a.sessions}</b> sessions</span></div>
           <div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1.5">SOUL.md — personality, mission, hard nos (loaded fresh each message)</div>
@@ -786,6 +896,10 @@ const VIEWS={
         </div></div>`;
       icons();
       $('#agentBack').onclick=()=>route('agents');
+      if($('#brainPick'))$('#brainPick').onchange=async e=>{
+        const r=await api('POST','/api/agents/'+encodeURIComponent(id)+'/brain',{model:e.target.value});
+        if(r&&!r.error){ const m=e.target.selectedOptions[0]; toast('Brain set → '+(m?m.textContent.trim():e.target.value)+" — used on this agent's next run"); }
+        else toast((r&&r.error&&r.error.includes('admin'))?'Owner only — admin can set brains':('Failed: '+((r&&r.error)||'')),false); };
       $('#soulSave').onclick=async()=>{ const btn=$('#soulSave'); btn.disabled=true;
         const r=await api('POST','/api/agents/'+encodeURIComponent(id)+'/soul',{soul:$('#soulEdit').value});
         if(r&&!r.error) toast("Soul saved — used on the agent's next turn");

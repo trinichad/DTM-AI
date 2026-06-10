@@ -58,8 +58,10 @@ def build_agent(cfg: Optional[Config] = None, db_path: Optional[Path] = None) ->
     agent.tasks = tasks                          # expose for the delegation API
     # Delegation worker: runs the agent loop AS the assigned profile, bound to the task's tenant,
     # local-first (allow_cloud=False) per Rule #5. Same guarded loop → every call still audited.
+    from .core.agents import get_brain_model
     agent.dispatcher = Dispatcher(
-        tasks, agent, lambda tenant, actor: make_context(tenant, actor, allow_cloud=False))
+        tasks, agent, lambda tenant, actor: make_context(tenant, actor, allow_cloud=False),
+        model_resolver=lambda profile: get_brain_model(profile, cfg))
     return agent
 
 

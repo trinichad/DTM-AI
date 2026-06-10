@@ -358,6 +358,26 @@ class ModelRouter:
                                     "context_chars": self.budget_for(prov)})
         return out
 
+    def catalog_models(self) -> list[dict[str, Any]]:
+        """The FULL model catalog (local + every cloud model), each with an `available` flag
+        (local always; cloud iff cloud_allowed AND the key is present). Used by the per-agent
+        brain picker so a Claude brain can be PRE-ASSIGNED before the API key exists — it simply
+        goes live the moment the key lands. available_models() (the chat dropdown) lists only the
+        runnable subset."""
+        out = [{"id": f"ollama:{self.local_model}", "provider": "ollama", "model": self.local_model,
+                "label": f"{self.local_model} (local)", "local": True, "available": True}]
+        cloud_ok = self.cloud_allowed()
+        for prov, (key, label, models) in CLOUD_CATALOG.items():
+            keyed = self.cfg.present(key)
+            for mid, mlabel in models:
+                out.append({"id": f"{prov}:{mid}", "provider": prov, "model": mid, "label": mlabel,
+                            "local": False, "available": bool(cloud_ok and keyed)})
+        return out
+
+    def is_catalog_model(self, model_id: str) -> bool:
+        """True iff model_id is a known catalog id (keyed or not) — for brain validation."""
+        return any(m["id"] == model_id for m in self.catalog_models())
+
     def resolve(self, model_id: Optional[str] = None):
         """Return (provider, model). Falls back to local for unknown/unauthorized cloud ids."""
         if model_id and ":" in model_id:

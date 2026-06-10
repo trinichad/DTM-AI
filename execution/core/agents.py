@@ -106,6 +106,22 @@ def _brain(cfg_path: Path) -> dict:
     return {"mode": "local" if prov == "custom" else "cloud", "model": model}
 
 
+def _brain_for(pd: Path) -> dict:
+    """A profile's brain for display: prefer the DTM-native sidecar (a single model id like
+    'anthropic:claude-opus-4-8'); else fall back to the legacy Hermes config.yaml (display only)."""
+    try:
+        mid = (pd / "brain").read_text(encoding="utf-8").strip()
+    except OSError:
+        mid = ""
+    if mid:
+        prov, _, model = mid.partition(":")
+        local = prov in ("ollama", "custom", "mock")
+        return {"mode": "local" if local else "cloud", "model": model or mid, "model_id": mid}
+    b = _brain(pd / "config.yaml")
+    b["model_id"] = None
+    return b
+
+
 def _read_one(cfg: Config, name: str) -> dict:
     pd = _profile_dir(cfg, name)
     try:
@@ -126,7 +142,7 @@ def _read_one(cfg: Config, name: str) -> dict:
         "role": _soul_field(soul, "role"),
         "description": descr,
         "is_manager": name == "default",
-        "brain": _brain(pd / "config.yaml"),
+        "brain": _brain_for(pd),
         "skills": _count_skills(pd / "skills"),
         "memories": _memory_entries(pd),
         "sessions": _count_dir_files(pd / "sessions"),
@@ -180,6 +196,36 @@ def set_soul(name: str, text: str, cfg: Optional[Config] = None) -> dict:
     (pd / "SOUL.md").write_text(text, encoding="utf-8")   # the agent loop loads it fresh next turn
     if name != "default":                 # a specialist's role/name may have changed → refresh roster
         _sync_safe(cfg)
+    return get_agent(name, cfg)
+
+
+def get_brain_model(name: str, cfg: Optional[Config] = None) -> Optional[str]:
+    """The DTM router model id this profile is pinned to (e.g. 'anthropic:claude-opus-4-8'),
+    or None to use the run's default. Read from the DTM-native sidecar `(<profile dir>)/brain`."""
+    cfg = cfg or get_config()
+    try:
+        mid = (_profile_dir(cfg, _safe(name)) / "brain").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return mid or None
+
+
+def set_brain(name: str, model_id: str, cfg: Optional[Config] = None) -> dict:
+    """Pin a profile's brain to a DTM model id, or clear it with '' / 'default'. Writes the sidecar
+    only — validating model_id against the catalog is the caller's job (it has the router)."""
+    cfg = cfg or get_config()
+    pd = _profile_dir(cfg, _safe(name))
+    if not pd.is_dir():
+        raise FileNotFoundError(f"unknown agent '{name}'")
+    mid = (model_id or "").strip()
+    sidecar = pd / "brain"
+    if not mid or mid == "default":
+        try:
+            sidecar.unlink()
+        except OSError:
+            pass
+    else:
+        sidecar.write_text(mid + "\n", encoding="utf-8")
     return get_agent(name, cfg)
 
 

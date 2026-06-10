@@ -121,6 +121,7 @@ class Api:
         if method == "GET" and path == "/api/models":
             r = self.agent.router
             return Resp(200, {"models": r.available_models(),
+                              "catalog": r.catalog_models(),
                               "context": {"history_chars": getattr(r, "history_chars", 16000),
                                           "history_msgs": getattr(r, "history_msgs", 30)}})
         if method == "GET" and path == "/api/integrations":
@@ -164,6 +165,8 @@ class Api:
             return Resp(200, a) if a else Resp(404, {"error": "unknown agent"})
         if method == "POST" and path.startswith("/api/agents/") and path.endswith("/soul"):
             return self._require_admin(role) or self._set_agent_soul(path.split("/")[3], body, user)
+        if method == "POST" and path.startswith("/api/agents/") and path.endswith("/brain"):
+            return self._require_admin(role) or self._set_agent_brain(path.split("/")[3], body, user)
         if method == "GET" and path == "/api/kanban":
             return Resp(200, self.agent.tasks.board())
         if method == "GET" and path.startswith("/api/kanban/tasks/") and len(path.split("/")) == 5:
@@ -685,6 +688,24 @@ class Api:
             return Resp(500, {"error": f"cannot write SOUL (config dir not writable?): {e}"})
         self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
                                 detail=f"agent_soul={name}")
+        return Resp(200, a)
+
+    def _set_agent_brain(self, name: str, body: dict, user: str) -> Resp:
+        """Pin (or clear) an agent's brain — the model it runs on (owner-gated; audited). Validated
+        against the FULL catalog, so a Claude brain can be set before the API key exists; it goes
+        live once the key is added. '' / 'default' clears the pin (back to the run default)."""
+        from ..core.agents import set_brain
+        model = (body.get("model") or "").strip()
+        if model and model not in ("default",) and not self.agent.router.is_catalog_model(model):
+            return Resp(400, {"error": f"unknown model '{model}'"})
+        try:
+            a = set_brain(name, model)
+        except FileNotFoundError as e:
+            return Resp(404, {"error": str(e)})
+        except (ValueError, OSError) as e:
+            return Resp(400, {"error": str(e)})
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail=f"agent_brain={name}:{model or 'default'}")
         return Resp(200, a)
 
     def _integration_fields(self, name: str) -> Resp:

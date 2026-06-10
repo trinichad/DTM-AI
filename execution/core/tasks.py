@@ -332,10 +332,14 @@ class Dispatcher:
     client-touching call still flows through dispatch() (audit, read-only floor, validation)."""
 
     def __init__(self, store: TaskStore, agent: Any,
-                 context_factory: Callable[[str, str], Any]) -> None:
+                 context_factory: Callable[[str, str], Any],
+                 model_resolver: Optional[Callable[[str], Optional[str]]] = None) -> None:
         self.store = store
         self.agent = agent
         self.ctx_factory = context_factory
+        # model_resolver(profile) -> DTM model id or None. Lets a specialist run on its own pinned
+        # brain (D: per-agent brains). Injected by the runtime so tasks.py stays free of agents.py.
+        self.model_resolver = model_resolver
 
     def dispatch(self, max_n: int = 8) -> dict:
         """Claim up to max_n ready tasks and spawn a worker thread for each. Idempotent."""
@@ -355,8 +359,13 @@ class Dispatcher:
         try:
             ctx = self.ctx_factory(task.get("tenant") or "*",
                                    f"delegation:{profile or 'unassigned'}")
+            # Run on the specialist's pinned brain, if any. A cloud brain opts THIS run into cloud
+            # (still local-first by default, Rule #5); local brains leave allow_cloud untouched.
+            model_id = self.model_resolver(profile) if (profile and self.model_resolver) else None
+            if model_id and not model_id.startswith(("ollama:", "custom:", "mock")):
+                ctx.allow_cloud = True
             msg = task["title"] + (("\n\n" + task["body"]) if task.get("body") else "")
-            turn = self.agent.chat(ctx, msg, profile=profile)
+            turn = self.agent.chat(ctx, msg, profile=profile, model_id=model_id)
             summary = (getattr(turn, "answer", "") or "").strip() or "(no answer produced)"
             self.store.finish_run(run_id, ok=True, summary=summary)
             self.store.complete_task(task["id"], result=summary)
