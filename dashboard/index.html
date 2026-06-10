@@ -1442,10 +1442,12 @@ const VIEWS={
         <div class="flex items-center gap-2 mb-2 flex-wrap">
           <span class="pill bg-amber-500/15 text-amber-300 inline-flex items-center gap-1"><i data-lucide="triangle-alert" class="text-[12px]"></i> Admin · audited</span>
           <span id="termStat" class="text-[11px] text-slate-500 inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-amber-400"></span>connecting…</span>
-          <span class="text-[11px] text-slate-500 ml-auto">Interactive shell on the server — install &amp; run <span class="font-mono text-slate-300">claude</span>, edit files, <span class="font-mono text-slate-300">sudo</span>, vim, top…</span>
+          <span class="text-[11px] text-slate-500 ml-auto hidden md:inline">Interactive shell on the server — install &amp; run <span class="font-mono text-slate-300">claude</span>, edit files, <span class="font-mono text-slate-300">sudo</span>, vim, top…</span>
+          <a id="termRecovery" target="_blank" rel="noopener" class="hbtn" title="Independent root console on :8091 — works even if the main app is down"><i data-lucide="life-buoy" class="text-[13px]"></i> Recovery console</a>
         </div>
         <div id="termHost" class="flex-1 min-h-0 rounded-xl border border-edge overflow-hidden" style="background:#0b0b10;padding:10px 0 0 14px"></div></div>`;
     icons();
+    $('#termRecovery').href='http://'+location.hostname+':8091/';   // same host, recovery port
     if(typeof Terminal==='undefined'){$('#termHost').innerHTML='<div class="p-4 text-sm text-rose-300">xterm.js failed to load (/vendor/xterm.js) — hard-refresh.</div>';return;}
     const host=$('#termHost');
     const stat=(c,t)=>{const e=$('#termStat');if(e)e.innerHTML=`<span class="h-2 w-2 rounded-full" style="background:${c}"></span>${t}`;};
