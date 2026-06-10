@@ -118,6 +118,26 @@ class Api:
             return self._require_admin(role) or self._approve(int(path.split("/")[3]), user)
         if method == "POST" and path.startswith("/api/approvals/") and path.endswith("/reject"):
             return self._require_admin(role) or self._reject(int(path.split("/")[3]), user)
+        if method == "GET" and path == "/api/credvault":
+            return self._require_admin(role) or Resp(200, self.agent.credvault.status())
+        if method == "POST" and path == "/api/credvault/passphrase":
+            return self._require_admin(role) or self._cv_passphrase(body, user)
+        if method == "POST" and path == "/api/credvault/passphrase/change":
+            return self._require_admin(role) or self._cv_change(body, user)
+        if method == "POST" and path == "/api/credvault/unlock":
+            return self._require_admin(role) or self._cv_unlock(body, user)
+        if method == "POST" and path == "/api/credvault/lock":
+            return self._require_admin(role) or self._cv_lock(user)
+        if method == "GET" and path.startswith("/api/clients/") and path.endswith("/credentials"):
+            return self._require_admin(role) or self._cv_list(path.split("/")[3])
+        if method == "POST" and path.startswith("/api/clients/") and path.endswith("/credentials"):
+            return self._require_admin(role) or self._cv_upsert(path.split("/")[3], body, user)
+        if method == "POST" and path.startswith("/api/clients/") and path.endswith("/test") \
+                and "/credentials/" in path and len(path.split("/")) == 7:
+            return self._require_admin(role) or self._cv_test(path.split("/")[3], path.split("/")[5], body)
+        if method == "DELETE" and path.startswith("/api/clients/") and "/credentials/" in path \
+                and len(path.split("/")) == 6:
+            return self._require_admin(role) or self._cv_delete(path.split("/")[3], path.split("/")[5], user)
         if method == "POST" and path == "/api/branding/logo":
             return self._require_admin(role) or self._set_logo(body, user)
         if method == "DELETE" and path == "/api/branding/logo":
@@ -770,6 +790,88 @@ class Api:
                                 detail=f"agent_soul={name}")
         return Resp(200, a)
 
+    # ── credential vault (D-25) — admin-only; secrets never returned raw; mutations + unlock audited ──
+    def _cv_passphrase(self, body: dict, user: str) -> Resp:
+        try:
+            self.agent.credvault.set_passphrase(body.get("passphrase") or "")
+        except ValueError as e:
+            return Resp(400, {"error": str(e)})
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change", detail="credvault_init")
+        return Resp(200, self.agent.credvault.status())
+
+    def _cv_change(self, body: dict, user: str) -> Resp:
+        try:
+            self.agent.credvault.change_passphrase(body.get("old") or "", body.get("new") or "")
+        except ValueError as e:
+            return Resp(400, {"error": str(e)})
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change",
+                                detail="credvault_passphrase_change")
+        return Resp(200, self.agent.credvault.status())
+
+    def _cv_unlock(self, body: dict, user: str) -> Resp:
+        try:
+            ok = self.agent.credvault.unlock(body.get("passphrase") or "")
+        except ValueError as e:
+            return Resp(400, {"error": str(e)})
+        self.agent.audit.record(actor=user, tenant_id="*", action="credential_view",
+                                detail=f"credvault_unlock ok={ok}", result_ok=ok)
+        if not ok:
+            return Resp(401, {"error": "incorrect passphrase"})
+        return Resp(200, self.agent.credvault.status())
+
+    def _cv_lock(self, user: str) -> Resp:
+        self.agent.credvault.lock()
+        self.agent.audit.record(actor=user, tenant_id="*", action="config_change", detail="credvault_lock")
+        return Resp(200, self.agent.credvault.status())
+
+    def _cv_list(self, tenant: str) -> Resp:
+        from ..core.credvault import VaultLocked
+        try:
+            return Resp(200, {"tenant": tenant, "credentials": self.agent.credvault.admin_list(tenant)})
+        except VaultLocked as e:
+            return Resp(423, {"error": str(e), "locked": True})
+
+    def _cv_upsert(self, tenant: str, body: dict, user: str) -> Resp:
+        from ..core.credvault import VaultLocked
+        fields = body.get("fields")
+        if not isinstance(fields, dict):
+            return Resp(400, {"error": "fields object required"})
+        try:
+            r = self.agent.credvault.upsert(tenant, body.get("label") or "", fields,
+                                            notes=body.get("notes") or "", actor=user)
+        except VaultLocked as e:
+            return Resp(423, {"error": str(e), "locked": True})
+        except ValueError as e:
+            return Resp(400, {"error": str(e)})
+        self.agent.audit.record(actor=user, tenant_id=tenant, action="config_change",
+                                detail=f"credential_set={r['label']}")   # never the value
+        return Resp(200, r)
+
+    def _cv_delete(self, tenant: str, label: str, user: str) -> Resp:
+        from ..core.credvault import VaultLocked
+        try:
+            r = self.agent.credvault.delete(tenant, label)
+        except VaultLocked as e:
+            return Resp(423, {"error": str(e), "locked": True})
+        except ValueError as e:
+            return Resp(404, {"error": str(e)})
+        self.agent.audit.record(actor=user, tenant_id=tenant, action="config_change",
+                                detail=f"credential_delete={label}")
+        return Resp(200, r)
+
+    def _cv_test(self, tenant: str, label: str, body: dict) -> Resp:
+        """Owner 'does the append work' check — reports a fingerprint, never the value."""
+        from ..core.credvault import AppendRequired, VaultLocked
+        try:
+            return Resp(200, self.agent.credvault.test_assemble(
+                tenant, label, start=body.get("start") or "", end=body.get("end") or ""))
+        except AppendRequired as e:
+            return Resp(200, {"ok": False, "append_required": e.need, "label": label})
+        except VaultLocked as e:
+            return Resp(423, {"error": str(e), "locked": True})
+        except ValueError as e:
+            return Resp(404, {"error": str(e)})
+
     # ── branding — owner logo for the sidebar + login screen (admin-managed, publicly visible) ──
     _LOGO_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg")
     _LOGO_MAX = 2 * 1024 * 1024
@@ -1369,7 +1471,7 @@ class Api:
         ctx = ToolContext(tenant_id=tenant, actor=user,
                           allow_cloud=bool(model_id and not model_id.startswith("ollama:")),
                           client_factory=get_client_factory(),
-                          _meta={"tasks": self.agent.tasks})   # lets schedule_task reach the board
+                          _meta={"tasks": self.agent.tasks, "credvault": self.agent.credvault})
         # Server-side history is authoritative (the browser no longer holds the transcript).
         history = convs.history(user, conv_id)
         convs.add_message(user, conv_id, "user", message)
@@ -1418,7 +1520,7 @@ class Api:
                     tenant_id=tenant, actor=user,
                     allow_cloud=bool(model_id and not model_id.startswith("ollama:")),
                     client_factory=get_client_factory(),
-                    _meta={"tasks": self.agent.tasks})   # lets schedule_task reach the board
+                    _meta={"tasks": self.agent.tasks, "credvault": self.agent.credvault})
                 result["turn"] = self.agent.chat_stream(
                     ctx, message, lambda e: q.put(e), model_id=model_id, history=prior,
                     profile=body.get("agent") or body.get("profile"))

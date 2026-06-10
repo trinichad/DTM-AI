@@ -56,6 +56,8 @@ def build_agent(cfg: Optional[Config] = None, db_path: Optional[Path] = None) ->
     agent.approvals = approvals                  # expose for the approval API + agent dispatch
     agent.conversations = conversations          # expose for the chat-history API
     agent.tasks = tasks                          # expose for the delegation API
+    from .core.credvault import CredVault
+    agent.credvault = CredVault(cfg)             # encrypted per-client credential vault (D-25)
     # Delegation worker: runs the agent loop AS the assigned profile, bound to the task's tenant,
     # local-first (allow_cloud=False) per Rule #5. Same guarded loop → every call still audited.
     from .core.agents import get_brain_model

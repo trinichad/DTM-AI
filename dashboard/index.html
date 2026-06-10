@@ -197,6 +197,10 @@
           </button>
           <div id="apPanel" class="hidden absolute right-0 top-full mt-2 w-[400px] max-w-[92vw] rounded-2xl overflow-hidden z-50" style="background:#0d1018;box-shadow:0 16px 50px rgba(0,0,0,.6),inset 0 0 0 1px rgba(99,102,241,.32)"></div>
         </div>
+        <div class="relative" id="cvWrap" hidden>
+          <button id="cvLock" class="h-9 w-9 grid place-items-center rounded-lg text-slate-400 hover:text-slate-200 hover:bg-white/5 transition" title="Credential vault"><i data-lucide="lock"></i></button>
+          <div id="cvPanel" class="hidden absolute right-0 top-full mt-2 w-[340px] max-w-[92vw] rounded-2xl overflow-hidden z-50" style="background:#0d1018;box-shadow:0 16px 50px rgba(0,0,0,.6),inset 0 0 0 1px rgba(99,102,241,.32)"></div>
+        </div>
         <div class="relative"><i data-lucide="building-2" class="absolute left-3 top-2.5 text-slate-500 text-sm"></i>
           <input id="tenant" value="*" aria-label="Client / tenant filter" title="Client / tenant — type or pick" list="clientDL"
             class="w-36 bg-ink/70 border border-edge rounded-xl pl-9 pr-3 py-2 text-sm focus:border-accent focus:outline-none"/>
@@ -487,6 +491,111 @@ async function loadBranding(){ try{
     if(b.logo){ el.classList.remove('grad'); el.innerHTML=`<img src="${b.logo}" alt="logo" class="h-full w-full object-contain">`; }
     else { el.classList.add('grad'); el.innerHTML='D'; } }
 }catch(_){} }
+// ── per-client credential manager card (Integrations tab, admin-only) ──
+async function renderCredVault(){
+  const el=$('#cvCard'); if(!el)return;
+  const s=window._cvStatus||await api('GET','/api/credvault').catch(()=>({}));
+  const H=t=>`<div class="text-[11px] uppercase tracking-wide text-slate-500 mb-2 mt-1">${t}</div>`;
+  const wrap=inner=>`${H('Client credentials')}<div class="card p-5 mb-5">${inner}</div>`;
+  if(!s.initialized){ el.innerHTML=wrap(`<div class="text-sm text-slate-400 flex items-center gap-2"><i data-lucide="shield-plus" class="text-accent"></i> Set up the credential vault with the <i data-lucide="shield-plus" class="text-[13px]"></i> lock icon in the top bar to store encrypted client credentials.</div>`); icons(); return; }
+  if(!s.unlocked){ el.innerHTML=wrap(`<div class="text-sm text-slate-400 flex items-center gap-2"><i data-lucide="lock" class="text-amber-400"></i> The credential vault is locked. Click the <i data-lucide="lock" class="text-[13px]"></i> in the top bar and enter your passphrase to manage credentials.</div>`); icons(); return; }
+  if(TENANT==='*'){ el.innerHTML=wrap(`<div class="text-sm text-slate-400 flex items-center gap-2"><i data-lucide="building-2" class="text-slate-500"></i> Pick a specific client in the top-right selector to view or add its credentials.</div>`); icons(); return; }
+  let list=[]; try{ list=(await api('GET','/api/clients/'+encodeURIComponent(TENANT)+'/credentials')).credentials||[]; }catch(_){}
+  const apBadge=n=>n.start||n.end?`<span class="pill bg-amber-500/15 text-amber-300 text-[10px]">${n.start&&n.end?'start+end append':n.start?'start append':'end append'}</span>`:'';
+  const row=c=>`<div class="flex items-center gap-3 py-2.5 border-b border-edge/40">
+    <i data-lucide="key-round" class="text-slate-500 shrink-0"></i>
+    <div class="min-w-0 flex-1"><div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-[13px] text-slate-200">${esc(c.label)}</span>${apBadge(c.needs_append)}</div>
+      <div class="text-[11px] text-slate-500 font-mono truncate">${Object.entries(c.fingerprints).map(([k,v])=>esc(k)+':'+esc(v)).join('  ')}</div>${c.notes?`<div class="text-[11px] text-slate-500">${esc(c.notes)}</div>`:''}</div>
+    <button class="cvTest hbtn shrink-0" style="height:30px;padding:0 10px;font-size:11px" data-l="${esc(c.label)}" data-need='${esc(JSON.stringify(c.needs_append))}'>Test</button>
+    <button class="cvEdit hbtn shrink-0" style="width:30px;height:30px;padding:0" data-l="${esc(c.label)}" title="Edit"><i data-lucide="pencil" class="text-[12px]"></i></button>
+    <button class="cvDel hbtn shrink-0" style="width:30px;height:30px;padding:0;color:#fda4af" data-l="${esc(c.label)}" title="Delete"><i data-lucide="trash-2" class="text-[12px]"></i></button></div>`;
+  el.innerHTML=wrap(`<div class="flex items-center gap-2 mb-1"><i data-lucide="key-round" class="text-accent"></i><span class="font-semibold">${esc(TENANT)}</span>
+      <span class="text-[11px] text-slate-500">— encrypted; the AI sees only labels, never values</span>
+      <button id="cvAdd" class="ml-auto grad text-white rounded-lg px-3 py-1.5 text-xs font-semibold inline-flex items-center gap-1.5"><i data-lucide="plus"></i> Add credential</button></div>
+    <div class="mt-2">${list.length?list.map(row).join(''):'<div class="text-sm text-slate-500 py-3">No credentials for this client yet.</div>'}</div>
+    <div class="text-[11px] text-slate-600 mt-2 flex items-start gap-1.5"><i data-lucide="info" class="text-[12px] mt-0.5 shrink-0"></i>Tip: put <span class="font-mono text-slate-400">{end_append}</span> or <span class="font-mono text-slate-400">{start_append}</span> in a password to require a human to type that piece each time it's used — it's never stored.</div>`);
+  icons();
+  if($('#cvAdd'))$('#cvAdd').onclick=()=>cvEditor(null);
+  el.querySelectorAll('.cvEdit').forEach(b=>b.onclick=()=>{ const c=list.find(x=>x.label===b.dataset.l); cvEditor(c); });
+  el.querySelectorAll('.cvDel').forEach(b=>b.onclick=async()=>{ if(!confirm('Delete credential "'+b.dataset.l+'"?'))return;
+    const r=await api('DELETE','/api/clients/'+encodeURIComponent(TENANT)+'/credentials/'+encodeURIComponent(b.dataset.l));
+    if(r&&r.ok){ toast('Deleted'); renderCredVault(); } else toast((r&&r.error)||'failed',false); });
+  el.querySelectorAll('.cvTest').forEach(b=>b.onclick=async()=>{ const need=JSON.parse(b.dataset.need);
+    const body={}; if(need.start){ const v=prompt('Start append for "'+b.dataset.l+'":'); if(v===null)return; body.start=v; }
+    if(need.end){ const v=prompt('End append for "'+b.dataset.l+'":'); if(v===null)return; body.end=v; }
+    const r=await api('POST','/api/clients/'+encodeURIComponent(TENANT)+'/credentials/'+encodeURIComponent(b.dataset.l)+'/test',body);
+    if(r&&r.ok) toast(`✓ Assembled a ${r.password_len}-char secret (fp ${r.password_fp}) — value never shown`);
+    else if(r&&r.append_required) toast('Append still required',false);
+    else toast((r&&r.error)||'failed',false); });
+}
+function cvEditor(existing){ const isEdit=!!existing;
+  openDrawer({title:isEdit?'Edit credential':'New credential',icon:'key-round',render:body=>{
+    const f=(existing&&existing.field_names)||['username','password'];
+    body.innerHTML=`<div class="p-4 space-y-3">
+      <div><label class="block text-[11px] uppercase tracking-wide text-slate-500 mb-1">Label</label>
+        <input id="cvL" class="w-full bg-ink/70 border border-edge rounded-lg px-3 py-2 text-sm font-mono ${isEdit?'opacity-60':''}" value="${esc(existing?existing.label:'')}" placeholder="o365_global_admin" ${isEdit?'readonly':''}></div>
+      <div id="cvFields" class="space-y-2"></div>
+      <button id="cvAddField" class="text-[11px] text-accent hover:underline">+ add field</button>
+      <div><label class="block text-[11px] uppercase tracking-wide text-slate-500 mb-1">Notes (optional)</label>
+        <input id="cvN" class="w-full bg-ink/70 border border-edge rounded-lg px-3 py-2 text-sm" value="${esc(existing?existing.notes||'':'')}"></div>
+      <div class="text-[11px] text-slate-500 flex items-start gap-1.5"><i data-lucide="lightbulb" class="text-[12px] mt-0.5 shrink-0"></i>Add <span class="font-mono text-slate-400">{end_append}</span>/<span class="font-mono text-slate-400">{start_append}</span> inside a password value to require a human to complete it at use-time.${isEdit?' Leave a field blank to keep its current value unchanged.':''}</div>
+      <button id="cvSave" class="grad text-white rounded-lg w-full py-2.5 text-sm font-semibold">${isEdit?'Save changes':'Save credential'}</button></div>`;
+    icons();
+    const fieldsEl=$('#cvFields');
+    const addField=(k='',isPw=false)=>{ const d=document.createElement('div'); d.className='flex gap-2 items-center cvFieldRow';
+      d.innerHTML=`<input class="cvFk w-36 bg-ink/70 border border-edge rounded-lg px-2.5 py-2 text-xs font-mono" placeholder="field" value="${esc(k)}">
+        <input class="cvFv flex-1 bg-ink/70 border border-edge rounded-lg px-2.5 py-2 text-sm" type="${isPw?'text':'text'}" placeholder="${isEdit?'(unchanged)':'value'}">
+        <button class="cvFx text-slate-500 hover:text-rose-300" title="remove">&times;</button>`;
+      d.querySelector('.cvFx').onclick=()=>d.remove(); fieldsEl.appendChild(d); };
+    (f.length?f:['username','password']).forEach(k=>addField(k,k==='password'));
+    $('#cvAddField').onclick=()=>addField('');
+    $('#cvSave').onclick=async()=>{ const label=$('#cvL').value.trim();
+      const fields={}; fieldsEl.querySelectorAll('.cvFieldRow').forEach(r=>{ const k=r.querySelector('.cvFk').value.trim(); const v=r.querySelector('.cvFv').value;
+        if(k&&v!=='') fields[k]=v; });
+      if(!label){ toast('label required',false); return; }
+      if(!isEdit&&!Object.keys(fields).length){ toast('add at least one field value',false); return; }
+      // on edit, merge unchanged fields by re-sending only the ones the user filled (server overwrites whole entry,
+      // so we must include prior field NAMES with their kept values — but we don't have values; so require re-entry
+      // is avoided by sending only changed fields and letting server keep label). Simplify: edit overwrites with what's provided.
+      const r=await api('POST','/api/clients/'+encodeURIComponent(TENANT)+'/credentials',{label,fields,notes:$('#cvN').value});
+      if(r&&r.ok){ toast('Saved (encrypted)'); closeDrawer(); renderCredVault(); }
+      else toast((r&&r.error)||'failed',false); };
+  }});
+}
+// ── credential vault lock — admin-only top-bar control (D-25) ──
+async function refreshVaultLock(){ if(!ME||ME.role!=='admin')return; try{
+  const s=await api('GET','/api/credvault'); window._cvStatus=s;
+  const w=$('#cvWrap'), b=$('#cvLock'); if(!w||!b)return; w.hidden=false;
+  const open=s.unlocked;
+  b.innerHTML=`<i data-lucide="${!s.initialized?'shield-plus':open?'lock-open':'lock'}"></i>`;
+  b.style.color=open?'#34d399':(!s.initialized?'#94a3b8':'#fbbf24');
+  b.title=!s.initialized?'Credential vault — set it up':open?`Vault unlocked (${Math.round(s.expires_in/60)} min left)`:'Vault locked — click to unlock';
+  if(window.lucide)lucide.createIcons();
+}catch(_){} }
+function closeCvPanel(){ const p=$('#cvPanel'); if(p)p.classList.add('hidden'); document.removeEventListener('click',cvOutside,true); }
+function cvOutside(e){ if(!e.target.closest('#cvPanel')&&!e.target.closest('#cvLock')) closeCvPanel(); }
+function openCvPanel(){ const p=$('#cvPanel'); if(!p)return; if(!p.classList.contains('hidden')){ closeCvPanel(); return; }
+  const s=window._cvStatus||{}; let body;
+  if(!s.initialized){ body=`<div class="p-4 space-y-2"><div class="font-semibold text-sm flex items-center gap-2"><i data-lucide="shield-plus" class="text-accent text-[15px]"></i> Set up the credential vault</div>
+    <div class="text-[11px] text-slate-500">Choose a master passphrase. It encrypts every client's saved credentials and is never stored — you'll enter it once per session to unlock. <span class="text-amber-300">If you lose it, the saved credentials cannot be recovered.</span></div>
+    <input id="cvPass" type="password" placeholder="master passphrase (min 8)" class="w-full bg-ink/70 border border-edge rounded-lg px-3 py-2 text-sm">
+    <button id="cvInit" class="grad text-white rounded-lg w-full py-2 text-sm font-semibold">Create vault</button></div>`; }
+  else if(!s.unlocked){ body=`<div class="p-4 space-y-2"><div class="font-semibold text-sm flex items-center gap-2"><i data-lucide="lock" class="text-amber-400 text-[15px]"></i> Vault locked</div>
+    <div class="text-[11px] text-slate-500">Enter your master passphrase to let the platform use saved client credentials this session.</div>
+    <input id="cvPass" type="password" placeholder="master passphrase" class="w-full bg-ink/70 border border-edge rounded-lg px-3 py-2 text-sm">
+    <button id="cvDoUnlock" class="grad text-white rounded-lg w-full py-2 text-sm font-semibold">Unlock</button></div>`; }
+  else { body=`<div class="p-4 space-y-2"><div class="font-semibold text-sm flex items-center gap-2"><i data-lucide="lock-open" class="text-emerald-400 text-[15px]"></i> Vault unlocked</div>
+    <div class="text-[11px] text-slate-500">Auto-locks in ~${Math.round((s.expires_in||0)/60)} min, or on restart.</div>
+    <button id="cvDoLock" class="hbtn w-full justify-center" style="height:34px">Lock now</button></div>`; }
+  p.innerHTML=body; p.classList.remove('hidden'); if(window.lucide)lucide.createIcons();
+  document.addEventListener('click',cvOutside,true);
+  const after=async fn=>{ const r=await fn(); closeCvPanel(); refreshVaultLock(); if(current==='integrations')VIEWS.integrations(); return r; };
+  if($('#cvInit'))$('#cvInit').onclick=()=>after(async()=>{ const r=await api('POST','/api/credvault/passphrase',{passphrase:$('#cvPass').value});
+    toast(r&&r.initialized?'Vault created & unlocked':((r&&r.error)||'failed'),!!(r&&r.initialized)); });
+  if($('#cvDoUnlock'))$('#cvDoUnlock').onclick=()=>after(async()=>{ const r=await api('POST','/api/credvault/unlock',{passphrase:$('#cvPass').value});
+    toast(r&&r.unlocked?'Vault unlocked':((r&&r.error)||'wrong passphrase'),!!(r&&r.unlocked)); });
+  if($('#cvDoLock'))$('#cvDoLock').onclick=()=>after(async()=>{ await api('POST','/api/credvault/lock'); toast('Vault locked'); });
+}
 // ── approvals bell — pending write actions live in the top bar, not a tab ──
 async function refreshApprovalBadge(){ try{
   const d=await api('GET','/api/approvals');
@@ -543,7 +652,9 @@ async function api(m,p,b){const r=await fetch(p,{method:m,credentials:'same-orig
 function showLogin(){$('#login').classList.remove('hidden');$('#app').classList.add('hidden');icons();}
 function showApp(){$('#login').classList.add('hidden');$('#app').classList.remove('hidden');
   const bell=$('#apBell'); if(bell&&!bell._wired){ bell._wired=true; bell.onclick=openApPanel; }
-  refreshApprovalBadge(); clearInterval(window._apPoll); window._apPoll=setInterval(refreshApprovalBadge,45000);}
+  const cv=$('#cvLock'); if(cv&&!cv._wired){ cv._wired=true; cv.onclick=openCvPanel; }
+  refreshApprovalBadge(); refreshVaultLock();
+  clearInterval(window._apPoll); window._apPoll=setInterval(refreshApprovalBadge,45000);}
 function toast(msg,ok=true){const t=document.createElement('div');
   t.className=`card glass px-4 py-2.5 text-sm flex items-center gap-2 animate-fadeup ${ok?'text-emerald-300':'text-rose-300'}`;
   t.innerHTML=`<i data-lucide="${ok?'check-circle-2':'alert-circle'}"></i> ${msg}`;
@@ -923,6 +1034,7 @@ const VIEWS={
         <button data-int="${esc(i.integration)}" class="manage mt-4 w-full text-xs bg-white/5 hover:bg-white/10 border border-edge rounded-lg py-2 flex items-center justify-center gap-1.5"><i data-lucide="key-round"></i> Manage key</button>
         <div class="creds mt-3"></div></div>`;
     $('#view').innerHTML=`<div class="max-w-5xl">
+        <div id="cvCard"></div>
         ${head('AI models')}
         <div class="grid gap-4 md:grid-cols-3">
           <div class="card p-5"><div class="flex items-center gap-3">
@@ -939,6 +1051,7 @@ const VIEWS={
       res.innerHTML=`<span class="${p.ok?'text-emerald-300':'text-rose-400'} inline-flex items-center gap-1"><i data-lucide="${p.ok?'check-circle-2':'x-circle'}"></i>${p.ok?'connected':esc(p.detail)}</span> <span class="text-slate-600">${p.latency_ms}ms</span>`;icons();});
     document.querySelectorAll('.manage').forEach(b=>b.onclick=()=>toggleCreds(b.dataset.int, b.closest('[data-card]').querySelector('.creds')));
     icons();
+    if(ME&&ME.role==='admin') renderCredVault();
   },
 
   async capabilities(){

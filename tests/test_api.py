@@ -431,3 +431,57 @@ class Branding(unittest.TestCase):
                                 user="admin").status, 400)
         self.H("DELETE", "/api/branding/logo", user="admin")
         self.assertIsNone(self.H("GET", "/api/branding").payload["logo"])
+
+
+class CredVaultApi(unittest.TestCase):
+    """Vault routes — admin gating, lifecycle, value never returned raw."""
+
+    def setUp(self):
+        import tempfile as _tf, os
+        self.tmp = _tf.TemporaryDirectory()
+        db = Path(self.tmp.name) / "w.db"
+        self._prev = os.environ.get("DTM_VAULT_PATH"); os.environ["DTM_VAULT_PATH"] = self.tmp.name
+        self.agent = build_agent(db_path=db)
+        self.auth = AuthStore(db); self.auth.ensure_admin("secret")
+        self.api = Api(self.agent, self.auth, SessionSigner(secret=b"0" * 32))
+
+    def tearDown(self):
+        import os
+        if self._prev is None: os.environ.pop("DTM_VAULT_PATH", None)
+        else: os.environ["DTM_VAULT_PATH"] = self._prev
+        self.auth.close(); self.tmp.cleanup()
+
+    def H(self, m, p, b=None, user="admin"):
+        return self.api.handle(m, p, {}, b or {}, user)
+
+    def test_lifecycle_and_no_raw_values(self):
+        self.assertFalse(self.H("GET", "/api/credvault").payload["initialized"])
+        self.assertEqual(self.H("POST", "/api/credvault/passphrase", {"passphrase": "longenough1"}).status, 200)
+        self.assertTrue(self.H("GET", "/api/credvault").payload["unlocked"])
+        # add a cred with an end-append
+        r = self.H("POST", "/api/clients/acme/credentials",
+                   {"label": "o365_global_admin",
+                    "fields": {"username": "admin@acme.com", "password": "Password123{end_append}"}})
+        self.assertEqual(r.status, 200, r.payload)
+        lst = self.H("GET", "/api/clients/acme/credentials").payload["credentials"]
+        self.assertEqual(lst[0]["label"], "o365_global_admin")
+        self.assertNotIn("Password123", str(lst))                # fingerprints only
+        self.assertTrue(lst[0]["needs_append"]["end"])
+        # test-assemble: append required, then provided → fingerprint not value
+        self.assertTrue(self.H("POST", "/api/clients/acme/credentials/o365_global_admin/test",
+                               {}).payload["append_required"]["end"])
+        t = self.H("POST", "/api/clients/acme/credentials/o365_global_admin/test", {"end": "!x"})
+        self.assertEqual(t.payload["password_len"], len("Password123!x"))
+        self.assertNotIn("Password123", str(t.payload))
+        # lock → reads now 423
+        self.H("POST", "/api/credvault/lock")
+        self.assertEqual(self.H("GET", "/api/clients/acme/credentials").status, 423)
+        # delete after unlock
+        self.H("POST", "/api/credvault/unlock", {"passphrase": "longenough1"})
+        self.assertEqual(self.H("DELETE", "/api/clients/acme/credentials/o365_global_admin").status, 200)
+
+    def test_non_admin_blocked(self):
+        self.auth.create_user("tech", "pw12345678", role="user")
+        for m, p in (("GET", "/api/credvault"), ("POST", "/api/credvault/unlock"),
+                     ("GET", "/api/clients/acme/credentials"), ("POST", "/api/clients/acme/credentials")):
+            self.assertEqual(self.H(m, p, user="tech").status, 403, p)

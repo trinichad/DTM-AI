@@ -312,3 +312,26 @@ couldn't answer "what exactly was requested?" when reviewing the log — a hash 
 Trade-off accepted on an owner-controlled box: keep the hash (integrity), add a capped JSON copy of the
 args (readability), shown in the Audit tab's click-through detail. Results are still NOT archived —
 outcome remains ok/error + detail/error text. Older rows show "not recorded".
+
+## Encrypted per-client credential vault + human append (2026-06-10)
+
+**D-25 — Per-client, encrypted, label-addressed credential vault that the AGENT can USE but never READ.**
+Owner-authorized extension toward the write phase (the owner explicitly approved this; it remains behind
+the Capability Console enable/disable + approval gate, and no live connector ships in this build).
+- **Crypto:** AES via `cryptography` Fernet. Key derived from a MASTER PASSPHRASE (stdlib
+  `hashlib.scrypt`, per-vault random salt stored plaintext — salt isn't secret). The derived key lives
+  ONLY in process memory after `unlock(passphrase)`, with a TTL (default 8h) + manual lock; never written
+  to disk. Vault starts LOCKED after a restart. A small encrypted verifier proves the passphrase.
+- **Storage:** `<vault>/clients/<tenant>/credentials.enc` (Fernet blob of JSON); vault meta
+  (`<vault>/clients/.credvault.json`) holds salt + KDF params + verifier. 0600.
+- **Use-but-not-read (the core invariant):** the agent only ever sees LABELS + field NAMES +
+  append-required flags via the read tool `client_credentials` — NEVER values. Secrets are resolved
+  SERVER-SIDE (`CredVault.resolve`) and injected into an outbound connection by a future connector; they
+  never enter the LLM context, a tool result, or the chat. Mirrors how vendor API keys already work.
+- **Human append (split secret):** a stored password may contain `{start_append}` / `{end_append}`
+  placeholders. `resolve()` refuses to assemble until a human supplies the missing piece at use-time
+  (prompt mechanism, like approvals). The append is NEVER stored and NEVER shown to the agent — so a full
+  compromise of the encrypted file AND its key still yields an incomplete secret.
+- **Amends:** §3 Rule #1 read-only floor (owner-approved write path, gated); I-3 (adds an encrypted
+  at-rest store beyond file-perms). UI shows fingerprints only (I-3). Every cred mutation + unlock/lock +
+  resolve is audited.
