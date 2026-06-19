@@ -1,0 +1,73 @@
+# ── MSP AI ⇄ Hermes wiring ────────────────────────────────────────────────────
+# Paste this under the top-level `mcp_servers:` key in ~/.hermes/config.yaml.
+# Each entry = ONE MSP AI client (tenant), launched as a tenant-bound MCP server.
+# Hermes namespaces the tools as  mcp_<server>_<tool>  e.g. mcp_mspai_acme_kaseya_list_assets.
+#
+# WHY per-client entries: the MCP server is bound to one tenant and ignores any
+# tenant in tool args (the fence). One entry per client = tenant isolation at the
+# Hermes layer too. Add a `mspai_<client>` block per managed client.
+#
+# After editing, run  /reload-mcp  inside Hermes (no restart needed).
+
+mcp_servers:
+
+  mspai_acme:                                   # <-- one client; copy per client
+    command: /opt/msp-ai/deploy/hermes/msp-ai-mcp.sh
+    args: ["--tenant", "acme"]                # the MSP AI tenant id for this client
+    enabled: true
+    timeout: 120
+    connect_timeout: 30
+    tools:
+      # Whitelist exactly the guarded MSP AI tools Hermes may call. `include` wins.
+      # (Everything still passes through MSP AI dispatch(): read-only by default,
+      #  capability/approval/tenant/audit all enforced regardless of Hermes.)
+      include:
+        # scoped generic read connectors — let Hermes compose ANY allow-listed read
+        # into learned skills with zero new code (the primitive layer, D-15):
+        - kaseya_read
+        - cylance_read
+        - huntress_read
+        # curated/slimmed convenience reads:
+        - system_health
+        - kaseya_list_assets
+        - kaseya_get_asset
+        - cylance_list_devices
+        - cylance_list_threats
+        - huntress_list_agents
+        - huntress_list_incidents
+        # knowledge + memory:
+        - kb_search
+        - memory_read
+        - memory_note
+      resources: false
+      prompts: false
+
+  # mspai_globex:
+  #   command: /opt/msp-ai/deploy/hermes/msp-ai-mcp.sh
+  #   args: ["--tenant", "globex"]
+  #   enabled: true
+  #   tools: { include: [system_health, kaseya_list_assets, kb_search, memory_read, memory_note] }
+
+  # Cross-client read-only view (use sparingly; reads only, no tenant-specific writes):
+  # mspai_all:
+  #   command: /opt/msp-ai/deploy/hermes/msp-ai-mcp.sh
+  #   args: ["--tenant", "*"]
+  #   tools: { include: [system_health, kb_search] }
+
+# ── HTTP form (use when Hermes runs INSIDE a container — D-17) ─────────────────
+# The MCP server runs on the HOST (as msp-ai, with creds):
+#     MSPAI_MCP_TOKEN=<token> python3 -m execution.mcp_server --transport http \
+#         --host 172.17.0.1 --port 8089          # bind the docker bridge IP, NOT 0.0.0.0
+# Run the container with:  --add-host=host.docker.internal:host-gateway
+# Then the tenant is bound by the URL PATH (the fence) — one `url:` entry per client:
+#
+#   mspai_acme:
+#     url: http://host.docker.internal:8089/mcp/acme   # /mcp/<tenant>  → that client
+#     enabled: true
+#     headers:
+#       Authorization: "Bearer ${MSPAI_MCP_TOKEN}"       # required iff the host set MSPAI_MCP_TOKEN
+#     tools:
+#       include: [kaseya_read, cylance_read, huntress_read, system_health, kb_search,
+#                 memory_read, memory_note]
+#
+#   # mspai_all:  url: http://host.docker.internal:8089/mcp        # /mcp → tenant "*"

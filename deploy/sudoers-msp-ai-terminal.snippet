@@ -1,0 +1,11 @@
+# D-22 — full passwordless root for the msp-ai service user, so the admin Terminal can run `sudo <anything>`.
+#
+# Install (run as root, ONE line at a time):
+#   sudo cp /opt/msp-ai/deploy/sudoers-msp-ai-terminal.snippet /etc/sudoers.d/msp-ai-terminal
+#   sudo chmod 0440 /etc/sudoers.d/msp-ai-terminal
+#   sudo visudo -c            # must print: /etc/sudoers.d/msp-ai-terminal: parsed OK
+#
+# ⚠ This grants the web-service user UNRESTRICTED root via sudo. Combined with the un-sandbox drop-in,
+#   the admin Terminal can change anything on the box. A stolen admin session = full server takeover.
+#   Remove with:  sudo rm /etc/sudoers.d/msp-ai-terminal
+msp-ai ALL=(ALL) NOPASSWD: ALL

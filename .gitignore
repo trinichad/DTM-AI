@@ -1,0 +1,53 @@
+# Secrets — NEVER commit (Invariant I-3)
+.env
+.env.*
+!.env.example
+*.secret
+.session_secret
+secrets/
+*.pem
+*.key
+
+# Databases & local state
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Dashboard live snapshots (may contain client data)
+dashboard/**/live-data.json
+.tmp/
+*.log
+
+# Vault — per-client memory + KB docs are client data; never commit
+vault/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# Node / dashboard
+node_modules/
+dist/
+.vite/
+.DS_Store
+secrets.local
+
+# AI-drafted tool candidates (sandbox) — never auto-live
+skills_candidate/*.py
+dashboard/vendor/logo.*
+vault/clients/**/credentials.enc
+vault/clients/.credvault.json
+
+# ── Deployment-specific real data — kept LOCAL, never committed (generic product) ──
+# Living agent/project state (decisions/progress/findings) — per-deployment, holds client/people refs
+memory/*.md
+!memory/README.md
+# Client-specific skills (scoped to one client's environment)
+execution/skills/kaseya_rho_property_setup.py

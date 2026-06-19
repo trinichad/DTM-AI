@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "msp-ai-dashboard",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "execution.web", "--port", "8099", "--hermes-skills-dir", "examples/hermes-skills"],
+      "port": 8099
+    }
+  ]
+}

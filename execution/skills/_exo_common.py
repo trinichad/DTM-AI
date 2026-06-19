@@ -1,0 +1,71 @@
+"""Shared plumbing for the Exchange Online skills (D-55; SOP: exchange-online).
+
+No NAME attribute → the registry skips this module (I-1); it is a library, not a tool.
+The pattern every EXO write skill follows (D-43 lesson — never report an unverified write):
+  preflight Get-Mailbox (exists, resolves to EXACTLY one) → Set-Mailbox → re-read → compare.
+"""
+from __future__ import annotations
+
+from typing import Any, Optional
+
+
+def err(r: Any) -> str:
+    return str(r.get("error")) if isinstance(r, dict) and r.get("error") else ""
+
+
+def is_not_found(e: str) -> bool:
+    return bool(e) and ("NotFound" in e or "couldn't be found" in e)
+
+
+def get_one_mailbox(exo, identity: str) -> tuple[Optional[dict], Optional[dict]]:
+    """Resolve `identity` to exactly one mailbox. Returns (mailbox, None) or (None, error_dict)."""
+    identity = (identity or "").strip()
+    if not identity:
+        return None, {"ok": False, "error": "no mailbox identity given"}
+    r = exo.invoke("Get-Mailbox", {"Identity": identity})
+    e = err(r)
+    if e:
+        if is_not_found(e):
+            return None, {"ok": False, "error": f"no mailbox '{identity}' found"}
+        return None, {"ok": False, "step": "preflight", "error": e}
+    rows = [x for x in (r if isinstance(r, list) else [r]) if isinstance(x, dict)]
+    if len(rows) != 1:
+        return None, {"ok": False, "error": f"'{identity}' matched {len(rows)} mailboxes — must "
+                                            f"resolve to exactly one (use the primary address)"}
+    return rows[0], None
+
+
+def set_and_verify(exo, identity: str, params: dict, verify: dict[str, Any],
+                   *, label: str) -> dict[str, Any]:
+    """Set-Mailbox `params` on `identity`, then re-read and check every `verify` field
+    landed (compared as case-insensitive strings — Exchange echoes many types as text).
+    Never reports success it didn't observe."""
+    mb, bad = get_one_mailbox(exo, identity)
+    if bad:
+        return bad
+    r = exo.invoke("Set-Mailbox", {"Identity": identity, "Confirm": False, **params})
+    if err(r):
+        return {"ok": False, "step": label, "error": err(r)}
+    after, bad = get_one_mailbox(exo, identity)
+    if bad:
+        return {"ok": False, "step": "verify",
+                "error": f"{label}: Set-Mailbox returned no error but the re-read failed — "
+                         f"{bad.get('error')}"}
+    mismatched = {k: after.get(k) for k, want in verify.items()
+                  if _norm(after.get(k)) != _norm(want)}
+    if mismatched:
+        return {"ok": False, "step": "verify", "expected": verify, "actual": mismatched,
+                "error": f"{label}: the change did not stick — check Exchange directly"}
+    return {"ok": True, "mailbox": after.get("PrimarySmtpAddress") or identity,
+            "before": {k: mb.get(k) for k in verify}, "after": {k: after.get(k) for k in verify}}
+
+
+def _norm(v: Any) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    s = str(v).strip()
+    # Exchange echoes sizes as "35 MB (36,700,160 bytes)" — compare the human part only,
+    # space-insensitively, so it matches the "35MB" we sent.
+    if " (" in s:
+        s = s.split(" (", 1)[0]
+    return s.replace(" ", "").lower()

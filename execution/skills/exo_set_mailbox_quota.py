@@ -1,0 +1,62 @@
+"""Set a mailbox's max send/receive message size (D-55; SOP: exchange-online)."""
+from __future__ import annotations
+
+import re
+from typing import Any
+
+NAME = "exo_set_mailbox_quota"
+DESCRIPTION = ("Change a mailbox's maximum SEND and/or RECEIVE message size. Sizes like '35MB' "
+               "or '100MB' (Exchange Online hard ceiling: 150MB). To CHECK the current sizes "
+               "use exo_mailbox_details. Verifies the change before reporting success.")
+SOURCE = "m365"
+CATEGORY = "write"
+RISK_LEVEL = "medium"
+REQUIRES_APPROVAL = True
+ENABLED_BY_DEFAULT = False
+PARAMETERS: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "identity": {"type": "string", "description": "the mailbox's primary email address"},
+        "max_send": {"type": "string", "description": "new max SEND size, e.g. '35MB' (optional)"},
+        "max_receive": {"type": "string",
+                        "description": "new max RECEIVE size, e.g. '36MB' (optional)"},
+    },
+    "required": ["identity"],
+    "additionalProperties": False,
+}
+
+_SIZE = re.compile(r"^(\d+(?:\.\d+)?)\s*(KB|MB|GB)$", re.IGNORECASE)
+_TO_MB = {"KB": 1 / 1024, "MB": 1.0, "GB": 1024.0}
+
+
+def _parse(label: str, raw: str):
+    """Return (canonical_size, None) or (None, error). Bounds: 1 MB – 150 MB (EXO ceiling).
+    Accepts KB/MB/GB (e.g. '0.1GB' = ~102MB) — Exchange itself accepts the same units."""
+    m = _SIZE.match((raw or "").strip())
+    if not m:
+        return None, f"{label}: '{raw}' is not a size — use e.g. '35MB' or '0.1GB'"
+    n, unit = float(m.group(1)), m.group(2).upper()
+    mb = n * _TO_MB[unit]
+    if not 1 <= mb <= 150:
+        return None, (f"{label}: {raw} is outside Exchange Online's 1MB–150MB range "
+                      f"(that's ~{mb:.0f}MB)")
+    # send Exchange a canonical "<int>MB" so the verify echo-match is exact
+    return f"{round(mb)}MB", None
+
+
+def run(ctx, identity: str, max_send: str = "", max_receive: str = "", **_: Any):
+    from . import _exo_common as c
+    params: dict[str, Any] = {}
+    verify: dict[str, Any] = {}
+    for label, field, raw in (("max_send", "MaxSendSize", max_send),
+                              ("max_receive", "MaxReceiveSize", max_receive)):
+        if (raw or "").strip():
+            size, e = _parse(label, raw)
+            if e:
+                return {"ok": False, "error": e}
+            params[field] = size
+            verify[field] = size
+    if not params:
+        return {"ok": False, "error": "give max_send and/or max_receive (e.g. '35MB')"}
+    return c.set_and_verify(ctx.client("exo"), identity, params, verify,
+                            label="set message size limits")

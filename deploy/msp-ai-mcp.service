@@ -1,0 +1,37 @@
+# /etc/systemd/system/msp-ai-mcp.service
+# MSP AI MCP server (HTTP transport) — the OUT channel for a containerized Hermes (D-17).
+# Runs on the HOST as the msp-ai user (holds the vendor creds); a host-networked Hermes
+# container reaches it at 127.0.0.1:8089. Every tool call still goes through dispatch().
+#   sudo cp deploy/msp-ai-mcp.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now msp-ai-mcp
+[Unit]
+Description=MSP AI — MCP server (HTTP, Hermes OUT channel)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=msp-ai
+Group=msp-ai
+WorkingDirectory=/opt/msp-ai
+# .env provides MSPAI_MCP_TOKEN (Bearer gate) + the vendor credentials
+EnvironmentFile=/opt/msp-ai/.env
+# Bind loopback only; a host-networked container reaches it via 127.0.0.1.
+ExecStart=/usr/bin/python3 -m execution.mcp_server --transport http --host 127.0.0.1 --port 8089
+Restart=on-failure
+RestartSec=3
+
+# ── hardening (mirrors msp-ai.service) ──
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# the app owns its own dir (db/audit log, secrets.local, vault/)
+ReadWritePaths=/opt/msp-ai
+
+[Install]
+WantedBy=multi-user.target

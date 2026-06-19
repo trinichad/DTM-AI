@@ -1,0 +1,37 @@
+# MSP AI — systemd unit. Install to /etc/systemd/system/msp-ai.service
+# Hardened, runs as a dedicated unprivileged user, stdlib web server (no venv needed).
+#   sudo cp deploy/msp-ai.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now msp-ai
+[Unit]
+Description=MSP AI — MSP operations platform
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=msp-ai
+Group=msp-ai
+WorkingDirectory=/opt/msp-ai
+EnvironmentFile=/opt/msp-ai/.env
+ExecStart=/usr/bin/python3 -m execution.web --host 127.0.0.1 --port 8088
+Restart=on-failure
+RestartSec=3
+
+# ── hardening ──
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# the app owns its own dir (db, secrets.local, .session_secret, vault/, promoted skills)
+ReadWritePaths=/opt/msp-ai
+# NOTE: ProtectHome=true masks /home, so Hermes skills under ~/.hermes are unreadable by the
+# service (the integrations/skills views tolerate this gracefully). When you wire Hermes, set
+# MSPAI_HERMES_SKILLS_DIR to a path under /opt, or relax ProtectHome to read-only.
+# Inbound access is controlled by the bind address (--host) + the firewall, not a systemd filter.
+
+[Install]
+WantedBy=multi-user.target
