@@ -38,6 +38,10 @@ class ToolInfo:
     module: str
     group: str = ""           # optional sub-group/family WITHIN a source (D-71), e.g.
                               # "kaseya_command" clusters the run-command toolkit together
+    # Optional describe_approval(ctx, args) -> dict|str|None: a HUMAN-READABLE preview of a
+    # proposed write, resolved at approval time (e.g. group id → "Autopilot users") so the owner
+    # confirms intent, not a raw GUID. Best-effort + read-only; dispatch ignores any failure.
+    describe_approval: Optional[Callable[..., Any]] = None
 
     def to_schema(self) -> dict[str, Any]:
         """OpenAI/Ollama function-call wire shape (what the model sees)."""
@@ -80,6 +84,8 @@ def _coerce(module: ModuleType) -> Optional[ToolInfo]:
         run=module.run,  # type: ignore[arg-type]
         module=module.__name__,
         group=str(getattr(module, "GROUP", "") or ""),
+        describe_approval=(getattr(module, "describe_approval", None)
+                           if callable(getattr(module, "describe_approval", None)) else None),
     )
 
 

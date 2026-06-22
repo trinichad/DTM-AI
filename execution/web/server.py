@@ -186,6 +186,16 @@ def _make_handler(api: Api, signer: SessionSigner, secure_cookie: bool):
                     return
                 self._send_stream(api.stream_chat(self._body(), user))
                 return
+            if parsed.path == "/api/approvals/stream":     # approve + stream the continuation (SSE)
+                user = self._user()
+                if not user:
+                    self._send_json(Resp(401, {"error": "authentication required"}))
+                    return
+                if api.auth.get_role(user) != "admin":     # mutations are admin-only (same as JSON)
+                    self._send_json(Resp(403, {"error": "admin only"}))
+                    return
+                self._send_stream(api.stream_approval(self._body(), user))
+                return
             self._send_json(api.handle("POST", parsed.path, {}, self._body(), self._user(),
                                        self._trust()))
 

@@ -344,6 +344,20 @@ class Agent:
                 turn.tool_events.append({"name": name, "ok": envelope["ok"],
                                          "category": envelope.get("source"),
                                          "data": _data_preview(envelope.get("data"))})
+                # A write that needs sign-off: PAUSE here exactly like chat_stream (D-47). Without
+                # this the non-streaming loop would feed the "approval required" envelope back to
+                # the model and keep firing the NEXT writes — piling up orphan approval rows that
+                # only surface in the bell instead of one inline card at a time. Callers
+                # (approval continuation, Teams, delegation) already read turn.pending.
+                if envelope.get("status") == "pending_approval":
+                    turn.pending = {"id": envelope.get("approval_id"), "tool": name,
+                                    "tenant": ctx.tenant_id, "args": call["arguments"],
+                                    "preview": envelope.get("approval_preview")}
+                    turn.citations = citations
+                    turn.answer = (f"I've prepared **{name}** and it needs your approval before it "
+                                   f"runs. Review the action below and **Approve** to proceed (or "
+                                   f"**Reject** to cancel) — I'll continue as soon as you decide.")
+                    return turn
                 payload = tool_payload(envelope)
                 messages.append({"role": "tool", "tool_call_id": call["id"], "name": name, "content": payload})
 
@@ -482,13 +496,15 @@ class Agent:
                 # turn resumes from the approval. Nothing further runs until they decide.
                 if envelope.get("status") == "pending_approval":
                     turn.pending = {"id": envelope.get("approval_id"), "tool": name,
-                                    "tenant": ctx.tenant_id, "args": call["arguments"]}
+                                    "tenant": ctx.tenant_id, "args": call["arguments"],
+                                    "preview": envelope.get("approval_preview")}
                     turn.citations = citations
                     turn.answer = (f"I've prepared **{name}** and it needs your approval before it "
                                    f"runs. Review the action below and **Approve** to proceed (or "
                                    f"**Reject** to cancel) — I'll continue as soon as you decide.")
                     emit({"type": "approval_required", "id": turn.pending["id"], "tool": name,
-                          "args": call["arguments"], "tenant": ctx.tenant_id})
+                          "args": call["arguments"], "tenant": ctx.tenant_id,
+                          "preview": turn.pending["preview"]})
                     return turn
                 payload = tool_payload(envelope)
                 messages.append({"role": "tool", "tool_call_id": call["id"], "name": name, "content": payload})

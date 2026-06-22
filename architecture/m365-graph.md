@@ -358,3 +358,25 @@ DeviceManagementServiceConfig.ReadWrite.All already in the recommended M365_SCOP
   results (and falls back the same way if the filter errors). The list tool client-filters too.
 - **SharePoint site listing** (`m365_list_sharepoint_sites`): now flags `@odata.nextLink`
   truncation ("more sites exist … narrow/raise limit") instead of silently returning a partial set.
+
+---
+
+## Amendment (2026-06-22, D-90) — approval cards show a plain-language preview (resolve ids → names)
+
+Problem: a write proposed with an opaque id (e.g. `m365_add_security_group_member` with
+`group: "0615ff24-…"`, which the model gets from `m365_list_entra_groups`) showed the owner only
+the raw GUID on the approval card — unconfirmable. You can't sign off on "add pgarcia to
+0615ff24-…".
+
+Fix — a general, opt-in hook (cross-cutting, not M365-specific): a tool may export
+`describe_approval(ctx, args) -> dict | str | None`. When `dispatch()` defers a write, it calls
+this (best-effort, read-only) and stamps the result on the approval row (`args_preview`, new
+column, migrated in place) AND on the pending envelope (`approval_preview`). It flows through
+`turn.pending["preview"]`, the `approval_required` event, the streamed `answer` frame, the
+persisted `meta.pending`, and the `/api/approvals` bell list — so the inline card AND the bell card
+render a green "In plain terms — confirm this" block above the raw args. Any failure → preview is
+`None` and the card falls back to raw args (Rule #2: this only RESOLVES ids the tool already
+understands, it never invents). `m365_add/remove_security_group_member` implement it (group id →
+`displayName · id`, plus the user). Registry discovers the hook via `ToolInfo.describe_approval`.
+Tests: `test_describe_approval_preview_is_resolved_and_stored`,
+`test_pending_turn_carries_the_preview_to_the_card`, `test_preview_failure_falls_back_to_raw_args`.

@@ -439,9 +439,19 @@ async function renameKbDoc(doc){
 // Inline approval card (D-47): a paused write shows Approve/Reject right in the bubble. Admins
 // only; non-admins see a note. Buttons carry the approval id + the conversation so the result
 // posts back here on decision.
+// Plain-language preview of a proposed write (D-90): the backend resolves opaque ids in the args
+// (e.g. group GUID → "Autopilot users") so the owner confirms WHAT will change, not a raw id.
+function approvalPreview(pv){ if(!pv) return '';
+  let rows='';
+  if(typeof pv==='string'){ rows=`<div class="text-slate-200 whitespace-pre-wrap">${esc(pv)}</div>`; }
+  else if(typeof pv==='object'){ rows=Object.entries(pv).filter(([,v])=>v!=null&&v!=='').map(([k,v])=>
+    `<div class="flex gap-2"><span class="text-slate-500 shrink-0">${esc(k)}</span><span class="text-slate-200 break-all">${esc(String(v))}</span></div>`).join(''); }
+  if(!rows) return '';
+  return `<div class="mt-1.5 rounded-lg border border-emerald-500/25 bg-emerald-500/[.06] p-2 text-[11px] space-y-0.5">
+    <div class="text-[10px] uppercase tracking-wide text-emerald-300/80 mb-1 flex items-center gap-1"><i data-lucide="eye" class="text-[11px]"></i>In plain terms — confirm this</div>${rows}</div>`; }
 function approvalCard(p){ if(!p||!p.id) return '';
   const admin=ME&&ME.role==='admin';
-  const args=`<pre class="text-[11px] text-slate-300 bg-ink/60 border border-edge rounded-lg p-2 mt-1.5 whitespace-pre-wrap font-mono max-h-32 overflow-auto">${esc(JSON.stringify(p.args||{},null,1))}</pre>`;
+  const args=`${approvalPreview(p.preview)}<pre class="text-[11px] text-slate-300 bg-ink/60 border border-edge rounded-lg p-2 mt-1.5 whitespace-pre-wrap font-mono max-h-32 overflow-auto">${esc(JSON.stringify(p.args||{},null,1))}</pre>`;
   const btns=admin?`<div class="flex gap-2 mt-2 flex-wrap">
       <button class="ap-in-approve grad text-white rounded-lg px-3 py-1.5 text-xs font-semibold inline-flex items-center gap-1" data-a="${p.id}"><i data-lucide="check" class="text-[12px]"></i> Approve &amp; run</button>
       <button class="ap-in-batch bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/25 rounded-lg px-3 py-1.5 text-xs inline-flex items-center gap-1" data-a="${p.id}" title="Run this one AND auto-approve the next 25 ${esc(p.tool||'')} runs for this client (15 min, never destructive, revocable from the bell)"><i data-lucide="repeat" class="text-[12px]"></i> + repeats</button>
@@ -456,21 +466,55 @@ function approvalCard(p){ if(!p||!p.id) return '';
 async function decideInline(btn,kind,batch){
   const id=btn.dataset.a, card=btn.closest('.ap-inline');
   if(card) card.querySelectorAll('button').forEach(b=>b.disabled=true);
-  if(kind==='approve') btn.innerHTML='<i data-lucide="loader-circle" class="text-[12px] animate-spin"></i> Running…';
-  icons();
-  let r; try{ r=await api('POST','/api/approvals/'+id+'/'+kind,{conversation_id:CONV,batch:!!batch}); }catch(_){ r=null; }
-  if(!r||!r.ok){ toast((r&&r.error)||'failed',false);
+  if(kind==='reject'){
+    let r; try{ r=await api('POST','/api/approvals/'+id+'/reject',{conversation_id:CONV}); }catch(_){ r=null; }
+    if(!r||!r.ok){ toast((r&&r.error)||'failed',false);
+      if(card) card.querySelectorAll('button').forEach(b=>b.disabled=false); return; }
+    if(card) card.outerHTML=`<div class="mt-2 text-[11px] text-rose-400 inline-flex items-center gap-1"><i data-lucide="x-circle" class="text-[12px]"></i> Rejected</div>`;
+    if(r.message){ const t={role:'assistant',answer:r.message,ts:new Date().toISOString()};
+      MSGS.push(t); bubble('ai',aiHtml(t),null,t.ts); }
+    refreshApprovalBadge(); icons(); return;
+  }
+  // Approve → STREAM the execution + continuation live (D-62 follow-up) so the owner sees tool
+  // calls / reasoning / answer tokens arrive instead of a frozen button. We drive the shared
+  // STREAM machinery; the continuation paints into the standard #ai-streaming bubble.
+  if(STREAM&&!STREAM.done){ toast('A reply is still streaming — hit Stop first',false);
+    if(card) card.querySelectorAll('button').forEach(b=>b.disabled=false); return; }
+  btn.innerHTML='<i data-lucide="loader-circle" class="text-[12px] animate-spin"></i> Running &amp; continuing…'; icons();
+  let resp; try{ resp=await fetch('/api/approvals/stream',{method:'POST',credentials:'same-origin',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({approval_id:+id,conversation_id:CONV,batch:!!batch})}); }catch(_){ resp=null; }
+  if(!resp||!resp.ok||!resp.body){ if(resp&&resp.status===401) showLogin(); else toast('failed',false);
     if(card) card.querySelectorAll('button').forEach(b=>b.disabled=false);
-    return; }
-  if(card) card.outerHTML=`<div class="mt-2 text-[11px] ${kind==='reject'?'text-rose-400':'text-emerald-400'} inline-flex items-center gap-1"><i data-lucide="${kind==='reject'?'x-circle':'check-circle-2'}" class="text-[12px]"></i> ${kind==='reject'?'Rejected':'Approved & ran'}</div>`;
-  if(r.message){ const turn={role:'assistant',answer:r.message,ts:new Date().toISOString()};
-    MSGS.push(turn); bubble('ai',aiHtml(turn),null,turn.ts); }
-  // D-62: the agent's continuation turn (it picks the task back up after the approval)
-  if(r.continuation&&r.continuation.message){
-    const ct={role:'assistant',answer:r.continuation.message,pending:r.continuation.pending||null,
-              meta:r.continuation.label||'',ts:new Date().toISOString()};
-    MSGS.push(ct); bubble('ai',aiHtml(ct),null,ct.ts); }
-  refreshApprovalBadge(); icons();
+    btn.innerHTML='<i data-lucide="check" class="text-[12px]"></i> Approve &amp; run'; icons(); return; }
+  if(card) card.outerHTML=`<div class="mt-2 text-[11px] text-emerald-400 inline-flex items-center gap-1"><i data-lucide="check-circle-2" class="text-[12px]"></i> Approved & ran</div>`;
+  STREAM={conv:CONV, acc:'', think:'', tools:[], done:false, turn:null, stopping:false};
+  const liveOn=()=>{ if(!document.getElementById('ai-streaming')){ bubble('ai',CHAT_DOTS,'ai-streaming');
+    streamUI(true); const sb=$('#stopBtn'); if(sb)sb.onclick=stopStream; } };
+  const reader=resp.body.getReader(), dec=new TextDecoder(); let buf='';
+  try{
+    while(true){ const {value,done}=await reader.read(); if(done)break;
+      buf+=dec.decode(value,{stream:true}); let i;
+      while((i=buf.indexOf('\n\n'))>=0){ const line=buf.slice(0,i).replace(/^data: ?/,''); buf=buf.slice(i+2);
+        if(!line)continue; let ev; try{ev=JSON.parse(line);}catch(_){continue;}
+        if(ev.type==='decided'){ if(ev.message){ const t={role:'assistant',answer:ev.message,ts:new Date().toISOString()};
+          MSGS.push(t); bubble('ai',aiHtml(t),null,t.ts); icons(); } }
+        else if(ev.type==='thinking'){ liveOn(); STREAM.think+=ev.text; paintStream(); }
+        else if(ev.type==='delta'){ liveOn(); STREAM.acc+=ev.text; paintStream(); }
+        else if(ev.type==='tool_call'){ liveOn(); STREAM.tools.push({name:ev.name,ok:null}); paintStream(); }
+        else if(ev.type==='tool_result'){ const t=STREAM.tools.find(x=>x.name===ev.name&&x.ok===null); if(t)t.ok=ev.ok; else STREAM.tools.push({name:ev.name,ok:ev.ok}); paintStream(); }
+        else if(ev.type==='answer'){ STREAM.turn={role:'assistant',answer:ev.answer||STREAM.acc,tools:ev.tool_events||[],citations:ev.citations||[],pending:ev.pending||null,reasoning:ev.reasoning||STREAM.think||'',meta:ev.provider?`${ev.provider}/${ev.model} · ${ev.rounds} round(s)`:''}; }
+        else if(ev.type==='error'){ toast(ev.error||'continuation error',false); }
+      } }
+  }catch(_){}
+  STREAM.done=true;
+  const turn=STREAM.turn||(STREAM.acc||STREAM.tools.length?{role:'assistant',answer:STREAM.acc,reasoning:STREAM.think,tools:STREAM.tools}:null);
+  const e=document.getElementById('ai-streaming');
+  if(turn){ turn.ts=turn.ts||new Date().toISOString(); MSGS.push(turn);
+    if(e){ e.removeAttribute('id'); e.innerHTML=aiHtml(turn); } else bubble('ai',aiHtml(turn),null,turn.ts); }
+  else if(e){ e.remove(); }
+  STREAM=null; streamUI(false);
+  refreshApprovalBadge(); refreshConvs(); icons();
 }
 function aiHtml(t){ let h=md(t.answer||'');
   if(t.reasoning) h=`<details class="mb-2"><summary class="cursor-pointer select-none text-[11px] text-slate-500 hover:text-slate-300 inline-flex items-center gap-1.5"><i data-lucide="brain" class="text-[11px]"></i><span class="italic">Reasoning</span></summary><div class="text-[11px] text-slate-500 bg-ink/40 border border-edge/60 rounded-lg p-2.5 mt-1 whitespace-pre-wrap max-h-56 overflow-auto leading-relaxed">${esc(t.reasoning)}</div></details>`+h;
@@ -813,6 +857,7 @@ async function openApPanel(){
       <span class="font-medium text-sm font-mono">${esc(a.tool)}</span>${catChip(a.category)}
       <span class="ml-auto text-[10px] text-slate-600">${esc((a.ts||'').slice(5,16).replace('T',' '))}</span></div>
     <div class="text-[11px] text-slate-500 mt-1">client <span class="text-slate-300">${esc(a.tenant_id)}</span> · by ${esc(a.actor)}</div>
+    ${approvalPreview(a.args_preview)}
     <pre class="text-[11px] text-slate-300 bg-ink/60 border border-edge rounded-lg p-2 mt-1.5 whitespace-pre-wrap font-mono max-h-28 overflow-auto">${esc(JSON.stringify(a.args,null,1))}</pre>
     ${admin?`<div class="flex gap-2 mt-2 flex-wrap">
       <button class="ap-approve grad text-white rounded-lg px-3 py-1.5 text-xs font-semibold inline-flex items-center gap-1" data-a="${a.id}"><i data-lucide="check" class="text-[12px]"></i> Approve &amp; run</button>
@@ -843,15 +888,21 @@ async function openApPanel(){
     </div>`;
   p.classList.remove('hidden'); icons();
   document.addEventListener('click',apOutside,true);
-  p.querySelectorAll('.ap-approve').forEach(b=>b.onclick=async()=>{ b.disabled=true;
+  // Bell approvals resume the originating chat too (the row carries its conversation_id) — the
+  // continuation runs server-side and is saved into that thread, so the toast points there.
+  const bellToast=r=>{ if(!(r&&r.ok)){ toast((r&&r.error)||'failed',false); return; }
+    if(!r.executed){ toast('Approved — action failed',false); return; }
+    const c=r.continuation||{};
+    toast(c.pending?'Approved — task continued; another step needs approval (bell)'
+          :c.message?'Approved — task continued in chat':'Approved & executed',true); };
+  const bellSpin=b=>{ b.disabled=true; b.innerHTML='<i data-lucide="loader-circle" class="text-[12px] animate-spin"></i> Running…'; icons(); };
+  p.querySelectorAll('.ap-approve').forEach(b=>b.onclick=async()=>{ bellSpin(b);
     const r=await api('POST','/api/approvals/'+b.dataset.a+'/approve');
-    if(r&&r.ok) toast(r.executed?'Approved & executed':'Approved — action failed',!!r.executed);
-    else toast((r&&r.error)||'failed',false);
-    closeApPanel(); refreshApprovalBadge(); });
-  p.querySelectorAll('.ap-batch').forEach(b=>b.onclick=async()=>{ b.disabled=true;
+    bellToast(r); closeApPanel(); refreshApprovalBadge(); });
+  p.querySelectorAll('.ap-batch').forEach(b=>b.onclick=async()=>{ bellSpin(b);
     const r=await api('POST','/api/approvals/'+b.dataset.a+'/approve',{batch:true});
-    if(r&&r.ok) toast(r.executed?'Approved — repeats auto-approve for 15 min':'Approved — action failed (no repeats armed)',!!r.executed);
-    else toast((r&&r.error)||'failed',false);
+    if(r&&r.ok&&r.executed) toast((r.continuation&&r.continuation.pending)?'Approved — repeats armed; another step needs approval':'Approved — repeats auto-approve for 15 min',true);
+    else bellToast(r);
     closeApPanel(); refreshApprovalBadge(); });
   p.querySelectorAll('.ap-grant-revoke').forEach(b=>b.onclick=async()=>{ b.disabled=true;
     const r=await api('POST','/api/approvals/batch/revoke',{tool:b.dataset.t,tenant_id:b.dataset.c});

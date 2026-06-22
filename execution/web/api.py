@@ -480,20 +480,21 @@ class Api:
                 lines.append(f"_{data['note']}_")
         return "  \n".join(lines)
 
-    def _approve(self, approval_id: int, user: str, body: Optional[dict] = None) -> Resp:
-        """Approve a pending action and EXECUTE it exactly as proposed (args-bound), once. When a
-        conversation_id is supplied (the inline chat button, D-47), the result is also posted back
-        into that chat as an assistant message and the paused message's buttons are cleared — so the
-        outcome shows up without the user nudging."""
+    def _run_approval(self, approval_id: int, user: str, body: Optional[dict]):
+        """Claim + EXECUTE a pending action exactly as proposed (args-bound, one-shot); record the
+        result, summarize it, and arm any batch grant (D-59). Shared by the JSON path (_approve —
+        bell / Teams / API) and the inline streaming path (stream_approval). Returns a 4-tuple
+        (err, env, row, summary): `err` is a Resp to return early (not found / not pending / lost
+        the claim) else None; otherwise `env`/`row`/`summary` describe the executed action."""
         from ..core.gates import AlwaysApprove
         from ..runtime import get_client_factory
         row = self.agent.approvals.get(approval_id)
         if not row:
-            return Resp(404, {"error": "approval not found"})
+            return Resp(404, {"error": "approval not found"}), None, None, None
         if row["status"] != "pending":
-            return Resp(409, {"error": f"already {row['status']}"})
+            return Resp(409, {"error": f"already {row['status']}"}), None, row, None
         if not self.agent.approvals.claim_for_execution(approval_id, by=user):
-            return Resp(409, {"error": "already decided"})
+            return Resp(409, {"error": "already decided"}), None, row, None
         ctx = ToolContext(tenant_id=row["tenant_id"], actor=f"{user} (approval#{approval_id})",
                           client_factory=get_client_factory())
         env = dispatch(registry=self.agent.registry, audit=self.agent.audit, ctx=ctx,
@@ -525,15 +526,34 @@ class Api:
                 else:
                     summary += "\n⚠️ _Destructive actions can never be batch-approved — " \
                                "each run needs its own sign-off._"
-        conv_id = str((body or {}).get("conversation_id") or "").strip()
+        return None, env, row, summary
+
+    def _resolve_conv(self, user: str, body: Optional[dict], row: dict) -> str:
+        """The conversation to post the result + run the continuation into: the one the caller
+        named (the inline chat card) else the one stored ON the approval row (the bell carries no
+        conversation in its request — D-62 follow-up). Empty unless the caller actually owns it."""
+        conv_id = str((body or {}).get("conversation_id") or "").strip() \
+            or str(row.get("conversation_id") or "").strip()
+        return conv_id if conv_id and self.agent.conversations.owns(user, conv_id) else ""
+
+    def _approve(self, approval_id: int, user: str, body: Optional[dict] = None) -> Resp:
+        """Approve + EXECUTE a pending action, once. When the originating conversation is known —
+        passed in by the inline chat button OR stored on the approval row (so a BELL approval can
+        resume too) — the result is posted back into that chat, the paused message's buttons are
+        cleared, and the agent's continuation turn runs synchronously so the task picks back up
+        (D-62). The inline chat UI prefers /api/approvals/stream, which streams that continuation
+        live; this JSON path is the bell / Teams / API caller and runs it inline."""
+        err, env, row, summary = self._run_approval(approval_id, user, body)
+        if err:
+            return err
+        conv_id = self._resolve_conv(user, body, row)
         continuation = None
-        if conv_id and self.agent.conversations.owns(user, conv_id):
+        if conv_id:
             self.agent.conversations.resolve_pending(user, conv_id, approval_id,
                                                      "executed" if env["ok"] else "failed")
             self.agent.conversations.add_message(user, conv_id, "assistant", summary,
                                                  meta={"approval_result": approval_id})
             # D-62: the paused turn promised "I'll continue as soon as you decide" — keep it.
-            # Re-invoke the agent with the executed result so it verifies/finishes the task.
             # Best-effort: the deterministic summary above already told the owner what ran, so
             # a continuation failure may never mask the executed action.
             try:
@@ -544,6 +564,101 @@ class Api:
                                         result_ok=False, detail=str(e)[:200])
         return Resp(200, {"ok": True, "executed": env["ok"], "result": env,
                           "message": summary, "continuation": continuation})
+
+    def stream_approval(self, body: dict, user: str) -> Iterator[dict]:
+        """SSE: approve a pending action, then STREAM the agent's continuation turn live (D-62
+        follow-up). The approve POST no longer blocks until the whole multi-round continuation
+        finishes — the owner watches tool calls / reasoning / answer tokens arrive, just like a
+        normal chat turn, instead of staring at a frozen 'Running…' button. The continuation is
+        stoppable via /api/chat/stop (same _stops registry, keyed by conversation).
+        Event types: decided · tool_call · tool_result · thinking · delta · answer · error."""
+        approval_id = int((body or {}).get("approval_id") or 0)
+        err, env, row, summary = self._run_approval(approval_id, user, body)
+        if err:
+            yield {"type": "error", "error": (err.payload or {}).get("error", "approval failed")}
+            return
+        yield {"type": "decided", "executed": bool(env["ok"]), "message": summary,
+               "approval_id": approval_id, "tool": row["tool"]}
+        conv_id = self._resolve_conv(user, body, row)
+        if not conv_id:
+            return                                  # no resumable chat (e.g. API caller) — done
+        self.agent.conversations.resolve_pending(user, conv_id, approval_id,
+                                                 "executed" if env["ok"] else "failed")
+        self.agent.conversations.add_message(user, conv_id, "assistant", summary,
+                                             meta={"approval_result": approval_id})
+        yield from self._stream_continuation(user, conv_id, row, env)
+
+    def _stream_continuation(self, user: str, conv_id: str, row: dict, env: dict) -> Iterator[dict]:
+        """Stream the post-approval continuation turn (D-62) over SSE, mirroring stream_chat's
+        push→pull queue+worker bridge so the agent's progress flows in real time."""
+        import json as _json
+        from ..runtime import get_client_factory
+        convs = self.agent.conversations
+        conv = convs.get(user, conv_id)
+        if not conv:
+            return
+        tenant = conv.get("tenant_id") or conv.get("tenant") or row["tenant_id"]
+        model_id = self._conv_model_id(conv)
+        ctx = ToolContext(tenant_id=tenant, actor=f"{user} (chat)",
+                          allow_cloud=bool(model_id and not model_id.startswith("ollama:")),
+                          client_factory=get_client_factory(),
+                          _meta={"tasks": self.agent.tasks, "credvault": self.agent.credvault,
+                                 "user_profile": self._user_profile(user),
+                                 "conversation_id": conv_id})
+        history = convs.history(user, conv_id)
+        result_blob = _json.dumps({k: env.get(k) for k in ("ok", "data", "error")},
+                                  default=str)[:4000]
+        synthetic = (f"[system note — not from the owner] The owner APPROVED the pending "
+                     f"'{row['tool']}' action and it has ALREADY RUN. Result: {result_blob}. "
+                     f"Continue the task: verify the outcome if appropriate, perform any "
+                     f"remaining steps, and give the owner a short status reply. Do NOT run "
+                     f"'{row['tool']}' again with the same arguments.")
+        q: "queue.Queue" = queue.Queue()
+        DONE = object()
+        result: dict = {}
+        stop_ev = threading.Event()
+        with self._stops_lock:                       # let POST /api/chat/stop reach the continuation
+            self._stops[conv_id] = stop_ev
+
+        def run():
+            try:
+                result["turn"] = self.agent.chat_stream(
+                    ctx, synthetic, lambda e: q.put(e), model_id=model_id, history=history,
+                    should_stop=stop_ev.is_set)
+            except Exception as e:                   # contained; surfaced as an SSE error frame
+                result["error"] = str(e)
+            finally:
+                q.put(DONE)
+
+        threading.Thread(target=run, daemon=True).start()
+        try:
+            while True:
+                ev = q.get()
+                if ev is DONE:
+                    break
+                yield ev
+        finally:
+            with self._stops_lock:
+                self._stops.pop(conv_id, None)
+
+        if "error" in result:
+            # The deterministic summary already told the owner what ran (D-62), so a broken
+            # follow-up never masks the executed action — surface a soft note and stop.
+            self.agent.audit.record(actor=user, tenant_id=tenant,
+                                    action="approval_continuation_failed", tool=row["tool"],
+                                    result_ok=False, detail=str(result["error"])[:200])
+            yield {"type": "answer", "answer": "", "pending": None,
+                   "continuation_error": str(result["error"])[:200]}
+            return
+        turn = result["turn"]
+        convs.add_message(user, conv_id, "assistant", turn.answer, meta={
+            "tools": turn.tool_events, "citations": turn.citations, "pending": turn.pending,
+            "reasoning": turn.reasoning or None, "stopped": turn.stopped,
+            "label": f"{turn.provider}/{turn.model} · {turn.rounds} round(s)"})
+        yield {"type": "answer", "answer": turn.answer, "citations": turn.citations,
+               "tool_events": turn.tool_events, "provider": turn.provider, "model": turn.model,
+               "rounds": turn.rounds, "reasoning": turn.reasoning or None,
+               "stopped": turn.stopped, "pending": turn.pending, "conversation_id": conv_id}
 
     def _conv_model_id(self, conv: dict) -> Optional[str]:
         """The model the conversation last ran on — parsed from the stored 'provider/model ·'
@@ -585,8 +700,11 @@ class Api:
             return None
         convs.add_message(user, conv_id, "assistant", turn.answer, meta={
             "tools": turn.tool_events, "citations": turn.citations, "pending": turn.pending,
+            "reasoning": turn.reasoning or None,
             "label": f"{turn.provider}/{turn.model} · {turn.rounds} round(s)"})
         return {"message": turn.answer, "pending": turn.pending,
+                "tools": turn.tool_events, "citations": turn.citations,
+                "reasoning": turn.reasoning or None,
                 "label": f"{turn.provider}/{turn.model} · {turn.rounds} round(s)"}
 
     def _revoke_batches(self, user: str, body: Optional[dict] = None) -> Resp:
@@ -612,13 +730,16 @@ class Api:
         return Resp(200, {"ok": True, "revoked": gone})
 
     def _reject(self, approval_id: int, user: str, body: Optional[dict] = None) -> Resp:
+        row = self.agent.approvals.get(approval_id)
         if not self.agent.approvals.reject(approval_id, by=user):
             return Resp(409, {"error": "not pending"})
         self.agent.audit.record(actor=user, tenant_id="*", action="approval_rejected",
                                 detail=f"approval#{approval_id}")
         msg = "🚫 Rejected — the action was cancelled and did not run."
-        conv_id = str((body or {}).get("conversation_id") or "").strip()
-        if conv_id and self.agent.conversations.owns(user, conv_id):
+        # Post the note into the originating chat — named by the inline card, else stored on the
+        # row so a BELL rejection lands in the right thread too (D-62 follow-up).
+        conv_id = self._resolve_conv(user, body, row or {})
+        if conv_id:
             self.agent.conversations.resolve_pending(user, conv_id, approval_id, "rejected")
             self.agent.conversations.add_message(user, conv_id, "assistant", msg,
                                                  meta={"approval_result": approval_id})
@@ -2387,22 +2508,25 @@ class Api:
                           allow_cloud=bool(model_id and not model_id.startswith("ollama:")),
                           client_factory=get_client_factory(),
                           _meta={"tasks": self.agent.tasks, "credvault": self.agent.credvault,
-                                 "user_profile": self._user_profile(user)})
+                                 "user_profile": self._user_profile(user),
+                                 "conversation_id": conv_id})
         # Server-side history is authoritative (the browser no longer holds the transcript).
         history = convs.history(user, conv_id)
         convs.add_message(user, conv_id, "user", message)
         turn = self.agent.chat(ctx, message, model_id=model_id, history=history,
                                profile=body.get("agent") or body.get("profile"))
         convs.add_message(user, conv_id, "assistant", turn.answer, meta={
-            "tools": turn.tool_events, "citations": turn.citations,
+            "tools": turn.tool_events, "citations": turn.citations, "pending": turn.pending,
+            "reasoning": turn.reasoning or None,
             "label": f"{turn.provider}/{turn.model} · {turn.rounds} round(s)"})
         title = next((c["title"] for c in convs.list(user) if c["id"] == conv_id), "")
         return Resp(200, {
             "answer": turn.answer, "citations": turn.citations,
             "tool_events": turn.tool_events, "provider": turn.provider,
             "model": turn.model, "rounds": turn.rounds, "tenant": tenant,
+            "pending": turn.pending, "reasoning": turn.reasoning or None,
             "conversation_id": conv_id, "title": title,
-            "suggest_skill": self._suggest_skill(message, turn),
+            "suggest_skill": None if turn.pending else self._suggest_skill(message, turn),
         })
 
     def stream_chat(self, body: dict, user: str) -> Iterator[dict]:
@@ -2453,7 +2577,7 @@ class Api:
                     allow_cloud=bool(model_id and not model_id.startswith("ollama:")),
                     client_factory=get_client_factory(),
                     _meta={"tasks": self.agent.tasks, "credvault": self.agent.credvault,
-                           "user_profile": self._user_profile(user)})
+                           "user_profile": self._user_profile(user), "conversation_id": conv_id})
                 result["turn"] = self.agent.chat_stream(
                     ctx, message, lambda e: q.put(e), model_id=model_id, history=prior,
                     profile=body.get("agent") or body.get("profile"),

@@ -35,7 +35,11 @@ CREATE TABLE IF NOT EXISTS approvals (
     status      TEXT NOT NULL DEFAULT 'pending',   -- pending|approved|rejected|executed|failed
     decided_by  TEXT,
     decided_ts  TEXT,
-    result_ok   INTEGER
+    result_ok   INTEGER,
+    conversation_id TEXT,                           -- chat that proposed it, so any approval
+                                                    -- surface (inline OR bell) can resume the task
+    args_preview TEXT                               -- optional human-readable preview (JSON) of
+                                                    -- the args, e.g. group id → "Autopilot users"
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
 """
@@ -52,15 +56,24 @@ class ApprovalStore:
         self._lock = threading.Lock()
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            # Migration: add conversation_id to DBs created before it existed (idempotent).
+            cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(approvals)")}
+            if "conversation_id" not in cols:
+                self._conn.execute("ALTER TABLE approvals ADD COLUMN conversation_id TEXT")
+            if "args_preview" not in cols:
+                self._conn.execute("ALTER TABLE approvals ADD COLUMN args_preview TEXT")
             self._conn.commit()
 
     def create(self, *, actor: str, tenant_id: str, tool: str, category: str,
-               args: Any) -> int:
+               args: Any, conversation_id: Optional[str] = None,
+               args_preview: Any = None) -> int:
         with self._lock:
             cur = self._conn.execute(
-                "INSERT INTO approvals(ts, actor, tenant_id, tool, category, args_json, status) "
-                "VALUES(?,?,?,?,?,?, 'pending')",
-                (_now(), actor, tenant_id, tool, category, json.dumps(args, default=str)),
+                "INSERT INTO approvals(ts, actor, tenant_id, tool, category, args_json, status, "
+                "conversation_id, args_preview) VALUES(?,?,?,?,?,?, 'pending', ?, ?)",
+                (_now(), actor, tenant_id, tool, category, json.dumps(args, default=str),
+                 conversation_id or None,
+                 json.dumps(args_preview, default=str) if args_preview is not None else None),
             )
             self._conn.commit()
             return int(cur.lastrowid)
@@ -72,6 +85,7 @@ class ApprovalStore:
             return None
         d = dict(row)
         d["args"] = json.loads(d["args_json"])
+        d["args_preview"] = json.loads(d["args_preview"]) if d.get("args_preview") else None
         return d
 
     def list(self, status: Optional[str] = None, limit: int = 100) -> list[dict[str, Any]]:
@@ -87,6 +101,7 @@ class ApprovalStore:
         for r in rows:
             d = dict(r)
             d["args"] = json.loads(d["args_json"])
+            d["args_preview"] = json.loads(d["args_preview"]) if d.get("args_preview") else None
             out.append(d)
         return out
 

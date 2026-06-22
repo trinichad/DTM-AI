@@ -24,6 +24,17 @@ PARAMETERS: dict[str, Any] = {
 }
 
 
+def describe_approval(ctx, args: dict):
+    """Approval-card preview (D-90): resolve the group id → its display name so the owner confirms
+    the RIGHT group, not a raw GUID. Read-only + best-effort — dispatch falls back to the raw args
+    on any error, so this never blocks or alters the approval."""
+    from . import _graph_common as g
+    grp, _bad = g.resolve_group(ctx, str(args.get("group") or ""))
+    name, gid = (grp or {}).get("displayName"), (grp or {}).get("id")
+    return {"Add to group": (f"{name}  ·  {gid}" if name else str(args.get("group") or "")),
+            "User": str(args.get("member") or "")}
+
+
 def run(ctx, group: str, member: str, **_: Any):
     from ..clients._http import HttpError
     from ..clients.scopes import scoped_write

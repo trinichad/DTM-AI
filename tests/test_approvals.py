@@ -49,6 +49,38 @@ class ApprovalFlow(unittest.TestCase):
         self.assertEqual(VaultStore().read_memory("acme"), "")
         self.assertEqual(self.agent.approvals.count_pending(), 1)
 
+    def test_describe_approval_preview_is_resolved_and_stored(self):
+        # D-90: a write tool's describe_approval(ctx,args) resolves a human-readable preview that
+        # dispatch stamps on the approval row + the pending envelope, so the card shows WHAT will
+        # change (here a plain dict), not just raw args.
+        env = self._write("Sunday patch")
+        self.assertEqual(env["approval_preview"], {"Note": "Sunday patch", "Client": "acme"})
+        row = self.agent.approvals.get(env["approval_id"])
+        self.assertEqual(row["args_preview"], {"Note": "Sunday patch", "Client": "acme"})
+
+    def test_pending_turn_carries_the_preview_to_the_card(self):
+        provider = self.agent.router.mock([
+            {"content": "", "tool_calls": [{"name": "fx_client_write",
+                                            "arguments": {"note": "preview me"}}]},
+            {"content": "x"}])
+        turn = self.agent.chat(self.ctx, "do it", provider=provider)
+        self.assertEqual(turn.pending["preview"], {"Note": "preview me", "Client": "acme"})
+
+    def test_preview_failure_falls_back_to_raw_args(self, ):
+        # A describe_approval that raises must never block the approval — preview is just None.
+        import tests.fixture_skills.fx_client_write as fx
+        orig = fx.describe_approval
+        fx.describe_approval = lambda ctx, args: (_ for _ in ()).throw(RuntimeError("boom"))
+        try:
+            from execution.core.registry import _coerce
+            self.agent.registry._tools["fx_client_write"] = _coerce(fx)
+            env = self._write("still works")
+            self.assertEqual(env["status"], "pending_approval")
+            self.assertIsNone(env["approval_preview"])
+        finally:
+            fx.describe_approval = orig
+            self.agent.registry._tools["fx_client_write"] = _coerce(fx)
+
     def test_approve_executes_with_exact_args(self):
         aid = self._write("VPN renewal in August")["approval_id"]
         r = self.api.handle("POST", f"/api/approvals/{aid}/approve", {}, {}, "admin")
@@ -98,6 +130,25 @@ class ApprovalFlow(unittest.TestCase):
         self.assertEqual(turn.pending["tool"], "fx_client_write")
         self.assertEqual(self.agent.approvals.count_pending(), 1)
         self.assertTrue(any(e.get("type") == "approval_required" for e in events))
+        self.assertEqual(VaultStore().read_memory("acme"), "")     # nothing ran
+
+    def test_nonstreaming_chat_pauses_on_approval_needed_write(self):
+        # Regression: the non-streaming chat() (used by the approval CONTINUATION, Teams, and
+        # delegation) must PAUSE on a pending-approval write exactly like chat_stream — otherwise
+        # it feeds "approval required" back to the model and silently fires the NEXT writes,
+        # piling up orphan approvals that only surface in the bell instead of one inline card.
+        provider = self.agent.router.mock([
+            {"content": "", "tool_calls": [{"name": "fx_client_write",
+                                            "arguments": {"note": "first"}}]},
+            {"content": "", "tool_calls": [{"name": "fx_client_write",
+                                            "arguments": {"note": "second — must not be reached"}}]},
+            {"content": "should not reach"}])
+        turn = self.agent.chat(self.ctx, "do two writes", provider=provider)
+        self.assertIsNotNone(turn.pending)
+        self.assertEqual(turn.pending["tool"], "fx_client_write")
+        self.assertEqual(turn.pending["args"], {"note": "first"})
+        # Paused at the FIRST write: exactly one approval queued, second never proposed.
+        self.assertEqual(self.agent.approvals.count_pending(), 1)
         self.assertEqual(VaultStore().read_memory("acme"), "")     # nothing ran
 
     def test_approve_from_chat_posts_result_and_clears_buttons(self):
@@ -237,6 +288,64 @@ class ApprovalContinuation(unittest.TestCase):
         self.assertTrue(r.payload["executed"])
         self.assertIsNone(r.payload["continuation"])
         self.assertIn("VPN" if False else "x", VaultStore().read_memory("acme"))  # action ran
+
+    def test_dispatch_records_the_originating_conversation_on_the_approval(self):
+        # The chat handler tags the ctx with its conversation_id; dispatch must persist it on the
+        # approval row so ANY surface (inline OR bell) can later resume the right thread.
+        ctx = ToolContext(tenant_id="acme", actor="admin (chat)",
+                          _meta={"conversation_id": "conv-xyz"})
+        aid = dispatch(registry=self.agent.registry, audit=self.agent.audit, ctx=ctx,
+                       name="fx_client_write", args={"note": "n"},
+                       gate=self.agent.gate, approvals=self.agent.approvals)["approval_id"]
+        self.assertEqual(self.agent.approvals.get(aid)["conversation_id"], "conv-xyz")
+
+    def test_bell_approval_resumes_via_stored_conversation(self):
+        # The bell sends NO conversation_id; the continuation must still fire, driven by the
+        # conversation_id stored on the approval row (D-62 follow-up).
+        from execution.agent import AgentTurn
+        convs = self.agent.conversations
+        conv_id = convs.create("admin", tenant_id="acme")["id"]
+        convs.add_message("admin", conv_id, "user", "do the write")
+        ctx = ToolContext(tenant_id="acme", actor="admin (chat)",
+                          _meta={"conversation_id": conv_id})
+        aid = dispatch(registry=self.agent.registry, audit=self.agent.audit, ctx=ctx,
+                       name="fx_client_write", args={"note": "bell note"},
+                       gate=self.agent.gate, approvals=self.agent.approvals)["approval_id"]
+        convs.add_message("admin", conv_id, "assistant", "needs approval",
+                          meta={"pending": {"id": aid, "tool": "fx_client_write"}})
+        self.agent.chat = lambda *a, **k: AgentTurn(answer="Resumed and finished.",
+                                                    provider="mock", model="m", rounds=1)
+        r = self.api.handle("POST", f"/api/approvals/{aid}/approve", {}, {}, "admin")  # no conv_id
+        self.assertTrue(r.payload["executed"])
+        self.assertEqual(r.payload["continuation"]["message"], "Resumed and finished.")
+        msgs = convs.get("admin", conv_id)["messages"]
+        self.assertIsNone(msgs[1]["meta"].get("pending"))                 # buttons cleared
+        self.assertEqual(msgs[-1]["content"], "Resumed and finished.")    # continuation posted
+
+    def test_stream_approval_executes_then_streams_continuation(self):
+        # The inline streaming path: a `decided` frame (executed + summary), then live continuation
+        # frames, then a final `answer` frame — all without a synchronous block on the POST.
+        convs = self.agent.conversations
+        conv_id = convs.create("admin", tenant_id="acme")["id"]
+        convs.add_message("admin", conv_id, "user", "do the write")
+        aid = dispatch(registry=self.agent.registry, audit=self.agent.audit, ctx=self.ctx,
+                       name="fx_client_write", args={"note": "streamed"},
+                       gate=self.agent.gate, approvals=self.agent.approvals)["approval_id"]
+        frames = list(self.api.stream_approval(
+            {"approval_id": aid, "conversation_id": conv_id}, "admin"))
+        kinds = [f["type"] for f in frames]
+        self.assertEqual(kinds[0], "decided")
+        self.assertTrue(frames[0]["executed"])
+        self.assertEqual(kinds[-1], "answer")                  # continuation streamed to an answer
+        self.assertIn("streamed", VaultStore().read_memory("acme"))   # the action actually ran
+
+    def test_stream_approval_rejects_double_decision(self):
+        aid = dispatch(registry=self.agent.registry, audit=self.agent.audit, ctx=self.ctx,
+                       name="fx_client_write", args={"note": "once"},
+                       gate=self.agent.gate, approvals=self.agent.approvals)["approval_id"]
+        self.api.handle("POST", f"/api/approvals/{aid}/approve", {}, {}, "admin")
+        frames = list(self.api.stream_approval({"approval_id": aid}, "admin"))
+        self.assertEqual(frames[0]["type"], "error")          # one-shot guard holds
 
 
 class ConnectorSelfExtension(unittest.TestCase):

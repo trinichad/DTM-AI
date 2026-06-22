@@ -16,5 +16,10 @@ PARAMETERS = {"type": "object", "properties": {"note": {"type": "string"}},
               "required": ["note"], "additionalProperties": False}
 
 
+def describe_approval(ctx, args):
+    """Optional approval-card preview (D-90) — exercised by the preview tests."""
+    return {"Note": str(args.get("note") or ""), "Client": ctx.tenant_id}
+
+
 def run(ctx, note: str, **_: Any):
     return VaultStore().append_memory(ctx.tenant_id, note, ctx.actor)

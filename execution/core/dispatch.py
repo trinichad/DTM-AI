@@ -113,9 +113,21 @@ def dispatch(
         else:
             needs = getattr(gate, "needs_approval", lambda t, n: True)(ctx.tenant_id, name)
             if needs and approvals is not None:
+                # A human-readable preview of the proposed write (e.g. group id → "Autopilot
+                # users"), resolved here so the owner confirms intent, not a raw GUID. Best-effort
+                # + read-only: any failure falls back to showing the raw args (Rule #2 — never
+                # invent; this only RESOLVES identifiers the tool already understands).
+                preview = None
+                if tool.describe_approval is not None:
+                    try:
+                        preview = tool.describe_approval(ctx, valid)
+                    except Exception:  # noqa: BLE001 — preview is cosmetic, never block the approval
+                        preview = None
                 # Don't execute — record a proposed action for explicit human review.
                 aid = approvals.create(actor=ctx.actor, tenant_id=ctx.tenant_id,
-                                       tool=name, category=tool.category, args=valid)
+                                       tool=name, category=tool.category, args=valid,
+                                       conversation_id=ctx._meta.get("conversation_id"),
+                                       args_preview=preview)
                 audit.record(actor=ctx.actor, tenant_id=ctx.tenant_id,
                              action="approval_requested", tool=name, category=tool.category,
                              args=valid, result_ok=False, detail=f"approval#{aid}")
@@ -123,6 +135,7 @@ def dispatch(
                                 error="approval required — submitted for human review")
                 env["approval_id"] = aid
                 env["status"] = "pending_approval"
+                env["approval_preview"] = preview
                 return env
             return deny(
                 f"write tool '{name}' blocked: missing/invalid approval", category=tool.category,

@@ -171,3 +171,58 @@ CONTINUATION turn after executing the action:
   swallowed (logged) — the deterministic summary has already told the owner what happened, so a
   broken follow-up can never mask an executed action.
 - Bell-panel approvals (no conversation) and rejections behave as before (no continuation).
+
+## Amendment (2026-06-22) — `chat()` must pause on pending approval too (the D-62 promise was only half-built)
+
+Bug the owner hit: a multi-step write request (assign two licenses + grant full-access + send-as)
+stalled — the inline Approve button sat on "Running…", later steps never asked for approval inline,
+and approvals showed up only in the bell (one had to be approved there). Send-as was never proposed.
+
+Root cause: the D-62 continuation runs `agent.chat()` (the **non-streaming** loop), and that loop
+**never had the `pending_approval` pause** — only `chat_stream` did. So a continuation that reached
+the next write didn't stop: dispatch created the approval row, returned the `pending_approval`
+envelope, and `chat()` fed that "approval required" back to the model and kept looping — firing the
+following writes too. Result: `turn.pending` stayed `None` (no inline card → forced to the bell),
+orphan approval rows piled up, and the loop ran extra rounds before narrating, so the synchronous
+approve POST (and its "Running…" button) hung far longer than it should. The line above —
+"a further write pauses again as a NEW pending approval" — described intended behavior the code
+never implemented for `chat()`. `teams_bot.py` and the delegation worker also read `turn.pending`
+from `chat()`, so they had the same latent gap.
+
+Fix: `Agent.chat()` now performs the **same `pending_approval` pause as `chat_stream`** — set
+`turn.pending`, write the "needs your approval" answer, and return at the FIRST write needing
+sign-off. One inline card at a time; no orphan rows; the continuation returns promptly. The
+continuation response (and the REST `/api/chat` path) now also carry `tools`/`citations`/`reasoning`
+so the post-approval bubble shows the agent's work, not just a bare line. Regression test:
+`test_nonstreaming_chat_pauses_on_approval_needed_write` (two queued writes → pauses at the first,
+exactly one pending, nothing executed).
+
+## Amendment (2026-06-22b) — stream the continuation + let bell approvals resume the task
+
+Two follow-ups to the pause fix above, both shipped:
+
+**1. The continuation streams live.** Previously the continuation ran *synchronously inside the
+approve POST* via `agent.chat()`, so the inline button sat on "Running…" with no feedback until the
+whole multi-round turn returned. New SSE endpoint `POST /api/approvals/stream` (admin-gated in
+`server.py`, same as the JSON approve): it executes the action, emits a `decided` frame (executed +
+deterministic summary), then **streams the continuation turn** through `chat_stream` — the same
+`thinking`/`delta`/`tool_call`/`tool_result`/`answer` frames as a normal chat turn, bridged via the
+same queue+worker pattern as `stream_chat`, and **stoppable** via `/api/chat/stop` (shares the
+`_stops` registry, keyed by conversation). The inline card's **Approve & run** now POSTs here and
+paints the continuation into the standard `#ai-streaming` bubble (reusing `paintStream`/`aiHtml`),
+so the owner watches tool calls and reasoning arrive in real time, and the next step's approval card
+renders from the final `answer` frame's `pending`. The execution/summary/batch-grant logic is
+factored into `_run_approval` (shared by the JSON `_approve` and the streaming `stream_approval`).
+
+**2. Bell approvals resume the task.** The approvals table gained a `conversation_id` column
+(migrated in place). `dispatch()` stamps it from `ctx._meta["conversation_id"]` (set by every chat
+handler) when it records a proposed action. `_approve`/`_reject` resolve the target conversation via
+`_resolve_conv`: the one the caller named (inline card) **else the one stored on the row** — so
+approving (or rejecting) a chat-originated action *from the bell*, which sends no conversation_id,
+now posts the result into the right thread and runs the continuation there (persisted; the owner
+sees it on next open). The bell path runs the continuation synchronously (the owner isn't watching a
+stream); the inline path streams it. Teams-proposed approvals leave `conversation_id` NULL for the
+dashboard (a dashboard admin doesn't own the Teams thread), so a bell decision on one safely does
+not try to resume it. Tests: `test_dispatch_records_the_originating_conversation_on_the_approval`,
+`test_bell_approval_resumes_via_stored_conversation`, `test_stream_approval_executes_then_streams_continuation`,
+`test_stream_approval_rejects_double_decision`.
