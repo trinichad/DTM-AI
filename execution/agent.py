@@ -168,8 +168,12 @@ def tool_payload(envelope: dict[str, Any], max_chars: int = MAX_RESULT_CHARS) ->
             trial["data"] = data[:keep]
             trial["_truncated"] = {
                 "shown": keep, "total": len(data),
-                "note": "PARTIAL RESULT — this is NOT the full list. Do not conclude an item is "
-                        "absent from this. Re-call with a name_contains filter to get complete results."}
+                "note": (f"PARTIAL RESULT — showing the first {keep} of {len(data)} items; the rest "
+                         f"were dropped ONLY to fit the context limit (they are NOT absent). "
+                         f"Re-calling with the SAME arguments returns the SAME page — do NOT loop. "
+                         f"Present these rows to the user as a table, state that {len(data)} matched "
+                         f"in total, and offer to narrow the query (a more specific name_contains/"
+                         f"search) or export. Only a NARROWER query returns different rows.")}
             blob = json.dumps(trial, default=str)
             if len(blob) <= max_chars:
                 return blob

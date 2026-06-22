@@ -51,7 +51,15 @@ def build_agent(cfg: Optional[Config] = None, db_path: Optional[Path] = None) ->
         if t.source == "msp_ai" and t.is_write and t.name not in existing:
             caps.set(t.name, allow_write=True, require_approval=t.requires_approval)
     gate = ConfigurableApprovalGate(caps, registry, approvals=approvals)
-    agent = Agent(registry, audit, router, gate=gate, cfg=cfg)   # cfg → profile-aware prompts
+    # Tool-call rounds per turn. 8 was too low for real ops work (a multi-step task that touches
+    # several tools, or any per-item loop, hit the cap and returned no answer — D-96). 20 gives
+    # headroom while still bounding runaway loops; override with MSPAI_MAX_ROUNDS.
+    import os
+    try:
+        max_rounds = max(4, min(int(os.getenv("MSPAI_MAX_ROUNDS", "20")), 60))
+    except (TypeError, ValueError):
+        max_rounds = 20
+    agent = Agent(registry, audit, router, gate=gate, max_rounds=max_rounds, cfg=cfg)
     agent.caps = caps                            # expose for the console/CLI
     agent.approvals = approvals                  # expose for the approval API + agent dispatch
     agent.conversations = conversations          # expose for the chat-history API

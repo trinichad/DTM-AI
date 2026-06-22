@@ -380,3 +380,35 @@ understands, it never invents). `m365_add/remove_security_group_member` implemen
 `displayName · id`, plus the user). Registry discovers the hook via `ToolInfo.describe_approval`.
 Tests: `test_describe_approval_preview_is_resolved_and_stored`,
 `test_pending_turn_carries_the_preview_to_the_card`, `test_preview_failure_falls_back_to_raw_args`.
+
+## Amendment (2026-06-22, D-93) — `m365_list_users` substring search (`name_contains`)
+
+"List the users with `zzz_` in their name" made the agent loop `m365_list_users` to the tool-call
+cap with no answer: Graph keyword `$search` is word/prefix-tokenized (it can't match a substring
+like a `zzz_` prefix reliably) and Graph has no `contains()` on user properties, so the model had no
+deterministic call and kept retrying. Fix: new `name_contains` parameter does a SERVER scan +
+CLIENT-SIDE substring filter — follows `@odata.nextLink` paging (`$skiptoken`, capped at
+`_MAX_SCAN_PAGES`=30 ≈ 30k users) and returns every user whose `displayName`, `userPrincipalName`,
+or `mail` contains the text (case-insensitive), complete in ONE call. Works per-client and across
+`*` (tags each match's `tenant`); both annotate a `note` if the page cap was hit. The description
+steers the model to `name_contains` for naming conventions (e.g. `zzz_`) and to `search` for
+fast word/prefix lookups. Test: `test_name_contains_filters_substring_across_pages` (paging +
+mixed-case + name/UPN hits).
+
+## Amendment (2026-06-22, D-94) — large user lists fit context; no truncation loop
+
+"Give me the formatted table with ALL 140 zzz_ users" looped `m365_list_users` to the round cap.
+Cause: 140 full user objects (~28 KB) exceeded the agent's 20 KB tool-result budget, so
+`tool_payload` truncated the list and (old note) told the model to "re-call with a name_contains
+filter" — but the query was already as narrow as intended, so each re-call returned the same page →
+loop, no answer. Two fixes:
+- **Slim the rows** (`m365_list_users._slim`): drop the GUID `id` and empty fields, omit `mail` when
+  it just echoes the UPN. Applied on every return path (list / search / name_contains / all-clients).
+  ~140 slimmed users now serialize under the 20 KB cap, so the whole match set reaches the model in
+  ONE result and it can emit the full table (dashboard then offers CSV/Excel/PDF export). Downstream
+  tools resolve by UPN/email, so dropping the raw id costs nothing. Test:
+  `test_large_match_set_fits_model_context_budget`.
+- **Loop-safe truncation note** (`agent.tool_payload`, generic): when a list still must be trimmed
+  to fit, the `_truncated` note now says the omitted rows are NOT absent, that re-calling with the
+  SAME args returns the SAME page (do NOT loop), and to present what fits + state the total + offer
+  to narrow or export. Only a NARROWER query returns different rows.

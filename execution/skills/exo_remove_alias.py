@@ -44,6 +44,9 @@ def run(ctx, identity: str, alias: str, **_: Any):
     if not any(a.lower() == f"smtp:{alias}" for a in _aliases(mb)):
         return {"ok": True, "mailbox": mb.get("PrimarySmtpAddress"), "alias": alias,
                 "note": "that alias isn't on the mailbox — nothing to remove"}
+    guard = c.needs_cloud_management(mb, {"EmailAddresses": True}, label="remove the alias")
+    if guard:
+        return guard
 
     r = exo.invoke("Set-Mailbox", {"Identity": identity, "Confirm": False,
                                    "EmailAddresses": hashtable({"Remove": f"smtp:{alias}"})})

@@ -106,6 +106,8 @@ PARAM_ALLOWLIST: dict[str, frozenset] = {
         "ForwardingSmtpAddress", "DeliverToMailboxAndForward",
         "RetentionPolicy",
         "GrantSendOnBehalfTo",                            # delegate: send on behalf
+        "IsExchangeCloudManaged",                         # let EXO master mailbox settings for an
+                                                          # AD-synced user (D-91) — reversible flag
     }),
     "New-RetentionPolicyTag": frozenset({
         "Name", "Type", "RetentionAction", "AgeLimitForRetention", "RetentionEnabled",

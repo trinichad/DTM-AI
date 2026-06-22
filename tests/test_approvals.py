@@ -264,9 +264,11 @@ class ApprovalContinuation(unittest.TestCase):
                          "Done — verified Fred is hidden.")
         # same model as the conversation, not the local default
         self.assertEqual(seen["model_id"], "openai-codex:gpt-5.5")
-        # the synthetic instruction carries the executed result and is NOT a stored user msg
+        # the synthetic instruction carries the executed result and is NOT a stored user msg, and
+        # forces ACTION on remaining steps rather than narration (D-92)
         self.assertIn("APPROVED", seen["message"])
-        self.assertIn("ALREADY RUN", seen["message"])
+        self.assertIn("ALREADY RAN", seen["message"])
+        self.assertIn("CALL the necessary tool", seen["message"])
         msgs = convs.get("admin", conv_id)["messages"]
         self.assertEqual([m["role"] for m in msgs],
                          ["user", "assistant", "assistant", "assistant"])  # no extra user msg

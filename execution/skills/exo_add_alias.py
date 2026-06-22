@@ -42,6 +42,9 @@ def run(ctx, identity: str, alias: str, **_: Any):
     if any(a.lower() == f"smtp:{alias}" for a in _aliases(mb)):
         return {"ok": True, "mailbox": mb.get("PrimarySmtpAddress"), "alias": alias,
                 "note": "that alias is already on the mailbox — nothing to do"}
+    guard = c.needs_cloud_management(mb, {"EmailAddresses": True}, label="add the alias")
+    if guard:
+        return guard
 
     r = exo.invoke("Set-Mailbox", {"Identity": identity, "Confirm": False,
                                    "EmailAddresses": hashtable({"Add": f"smtp:{alias}"})})

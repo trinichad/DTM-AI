@@ -226,3 +226,25 @@ dashboard (a dashboard admin doesn't own the Teams thread), so a bell decision o
 not try to resume it. Tests: `test_dispatch_records_the_originating_conversation_on_the_approval`,
 `test_bell_approval_resumes_via_stored_conversation`, `test_stream_approval_executes_then_streams_continuation`,
 `test_stream_approval_rejects_double_decision`.
+
+## Amendment (2026-06-22, D-92) — continuation must ACT, not narrate ("submitted/pending" hallucination)
+
+Owner hit this on "hide GAL for dtmaz1 and dtmaz2": approved dtmaz1's cloud-management enable, then
+the continuation produced text claiming it "submitted the required enable cloud management step for
+dtmaz2 for approval — pending approval" and stopped. But the DB showed **no approval row for
+dtmaz2** — the model never called the tool; it narrated the next step (parroting the canned "I've
+prepared X… needs your approval" phrasing) instead of invoking it. No tool call → no approval → no
+card → the multi-target task silently stalled after the first target. (Not a rendering or dispatch
+bug — the pause/stream/card paths were all working.)
+
+Cause: the continuation's synthetic instruction said "perform any remaining steps, and give the
+owner a short status reply", which let the model treat "describe the next step" as a valid action
+and emit a fake status. Fix: `Api._continuation_note(row, env)` (one shared builder, replacing the
+two divergent inline copies; Teams' copy updated to match) now forces ACTION over narration —
+"actually CALL the necessary tool NOW for any remaining step, INCLUDING the same action for other
+targets the owner named; NEVER say something is 'submitted'/'pending approval'/'done' unless you
+actually called that tool this turn and saw its result." It still forbids re-running the just-run
+action with the same args, and only invites a status reply when nothing remains. The JSON
+continuation ctx also now carries `conversation_id` (parity with the streamed path) so any approval
+it creates is bell-resumable. Test: `test_approve_runs_a_continuation_turn_on_the_conversations_model`
+asserts the note carries APPROVED/ALREADY RAN + "CALL the necessary tool".

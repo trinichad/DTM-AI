@@ -368,11 +368,18 @@ class TeamsBridge:
                                  "credvault": getattr(self.agent, "credvault", None),
                                  "user_profile": self._user_profile(env, aad_id, user_name)})
         result_blob = _json.dumps({k: res.get(k) for k in ("ok", "data", "error")}, default=str)[:4000]
-        synthetic = (f"[system note — not from the owner] The owner APPROVED the pending "
-                     f"'{row['tool']}' action and it has ALREADY RUN. Result: {result_blob}. Continue "
-                     f"the task: verify the outcome if appropriate, perform any remaining steps, and "
-                     f"give the owner a short natural status reply. Do NOT run '{row['tool']}' again "
-                     f"with the same arguments.")
+        # D-92: force ACTION over narration — the model must actually CALL the tool for any
+        # remaining step (incl. other targets), never just claim it "submitted/pending" one.
+        synthetic = (f"[system note — not from the owner] You APPROVED and ALREADY RAN the "
+                     f"'{row['tool']}' action; result: {result_blob}. Now CONTINUE the original "
+                     f"task to completion. If any steps remain — INCLUDING the same action for "
+                     f"OTHER targets the owner named, or required follow-on changes — actually "
+                     f"CALL the necessary tool NOW; do not merely describe the next step. Approval "
+                     f"is automatic: calling a write tool surfaces its own approval prompt, so "
+                     f"NEVER say something is 'submitted', 'pending approval', or 'done' unless you "
+                     f"actually called that tool THIS turn and saw its result. Do NOT re-run "
+                     f"'{row['tool']}' with the same arguments. Only when nothing remains, give a "
+                     f"short natural status reply.")
         history = convs.history(owner, mspai_id)
         turn = self.agent.chat(ctx, synthetic, history=history, profile=profile)
         answer = (turn.answer or "").strip()

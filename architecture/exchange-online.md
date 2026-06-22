@@ -294,3 +294,56 @@ connector), exo_remove_forwarding_alert (compliance).
 `exo_set_mailbox_quota` now parses KB/MB/**GB** (e.g. "0.1GB" ≈ 102MB) and sends Exchange a
 canonical "<int>MB" so the verify echo-match stays exact. The 1MB–150MB EXO ceiling is unchanged
 (a too-large value reports the computed MB).
+
+## Amendment (2026-06-22, D-91) — enable Exchange cloud management for AD-synced users
+
+`exo_enable_cloud_management` (CATEGORY=write, RISK=medium, approval-required, default-off). For a
+user synced from on-prem AD (`IsDirSynced=True`), Exchange mailbox settings are mastered on-prem and
+can't be edited in EXO until the mailbox is flagged cloud-managed; this tool runs
+`Set-Mailbox -IsExchangeCloudManaged $true` so the existing cloud mailbox tools
+(`exo_set_gal_visibility`, `exo_add_alias`, `exo_set_primary_smtp`) take effect. AD still owns
+identity, password, enabled/disabled status, and group membership — only mailbox settings move to
+the cloud.
+
+- `IsExchangeCloudManaged` added to `Set-Mailbox`'s PARAM_ALLOWLIST in `exo.py` (the one new
+  parameter this needs; nothing else widened).
+- Same D-43 verify discipline as the rest of the suite: preflight Get-Mailbox (exists + reads
+  `IsDirSynced` / `IsExchangeCloudManaged`) → Set-Mailbox → re-read → confirm the flag flipped.
+  Already-managed mailboxes short-circuit to ok ("nothing to do"); a non-AD-synced mailbox is noted
+  (it's typically already cloud-managed) but not refused.
+- Carries a `describe_approval` (D-90) so the approval card reads "Enable cloud management for:
+  <user>" with the plain-English effect, not a bare cmdlet.
+- The downstream asks (update GAL visibility + confirm; set primary SMTP) are already covered by the
+  existing `exo_set_gal_visibility` and `exo_set_primary_smtp` tools — both self-verify — so this
+  enable step is the only missing piece in the GAL/alias/SMTP workflow for synced users.
+- **Read-side:** `exo_mailbox_details` now surfaces `dir_synced` (IsDirSynced) and `cloud_managed`
+  (IsExchangeCloudManaged) — both already in the Get-Mailbox response, just not exposed — so "is
+  cloud management already set?" is answerable with a READ, no write/approval needed.
+- **Preflight guard:** changing an on-prem-mastered attribute (GAL visibility, aliases, primary
+  SMTP / sign-in UPN) on a directory-synced, NOT-yet-cloud-managed mailbox returns Exchange's
+  cryptic `400 "out of the current user's write scope"`. `_exo_common.needs_cloud_management(mb,
+  params, label)` (keyed on `_DIRECTORY_MASTERED` = {HiddenFromAddressListsEnabled, EmailAddresses,
+  WindowsEmailAddress, MicrosoftOnlineServicesID}) now pre-empts this in preflight — BEFORE any
+  Set-Mailbox — with `ok=false, step=preflight, needs_cloud_management=true` and a message that
+  names `exo_enable_cloud_management` as the fix. Wired into `set_and_verify` (covers
+  `exo_set_gal_visibility`, `exo_set_primary_smtp`) and called explicitly by `exo_add_alias` /
+  `exo_remove_alias` (they invoke Set-Mailbox directly). The agent now explains the cause and offers
+  to enable cloud management up front, instead of attempting the write and reverse-engineering the
+  400 afterward.
+
+## Amendment (2026-06-22, D-96) — bulk GAL visibility + higher tool-call round cap
+
+"Check these 20 users' GAL and hide the ones that aren't" repeatedly hit the agent's tool-call
+round cap: one `exo_mailbox_details`/`exo_set_gal_visibility` per user burns a ROUND per mailbox, so
+the loop died (no answer) before finishing even the check phase. Two fixes:
+- **`exo_bulk_set_gal_visibility`** (CATEGORY=write, RISK=medium, approval-required, default-off):
+  takes a LIST of mailbox addresses + `hidden`, and in ONE call (one round, ONE approval) per
+  mailbox skips those already in the desired state, sets + re-reads to verify the rest (D-43), and
+  flags any blocked by the cloud-management guard (D-91) — never failing the whole batch for one
+  bad mailbox. Returns a per-mailbox result table + summary counts. Carries `describe_approval`
+  (D-90) so the owner approves the whole batch once. The agent should prefer it over calling
+  `exo_set_gal_visibility` one mailbox at a time.
+- **Round cap raised 8 → 20** (`runtime.build_agent`, override `MSPAI_MAX_ROUNDS`): 8 was too low
+  for any multi-step/per-item task; 20 gives headroom while still bounding runaway loops.
+Test: `test_bulk_gal_handles_mixed_states_in_one_call` (hidden / unchanged / needs_cloud_management
+/ error in a single call; only the one real change writes).

@@ -35,6 +35,38 @@ def get_one_mailbox(exo, identity: str) -> tuple[Optional[dict], Optional[dict]]
     return rows[0], None
 
 
+# Set-Mailbox attributes that, for an AD-synced mailbox, are mastered ON-PREM and rejected by
+# Exchange with a cryptic "out of the current user's write scope" 400 until the mailbox is flagged
+# cloud-managed (IsExchangeCloudManaged). We pre-empt with a clear, actionable error that names the
+# fix (exo_enable_cloud_management) instead of letting the write fail and reverse-engineering why
+# afterward (D-91 follow-up).
+_DIRECTORY_MASTERED = frozenset({
+    "HiddenFromAddressListsEnabled",   # GAL / address-book visibility
+    "EmailAddresses",                  # aliases / proxy addresses
+    "WindowsEmailAddress",             # primary SMTP
+    "MicrosoftOnlineServicesID",       # sign-in UPN
+})
+
+
+def needs_cloud_management(mb: dict, params: dict, *, label: str) -> Optional[dict]:
+    """Return an actionable error dict iff `params` touch an on-prem-mastered attribute on a
+    directory-synced mailbox that is NOT yet cloud-managed — else None. Callers run this right
+    after their preflight Get-Mailbox, before Set-Mailbox, so the failure is explained up front
+    and the agent can offer to enable cloud management instead of guessing post-mortem."""
+    if not (_DIRECTORY_MASTERED & set(params or {})):
+        return None
+    if _norm(mb.get("IsDirSynced")) != "true" or _norm(mb.get("IsExchangeCloudManaged")) == "true":
+        return None
+    who = mb.get("PrimarySmtpAddress") or mb.get("DisplayName") or "this mailbox"
+    return {"ok": False, "step": "preflight", "needs_cloud_management": True,
+            "mailbox": mb.get("PrimarySmtpAddress"),
+            "error": (f"can't {label}: {who} is a directory-synced mailbox and Exchange cloud "
+                      f"management is NOT enabled, so this setting is still mastered by on-prem "
+                      f"Active Directory and can't be changed in the cloud. Enable cloud "
+                      f"management first (exo_enable_cloud_management), then retry — or change it "
+                      f"from the on-prem directory.")}
+
+
 def set_and_verify(exo, identity: str, params: dict, verify: dict[str, Any],
                    *, label: str) -> dict[str, Any]:
     """Set-Mailbox `params` on `identity`, then re-read and check every `verify` field
@@ -43,6 +75,9 @@ def set_and_verify(exo, identity: str, params: dict, verify: dict[str, Any],
     mb, bad = get_one_mailbox(exo, identity)
     if bad:
         return bad
+    guard = needs_cloud_management(mb, params, label=label)
+    if guard:
+        return guard
     r = exo.invoke("Set-Mailbox", {"Identity": identity, "Confirm": False, **params})
     if err(r):
         return {"ok": False, "step": label, "error": err(r)}

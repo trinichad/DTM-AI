@@ -5,9 +5,11 @@ from typing import Any
 
 NAME = "exo_mailbox_details"
 DESCRIPTION = ("Show ONE mailbox's full admin details: type, aliases, hidden-from-address-book, "
-               "forwarding, max send/receive sizes, retention policy, online-archive state, and "
-               "the CURRENT SIZE of the mailbox and its archive. Use this to check a mailbox's "
-               "configuration or to verify a change.")
+               "forwarding, max send/receive sizes, retention policy, online-archive state, "
+               "whether the user is AD-synced and whether Exchange CLOUD MANAGEMENT is enabled, "
+               "and the CURRENT SIZE of the mailbox and its archive. Use this to check a mailbox's "
+               "configuration (including whether cloud management is already set) or to verify a "
+               "change.")
 SOURCE = "m365"
 CATEGORY = "read"
 RISK_LEVEL = "low"
@@ -58,6 +60,8 @@ def run(ctx, identity: str, **_: Any):
         "display_name": mb.get("DisplayName"),
         "type": mb.get("RecipientTypeDetails"),
         "sign_in_id": mb.get("MicrosoftOnlineServicesID") or mb.get("UserPrincipalName"),
+        "dir_synced": bool(mb.get("IsDirSynced")),              # identity mastered on-prem AD?
+        "cloud_managed": bool(mb.get("IsExchangeCloudManaged")),  # EXO masters mailbox settings? (D-91)
         "addresses": [a for a in (mb.get("EmailAddresses") or []) if isinstance(a, str)],
         "hidden_from_address_book": bool(mb.get("HiddenFromAddressListsEnabled")),
         "forwarding": ({"to": str(fwd).removeprefix("smtp:"),

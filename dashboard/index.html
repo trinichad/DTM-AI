@@ -567,7 +567,7 @@ function reattachStream(){ if(!STREAM||STREAM.done||STREAM.conv!==CONV||!$('#msg
   streamUI(true); const sb=$('#stopBtn'); if(sb&&!sb.onclick) sb.onclick=stopStream;
   paintStream(); }
 function renderChatLog(){ const box=$('#msgs'); if(!box)return; box.innerHTML='';
-  for(const t of MSGS) bubble(t.role==='user'?'you':'ai', t.role==='user'?esc(t.text):(t.error?'<span class="text-rose-400">error</span>':aiHtml(t)), null, t.ts);
+  for(const t of MSGS) bubble(t.role==='user'?'you':'ai', t.role==='user'?esc(t.text):(t.error?`<span class="text-rose-400">⚠️ ${esc(t.answer||'error')}</span>`:aiHtml(t)), null, t.ts);
   box.scrollTop=1e9; icons(); }
 // ── host resource gauges (overview) ──
 async function loadHostStats(){ const el=$('#hoststats'); if(!el) return;
@@ -1390,8 +1390,9 @@ const VIEWS={
         const prevAp=window._apPending||0;
         refreshApprovalBadge().then(n=>{ if(n>prevAp) toast(`${n} write action${n>1?'s':''} waiting for your approval — bell, top right`,true); });
       }catch(err){ if(STREAM)STREAM.done=true;
-        if(!(err&&err.message==='auth')){ MSGS.push({role:'assistant',error:true});
-          const e=document.getElementById('ai-streaming'); if(e){ e.removeAttribute('id'); e.innerHTML='<span class="text-rose-400">error</span>'; } }
+        if(!(err&&err.message==='auth')){ const m=(err&&err.message)||'stream error';
+          MSGS.push({role:'assistant',error:true,answer:m});
+          const e=document.getElementById('ai-streaming'); if(e){ e.removeAttribute('id'); e.innerHTML=`<span class="text-rose-400">⚠️ ${esc(m)}</span>`; } }
         STREAM=null; streamUI(false); }};
     const sb=$('#stopBtn'); if(sb) sb.onclick=stopStream;
     renderRail(); await loadMsgs(); renderChatLog(); showSuggest(); updateMeter(); icons();

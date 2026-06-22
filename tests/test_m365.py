@@ -363,6 +363,56 @@ class ListUsersSkill(unittest.TestCase):
         self.assertEqual(fake.params["$count"], "true")
         self.assertEqual(r["searched_for"], "smith")
 
+    def test_name_contains_filters_substring_across_pages(self):
+        # D-93: substring match across display name + UPN, case-insensitive, paging the whole
+        # directory, complete in ONE tool call (vs the model looping m365_list_users to the cap).
+        from execution.core.context import ToolContext
+        from execution.skills import m365_list_users
+        page1 = {"value": [
+            {"id": "1", "displayName": "zzz_Old User", "userPrincipalName": "olduser@x.com"},
+            {"id": "2", "displayName": "Alice", "userPrincipalName": "alice@x.com"}],
+            "@odata.nextLink": "https://graph.microsoft.com/v1.0/users?$skiptoken=ABC"}
+        page2 = {"value": [
+            {"id": "3", "displayName": "Bob", "userPrincipalName": "ZZZ_bob@x.com"},
+            {"id": "4", "displayName": "Carol", "userPrincipalName": "carol@x.com"}]}
+
+        class FakeGraph:
+            def __init__(self): self.calls = []
+            def get(self, path, params=None):
+                self.calls.append(dict(params or {}))
+                return page2 if (params or {}).get("$skiptoken") else page1
+        fake = FakeGraph()
+        ctx = ToolContext(tenant_id="acme", actor="t", client_factory=lambda i, t: fake)
+        r = m365_list_users.run(ctx, name_contains="ZZZ_")     # mixed case in the query too
+        self.assertEqual(r["match"], "contains")
+        self.assertEqual(r["scanned"], 4)                      # paged through both pages
+        self.assertEqual(len(fake.calls), 2)                   # followed nextLink once
+        self.assertEqual({u["userPrincipalName"] for u in r["users"]},
+                         {"olduser@x.com", "ZZZ_bob@x.com"})   # name hit + UPN hit
+        self.assertNotIn("id", r["users"][0])                  # slimmed for context (D-94)
+        self.assertEqual(r["count"], 2)
+
+    def test_large_match_set_fits_model_context_budget(self):
+        # D-94: 140 slimmed matches must serialize UNDER the agent's 20KB tool-result cap, so the
+        # whole list reaches the model in ONE result (no truncation → no re-call loop).
+        import json
+        from execution.core.context import ToolContext
+        from execution.skills import m365_list_users
+        from execution.agent import tool_payload, MAX_RESULT_CHARS
+        big = {"value": [{"id": f"id-{i:040d}",
+                          "displayName": f"zzz_User Number {i}",
+                          "userPrincipalName": f"zzz_user{i}@rhoresidential.com",
+                          "mail": f"zzz_user{i}@rhoresidential.com",
+                          "accountEnabled": False, "jobTitle": None, "department": None}
+                         for i in range(140)]}
+        fake = type("F", (), {"get": lambda self, p, params=None: big})()
+        ctx = ToolContext(tenant_id="acme", actor="t", client_factory=lambda i, t: fake)
+        r = m365_list_users.run(ctx, name_contains="zzz_")
+        self.assertEqual(r["count"], 140)
+        env = {"ok": True, "source": "m365", "tenant_id": "acme", "data": r}
+        self.assertLessEqual(len(json.dumps(env, default=str)), MAX_RESULT_CHARS)  # no truncation
+        self.assertNotIn("_truncated", tool_payload(env))
+
     def test_big_tenant_notes_total(self):
         from execution.core.context import ToolContext
         from execution.skills import m365_list_users
@@ -767,6 +817,115 @@ class D55MailboxAdmin(unittest.TestCase):
                                        hidden=True)
         self.assertTrue(r["ok"], r)
         self.assertTrue(fake.calls[1][1]["HiddenFromAddressListsEnabled"])
+
+    def test_bulk_gal_handles_mixed_states_in_one_call(self):
+        # D-96: one call hides a whole list — skips already-hidden, hides+verifies the rest, flags
+        # the ones that need cloud management, errors the missing — without N tool-call rounds.
+        from execution.core.context import ToolContext
+        from execution.skills import exo_bulk_set_gal_visibility as bulk
+
+        class StatefulEXO:
+            def __init__(self, mboxes): self.mboxes = mboxes; self.set_calls = []
+            def invoke(self, cmdlet, params=None):
+                params = params or {}; ident = str(params.get("Identity", "")).lower()
+                if cmdlet == "Get-Mailbox":
+                    mb = self.mboxes.get(ident)
+                    return [mb] if mb else {"error": "couldn't be found"}
+                if cmdlet == "Set-Mailbox":
+                    self.set_calls.append(params); mb = self.mboxes.get(ident)
+                    if mb and "HiddenFromAddressListsEnabled" in params:
+                        mb["HiddenFromAddressListsEnabled"] = params["HiddenFromAddressListsEnabled"]
+                    return {"ok": True}
+                return {"error": "unexpected"}
+        fake = StatefulEXO({
+            "u1@x.com": {"PrimarySmtpAddress": "u1@x.com", "HiddenFromAddressListsEnabled": False,
+                         "IsDirSynced": False, "IsExchangeCloudManaged": False},   # cloud-only → hide
+            "u2@x.com": {"PrimarySmtpAddress": "u2@x.com", "HiddenFromAddressListsEnabled": True},  # already
+            "u3@x.com": {"PrimarySmtpAddress": "u3@x.com", "HiddenFromAddressListsEnabled": False,
+                         "IsDirSynced": True, "IsExchangeCloudManaged": False}})    # blocked
+        ctx = ToolContext(tenant_id="acme", actor="t", client_factory=lambda i, t: fake)
+        r = bulk.run(ctx, identities=["u1@x.com", "u2@x.com", "u3@x.com", "missing@x.com"],
+                     hidden=True)
+        self.assertTrue(r["ok"], r)
+        status = {row["identity"]: row["status"] for row in r["results"]}
+        self.assertEqual(status["u1@x.com"], "hidden")
+        self.assertEqual(status["u2@x.com"], "unchanged")
+        self.assertEqual(status["u3@x.com"], "needs_cloud_management")
+        self.assertEqual(status["missing@x.com"], "error")
+        self.assertEqual(r["summary"],
+                         {"hidden": 1, "shown": 0, "unchanged": 1,
+                          "needs_cloud_management": 1, "error": 1})
+        self.assertEqual([p["Identity"] for p in fake.set_calls], ["u1@x.com"])  # only the one change
+
+    def test_enable_cloud_management_set_and_verified(self):
+        # D-91: synced mailbox starts on-prem-mastered; flip IsExchangeCloudManaged and verify.
+        from execution.skills import exo_enable_cloud_management
+        synced = {**_MB, "IsDirSynced": True, "IsExchangeCloudManaged": False}
+        after = {**synced, "IsExchangeCloudManaged": True}
+        fake = ScriptedEXO([("Get-Mailbox", [synced]),      # short-circuit preflight
+                            ("Get-Mailbox", [synced]),      # set_and_verify preflight
+                            ("Set-Mailbox", {"ok": True}),
+                            ("Get-Mailbox", [after])])
+        r = exo_enable_cloud_management.run(_exo_ctx(fake), identity="user@demodomain.com")
+        self.assertTrue(r["ok"], r)
+        self.assertIs(fake.calls[2][1]["IsExchangeCloudManaged"], True)
+        self.assertEqual(r["after"], {"IsExchangeCloudManaged": True})
+
+    def test_enable_cloud_management_already_on_short_circuits(self):
+        from execution.skills import exo_enable_cloud_management
+        already = {**_MB, "IsDirSynced": True, "IsExchangeCloudManaged": True}
+        fake = ScriptedEXO([("Get-Mailbox", [already])])    # no Set-Mailbox should run
+        r = exo_enable_cloud_management.run(_exo_ctx(fake), identity="user@demodomain.com")
+        self.assertTrue(r["ok"], r)
+        self.assertIn("already cloud-managed", r["note"])
+        self.assertEqual(len(fake.calls), 1)                # nothing was written
+
+    def test_mailbox_details_reports_cloud_management_status(self):
+        # D-91: confirming "is cloud management set?" must be a READ — no write needed.
+        from execution.skills import exo_mailbox_details
+        mb = {**_MB, "IsDirSynced": True, "IsExchangeCloudManaged": False}
+        fake = ScriptedEXO([("Get-Mailbox", [mb]),
+                            ("Get-MailboxStatistics", [{"TotalItemSize": "1 MB", "ItemCount": 1}])])
+        r = exo_mailbox_details.run(_exo_ctx(fake), identity="user@demodomain.com")
+        self.assertTrue(r["ok"], r)
+        self.assertTrue(r["dir_synced"])
+        self.assertFalse(r["cloud_managed"])
+
+    def test_enable_cloud_management_param_is_allowlisted(self):
+        # The one new Set-Mailbox parameter must be permitted by the client allowlist.
+        from execution.clients.exo import PARAM_ALLOWLIST
+        self.assertIn("IsExchangeCloudManaged", PARAM_ALLOWLIST["Set-Mailbox"])
+
+    def test_gal_change_blocked_until_cloud_management_enabled(self):
+        # D-91 follow-up: a directory-synced, non-cloud-managed mailbox can't have GAL changed in
+        # EXO. Fail FAST in preflight with an actionable error, before any Set-Mailbox is sent.
+        from execution.skills import exo_set_gal_visibility
+        synced = {**_MB, "IsDirSynced": True, "IsExchangeCloudManaged": False}
+        fake = ScriptedEXO([("Get-Mailbox", [synced])])     # ONLY the preflight read runs
+        r = exo_set_gal_visibility.run(_exo_ctx(fake), identity="user@demodomain.com", hidden=True)
+        self.assertFalse(r["ok"])
+        self.assertTrue(r["needs_cloud_management"])
+        self.assertIn("exo_enable_cloud_management", r["error"])
+        self.assertEqual(len(fake.calls), 1)                # no Set-Mailbox attempted
+
+    def test_gal_change_allowed_once_cloud_managed(self):
+        from execution.skills import exo_set_gal_visibility
+        base = {**_MB, "IsDirSynced": True, "IsExchangeCloudManaged": True}
+        after = {**base, "HiddenFromAddressListsEnabled": True}
+        fake = ScriptedEXO([("Get-Mailbox", [base]), ("Set-Mailbox", {"ok": True}),
+                            ("Get-Mailbox", [after])])
+        r = exo_set_gal_visibility.run(_exo_ctx(fake), identity="user@demodomain.com", hidden=True)
+        self.assertTrue(r["ok"], r)
+
+    def test_add_alias_blocked_until_cloud_management_enabled(self):
+        from execution.skills import exo_add_alias
+        synced = {**_MB, "IsDirSynced": True, "IsExchangeCloudManaged": False}
+        fake = ScriptedEXO([("Get-Mailbox", [synced])])
+        r = exo_add_alias.run(_exo_ctx(fake), identity="user@demodomain.com",
+                              alias="sales@demodomain.com")
+        self.assertFalse(r["ok"])
+        self.assertTrue(r["needs_cloud_management"])
+        self.assertEqual(len(fake.calls), 1)                # no Set-Mailbox attempted
 
     def test_write_that_does_not_stick_is_reported_as_failure(self):
         # D-43 lesson: Set-Mailbox returns no error but the re-read shows the old value.

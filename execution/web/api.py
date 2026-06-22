@@ -606,13 +606,7 @@ class Api:
                                  "user_profile": self._user_profile(user),
                                  "conversation_id": conv_id})
         history = convs.history(user, conv_id)
-        result_blob = _json.dumps({k: env.get(k) for k in ("ok", "data", "error")},
-                                  default=str)[:4000]
-        synthetic = (f"[system note — not from the owner] The owner APPROVED the pending "
-                     f"'{row['tool']}' action and it has ALREADY RUN. Result: {result_blob}. "
-                     f"Continue the task: verify the outcome if appropriate, perform any "
-                     f"remaining steps, and give the owner a short status reply. Do NOT run "
-                     f"'{row['tool']}' again with the same arguments.")
+        synthetic = self._continuation_note(row, env)
         q: "queue.Queue" = queue.Queue()
         DONE = object()
         result: dict = {}
@@ -626,7 +620,10 @@ class Api:
                     ctx, synthetic, lambda e: q.put(e), model_id=model_id, history=history,
                     should_stop=stop_ev.is_set)
             except Exception as e:                   # contained; surfaced as an SSE error frame
-                result["error"] = str(e)
+                result["error"] = f"{type(e).__name__}: {e}"
+                import sys, traceback                 # log the FULL trace to journald (D-95)
+                print(f"[continuation] turn failed for {user}/{conv_id}: {result['error']}\n"
+                      + traceback.format_exc(), file=sys.stderr, flush=True)
             finally:
                 q.put(DONE)
 
@@ -660,6 +657,28 @@ class Api:
                "rounds": turn.rounds, "reasoning": turn.reasoning or None,
                "stopped": turn.stopped, "pending": turn.pending, "conversation_id": conv_id}
 
+    @staticmethod
+    def _continuation_note(row: dict, env: dict) -> str:
+        """The synthetic instruction that drives the post-approval continuation turn (D-62).
+
+        Hard lesson (D-92): the old wording ("perform any remaining steps, and give a short status
+        reply") let the model NARRATE the next step — e.g. claim it "submitted dtmaz2 for approval"
+        — without ever calling the tool. No tool call → no approval row → no card, so a multi-target
+        task silently stalled after the first target. This version forces ACTION over narration and
+        forbids fake "submitted/pending/done" claims for anything it didn't actually call."""
+        import json as _json
+        blob = _json.dumps({k: env.get(k) for k in ("ok", "data", "error")}, default=str)[:4000]
+        return (f"[system note — not from the owner] You APPROVED and ALREADY RAN the "
+                f"'{row['tool']}' action; result: {blob}. Now CONTINUE the original task to "
+                f"completion. If any steps remain — INCLUDING the same action for OTHER targets "
+                f"the owner named (e.g. a second user/mailbox), or required follow-on changes — "
+                f"actually CALL the necessary tool NOW; do not merely describe the next step. "
+                f"Approval is automatic: calling a write tool surfaces its own approval card, so "
+                f"NEVER say something is 'submitted', 'pending approval', 'queued', or 'done' "
+                f"unless you actually called that tool THIS turn and saw its result. Do NOT re-run "
+                f"'{row['tool']}' with the same arguments. Only when NO steps remain, give the "
+                f"owner a short status reply.")
+
     def _conv_model_id(self, conv: dict) -> Optional[str]:
         """The model the conversation last ran on — parsed from the stored 'provider/model ·'
         label so a gpt-5.5 chat CONTINUES on gpt-5.5 instead of falling to the local default."""
@@ -686,15 +705,10 @@ class Api:
                           allow_cloud=bool(model_id and not model_id.startswith("ollama:")),
                           client_factory=get_client_factory(),
                           _meta={"tasks": self.agent.tasks, "credvault": self.agent.credvault,
-                                 "user_profile": self._user_profile(user)})
+                                 "user_profile": self._user_profile(user),
+                                 "conversation_id": conv_id})
         history = convs.history(user, conv_id)
-        result_blob = _json.dumps({k: env.get(k) for k in ("ok", "data", "error")},
-                                  default=str)[:4000]
-        synthetic = (f"[system note — not from the owner] The owner APPROVED the pending "
-                     f"'{row['tool']}' action and it has ALREADY RUN. Result: {result_blob}. "
-                     f"Continue the task: verify the outcome if appropriate, perform any "
-                     f"remaining steps, and give the owner a short status reply. Do NOT run "
-                     f"'{row['tool']}' again with the same arguments.")
+        synthetic = self._continuation_note(row, env)
         turn = self.agent.chat(ctx, synthetic, model_id=model_id, history=history)
         if not (turn.answer or turn.pending):
             return None
@@ -2583,7 +2597,10 @@ class Api:
                     profile=body.get("agent") or body.get("profile"),
                     should_stop=stop_ev.is_set)
             except Exception as e:                       # contained; surfaced as an SSE error frame
-                result["error"] = str(e)
+                result["error"] = f"{type(e).__name__}: {e}"
+                import sys, traceback                     # log the FULL trace to journald (D-95)
+                print(f"[chat_stream] turn failed for {user}/{conv_id}: {result['error']}\n"
+                      + traceback.format_exc(), file=sys.stderr, flush=True)
             finally:
                 q.put(DONE)
 
