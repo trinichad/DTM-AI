@@ -487,3 +487,19 @@ timeout, instead of "check the admin center directly."
 - **`m365_offboard_user`** inline convert + license steps still single-read (D-104 follow-up) — align
   to `settle`/the EXO poll when that path is next touched.
 Tests: `test_remove_security_group_member_polls_through_replication_lag`, `_on_prem_synced_is_guarded`.
+
+## Amendment (2026-06-23, D-104c) — m365_offboard_user inline steps aligned to the poll
+
+Closed the D-104b follow-up: `m365_offboard_user` still verified its inline convert-to-shared and
+license-removal steps with a SINGLE immediate read, so a long offboard could emit the same false
+"didn't stick" the standalone tools used to. Now both poll:
+- **convert step** no longer uses `set_and_verify` (single read). It runs `Set-Mailbox -Type Shared`
+  then `_exo_common.settle` on RecipientTypeDetails. Type isn't a directory-mastered attribute, so the
+  D-91 cloud-management guard never applied to a convert — nothing lost by bypassing set_and_verify.
+- **license step** polls the post-removal `assignedLicenses` read with `_graph_common.settle` until
+  empty (was an immediate `left == 0`).
+Added a generic `_exo_common.settle(read, ok)` (the EXO twin of `_graph_common.settle`; default
+6 × 2s since EXO conversions are slower; `MSPAI_VERIFY_DELAY` tunes it) and retrofitted the standalone
+`exo_convert_mailbox` onto it too, so there's ONE poll mechanism per layer. EXO `set_and_verify`
+(ordinary read-your-writes attribute sets) is unchanged. Offboard tests updated (the convert step now
+does Set + one poll-read instead of set_and_verify's preflight+verify pair).

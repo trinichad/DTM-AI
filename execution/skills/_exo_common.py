@@ -13,6 +13,38 @@ def err(r: Any) -> str:
     return str(r.get("error")) if isinstance(r, dict) and r.get("error") else ""
 
 
+# Most EXO Set-Mailbox writes are read-your-writes, but a few backend operations are async —
+# mailbox-TYPE conversion above all (Set-Mailbox -Type accepts the change but Get-Mailbox keeps
+# reporting the old RecipientTypeDetails for seconds-to-minutes, D-99). `settle` polls such a verify
+# instead of failing on the first stale read: it checks IMMEDIATELY (no latency when already
+# consistent), then sleeps + retries while stale. Mirrors `_graph_common.settle`; `MSPAI_VERIFY_DELAY`
+# (seconds) tunes the wait (tests set 0). Use ONLY for the genuinely-async ops, not ordinary attr sets.
+_SETTLE_ATTEMPTS = 6
+_SETTLE_DELAY = 2.0
+
+
+def settle(read, ok, *, attempts=None, delay=None) -> "tuple[bool, Any]":
+    """Poll read() until ok(result) is True; return (satisfied, last_result). Read exceptions are
+    swallowed and retried. EXO conversions are slower than Graph, so the default is 6 × 2s."""
+    import os
+    import time
+    attempts = _SETTLE_ATTEMPTS if attempts is None else attempts
+    if delay is None:
+        env = os.environ.get("MSPAI_VERIFY_DELAY")
+        delay = float(env) if env not in (None, "") else _SETTLE_DELAY
+    last: Any = None
+    for i in range(attempts):
+        try:
+            last = read()
+            if ok(last):
+                return True, last
+        except Exception:
+            pass
+        if i < attempts - 1:
+            time.sleep(delay)
+    return False, last
+
+
 def is_not_found(e: str) -> bool:
     return bool(e) and ("NotFound" in e or "couldn't be found" in e)
 

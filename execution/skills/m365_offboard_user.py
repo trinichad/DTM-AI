@@ -132,10 +132,20 @@ def run(ctx, user: str, block_signin: bool = True, sign_out_devices: bool = True
         if str(mb.get("RecipientTypeDetails")) == "SharedMailbox":
             steps["convert_to_shared"] = "already shared"
         else:
-            r = c.set_and_verify(exo, user, {"Type": "Shared"},
-                                 {"RecipientTypeDetails": "SharedMailbox"}, label="convert")
-            steps["convert_to_shared"] = "done" if r.get("ok") else r.get("error")
-            all_ok &= bool(r.get("ok"))
+            # Type conversion is async/eventually-consistent — Set + POLL, not set_and_verify's
+            # single read, which false-failed the standalone tool too (D-99 / D-104b). Type isn't a
+            # directory-mastered attr, so the cloud-management guard never applied here anyway.
+            rset = exo.invoke("Set-Mailbox", {"Identity": user, "Type": "Shared", "Confirm": False})
+            if c.err(rset):
+                steps["convert_to_shared"] = c.err(rset)
+                all_ok = False
+            else:
+                flipped, _ = c.settle(
+                    lambda: c.get_one_mailbox(exo, user)[0] or {},
+                    lambda m: str(m.get("RecipientTypeDetails")) == "SharedMailbox")
+                steps["convert_to_shared"] = ("done" if flipped else
+                    "accepted but not yet propagated — re-check with exo_mailbox_details shortly")
+                all_ok &= flipped
 
     if remove_licenses:
         too_big = False
@@ -166,11 +176,17 @@ def run(ctx, user: str, block_signin: bool = True, sign_out_devices: bool = True
                 bad2 = g.fail(r)
                 if bad2:
                     return bad2
-                check = scoped_read(ctx, "m365", f"/users/{uid}",
-                                    {"$select": "assignedLicenses"})
+                # assignedLicenses lags the POST — poll until empty before failing (D-104).
+                cleared, check = g.settle(
+                    lambda: scoped_read(ctx, "m365", f"/users/{uid}",
+                                        {"$select": "assignedLicenses"}),
+                    lambda c: not g.fail(c)
+                    and len((c or {}).get("assignedLicenses") or []) == 0)
+                if cleared:
+                    return {"removed": len(skus)}
                 left = len((check or {}).get("assignedLicenses") or [])
-                return ({"removed": len(skus)} if left == 0 else
-                        {"error": f"{left} license(s) still on the user after removal"})
+                return {"error": f"{left} license(s) still show after removal — usually "
+                                 f"propagation lag; re-check with m365_list_user_license_assignments"}
             ok = _step_graph(steps, "remove_licenses", _remove)
             if ok and steps["remove_licenses"] == "done":
                 steps["remove_licenses"] = "done (all licenses removed)"

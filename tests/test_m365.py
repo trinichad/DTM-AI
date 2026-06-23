@@ -2317,9 +2317,8 @@ class D57Offboard(unittest.TestCase):
                    "RecipientTypeDetails": "SharedMailbox"}
         return ScriptedEXO([
             ("Get-Mailbox", [_MB]),                          # initial preflight
-            ("Get-Mailbox", [_MB]),                          # convert: before
-            ("Set-Mailbox", {"ok": True}),
-            ("Get-Mailbox", [shared]),                       # convert: verified
+            ("Set-Mailbox", {"ok": True}),                   # convert (Set + poll, D-104b)
+            ("Get-Mailbox", [shared]),                       # convert: verified (first poll read)
             ("Get-MailboxStatistics", [{"TotalItemSize": size}]),
             ("Get-Mailbox", [shared]),                       # hide: before
             ("Set-Mailbox", {"ok": True}),
