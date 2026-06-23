@@ -139,16 +139,17 @@ def run(ctx, email: str, first_name: str, last_name: str, display_name: str = ""
     if isinstance(created, dict) and created.get("error"):
         return {"ok": False, "error": str(created["error"])}
 
-    # Verify by re-reading the user — never report an unverified create (D-43).
-    try:
-        check = scoped_read(ctx, "m365", f"/users/{email}",
-                            {"$select": "id,displayName,userPrincipalName,givenName,surname"})
-    except HttpError:
-        check = None
+    # Verify by re-reading the user — never report an unverified create (D-43). A just-created
+    # object can 404 for a few seconds (Graph propagation), so poll rather than fail once (D-104).
+    from . import _graph_common as g
+    _ok, check = g.settle(
+        lambda: scoped_read(ctx, "m365", f"/users/{email}",
+                            {"$select": "id,displayName,userPrincipalName,givenName,surname"}),
+        lambda c: isinstance(c, dict) and bool(c.get("userPrincipalName")))
     if not (isinstance(check, dict) and check.get("userPrincipalName")):
-        return {"ok": False, "step": "verify",
-                "error": f"the create call returned but '{email}' could not be read back — "
-                         f"check Entra directly before retrying"}
+        return {"ok": False, "step": "verify", "pending": True,
+                "error": f"the create call returned but '{email}' could not be read back yet — "
+                         f"usually propagation lag; re-check in Entra shortly before retrying"}
     out: dict[str, Any] = {
         "ok": True, "created": email, "user_id": email, "display_name": name,
         "first_name": first or None, "last_name": last or None,

@@ -77,15 +77,18 @@ def run(ctx, name: str, kind: str, description: str = "", membership_rule: str =
         if bad:
             return bad
         gid = str((created or {}).get("id") or "")
-        check = scoped_read(ctx, "m365", f"/groups/{gid}",
-                            {"$select": "id,displayName,mail,groupTypes"}) if gid else None
+        # A just-created group can 404 for a few seconds (propagation) — poll, don't fail once (D-104).
+        _ok, check = g.settle(
+            lambda: scoped_read(ctx, "m365", f"/groups/{gid}",
+                                {"$select": "id,displayName,mail,groupTypes"}),
+            lambda c: isinstance(c, dict) and bool(c.get("id"))) if gid else (False, None)
     except HttpError as exc:
         return g.err403(exc, "creating the group", "Group.ReadWrite.All")
 
     if not (isinstance(check, dict) and check.get("id")):
-        return {"ok": False, "step": "verify",
-                "error": "the create call returned but the group could not be read back — "
-                         "check Entra directly before retrying"}
+        return {"ok": False, "step": "verify", "pending": True,
+                "error": "the create call returned but the group could not be read back yet — "
+                         "usually propagation lag; re-check in Entra shortly before retrying"}
     out: dict[str, Any] = {"ok": True, "created": name, "kind": kind, "id": check["id"],
                            "email": check.get("mail")}
     if kind == "m365":

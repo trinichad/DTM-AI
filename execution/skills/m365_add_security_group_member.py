@@ -62,15 +62,16 @@ def run(ctx, group: str, member: str, **_: Any):
         bad = g.fail(r)
         if bad:
             return bad
-        verified = g.is_group_member(ctx, gid, uid)
+        # Membership reads are eventually-consistent — poll before declaring failure (D-104).
+        verified, _ = g.settle(lambda: g.is_group_member(ctx, gid, uid), lambda m: m)
     except HttpError as exc:
         return g.err403(exc, "adding the member",
                         "Group.ReadWrite.All (and the signing admin needs a group-management "
                         "role, e.g. Groups Administrator)")
 
     if not verified:
-        return {"ok": False, "step": "verify",
-                "error": "the add returned no error but the user is not in the member "
-                         "list — check Entra directly"}
+        return {"ok": False, "step": "verify", "pending": True,
+                "error": "the add returned no error but Entra doesn't show the user in the group "
+                         "yet — usually replication lag; re-check shortly rather than re-running"}
     return {"ok": True, "group": grp.get("displayName"), "group_id": gid,
             "member_added": member}

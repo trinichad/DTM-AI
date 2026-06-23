@@ -94,15 +94,21 @@ def run(ctx, user: str, phone: str, phone_type: str = "mobile", **_: Any):
         bad = g.fail(r)
         if bad:
             return bad
-        check = scoped_read(ctx, "m365", base)
+
+        # Auth-method reads are eventually-consistent — poll until the new number shows (D-104).
+        def _now(c):
+            return next((m for m in g.rows(c) if str(m.get("phoneType")) == ptype), None)
+        _ok, check = g.settle(
+            lambda: scoped_read(ctx, "m365", base),
+            lambda c: str((_now(c) or {}).get("phoneNumber")) == number)
     except HttpError as exc:
         return g.err403(exc, "setting the phone method", scope)
 
-    now = next((m for m in g.rows(check) if str(m.get("phoneType")) == ptype), None)
+    now = _now(check)
     if not (now and str(now.get("phoneNumber")) == number):
-        return {"ok": False, "step": "verify",
-                "error": "the call returned but the phone method doesn't show the new "
-                         "number — check Entra directly"}
+        return {"ok": False, "step": "verify", "pending": True,
+                "error": "the call returned but the new phone number isn't showing yet — usually "
+                         "propagation lag; re-check in Entra shortly"}
     return {"ok": True, "user": user, "phone": number, "phone_type": ptype,
             ("updated" if existing else "added"): True,
             "note": "the user can now receive MFA texts/calls on this number"}

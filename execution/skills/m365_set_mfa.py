@@ -53,15 +53,18 @@ def run(ctx, user: str, state: str, **_: Any):
         bad = g.fail(r)
         if bad:
             return bad
-        check = scoped_read(ctx, "m365", path)
+        # per-user MFA state is eventually-consistent — poll until it flips before failing (D-104).
+        _ok, check = g.settle(lambda: scoped_read(ctx, "m365", path),
+                              lambda c: str((c or {}).get("perUserMfaState") or "") == want)
     except HttpError as exc:
         return g.err403(exc, "setting per-user MFA", "Policy.ReadWrite.AuthenticationMethod")
 
     now = str((check or {}).get("perUserMfaState") or "")
     if now != want:
-        return {"ok": False, "step": "verify", "was": before, "now": now or "unknown",
-                "error": "the call returned but the MFA state didn't change — check the "
-                         "Entra admin center directly"}
+        return {"ok": False, "step": "verify", "pending": True, "was": before,
+                "now": now or "unknown",
+                "error": "the call returned but the MFA state hasn't flipped yet — usually "
+                         "propagation lag; re-check in the Entra admin center shortly"}
     out: dict[str, Any] = {"ok": True, "user": user, "mfa_state": want, "was": before}
     if want == "disabled":
         out["warning"] = "MFA is now OFF for this user — make sure that's intended"

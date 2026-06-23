@@ -241,6 +241,11 @@ class CodexProvider:
                       for t in (tools or [])],
             "tool_choice": "auto", "parallel_tool_calls": False,
             "store": False, "stream": True,   # backend rejects stream=false
+            # Ask the reasoning model for a live summary of its thinking (D-100). Without this the
+            # backend emits NO response.reasoning_summary_text.delta events, so the UI's Reasoning
+            # panel stays empty and the agent looks like it thinks silently. Display-only — never
+            # persisted, never round-tripped back as input (SOP allows function calls w/o reasoning).
+            "reasoning": {"summary": "auto"},
         }
         return body
 

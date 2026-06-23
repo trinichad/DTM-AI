@@ -51,11 +51,15 @@ def run(ctx, user: str, phone_type: str = "mobile", **_: Any):
         bad = g.fail(r)
         if bad:
             return bad
-        check = scoped_read(ctx, "m365", base)
+        # Auth-method reads are eventually-consistent — poll until the method is gone (D-104).
+        _ok, check = g.settle(
+            lambda: scoped_read(ctx, "m365", base),
+            lambda c: not any(str(m.get("phoneType")) == ptype for m in g.rows(c)))
     except HttpError as exc:
         return g.err403(exc, "removing the phone method",
                         "UserAuthenticationMethod.ReadWrite.All")
     if any(str(m.get("phoneType")) == ptype for m in g.rows(check)):
-        return {"ok": False, "step": "verify",
-                "error": f"the {ptype} phone method is still present after removal — check Entra"}
+        return {"ok": False, "step": "verify", "pending": True,
+                "error": f"the {ptype} phone method still shows after removal — usually propagation "
+                         f"lag; re-check in Entra shortly"}
     return {"ok": True, "user": user, "phone_removed": ptype}

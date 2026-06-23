@@ -60,12 +60,20 @@ def run(ctx, user: str, license: str, **_: Any):
         bad = g.fail(r)
         if bad:
             return bad
-        check = scoped_read(ctx, "m365", f"/users/{user}", {"$select": "assignedLicenses"})
+        # assignedLicenses lags the POST by a few seconds — poll until gone before failing (D-104).
+        gone, _ = g.settle(
+            lambda: scoped_read(ctx, "m365", f"/users/{user}", {"$select": "assignedLicenses"}),
+            lambda c: not g.fail(c) and not any(
+                str(l.get("skuId")) == sku_id
+                for l in ((c or {}).get("assignedLicenses") or []) if isinstance(l, dict)))
+        still = not gone
     except HttpError as exc:
         return g.err403(exc, "removing the license", "LicenseAssignment.ReadWrite.All")
-    still = any(str(l.get("skuId")) == sku_id
-                for l in ((check or {}).get("assignedLicenses") or []) if isinstance(l, dict))
     if still:
-        return {"ok": False, "step": "verify",
-                "error": "the license is still on the user after removal — check the admin center"}
+        return {"ok": False, "step": "verify", "pending": True, "user": user,
+                "license": sku.get("skuPartNumber"),
+                "error": (f"Microsoft 365 accepted the removal of {sku.get('skuPartNumber')} from "
+                          f"{user} but still lists it after a short poll — license changes can take "
+                          f"a moment to propagate; re-check with m365_list_user_license_assignments "
+                          f"shortly rather than re-running.")}
     return {"ok": True, "user": user, "license_removed": sku.get("skuPartNumber")}

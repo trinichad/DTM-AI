@@ -571,8 +571,12 @@ class Api:
         finishes — the owner watches tool calls / reasoning / answer tokens arrive, just like a
         normal chat turn, instead of staring at a frozen 'Running…' button. The continuation is
         stoppable via /api/chat/stop (same _stops registry, keyed by conversation).
-        Event types: decided · tool_call · tool_result · thinking · delta · answer · error."""
+        Event types: decided · tool_call · tool_result · thinking · delta · answer · error.
+        A `decision:"reject"` body skips the action and streams the continuation instead (D-103)."""
         approval_id = int((body or {}).get("approval_id") or 0)
+        if str((body or {}).get("decision") or "approve").strip().lower() == "reject":
+            yield from self._stream_reject(approval_id, user, body)
+            return
         err, env, row, summary = self._run_approval(approval_id, user, body)
         if err:
             yield {"type": "error", "error": (err.payload or {}).get("error", "approval failed")}
@@ -588,9 +592,33 @@ class Api:
                                              meta={"approval_result": approval_id})
         yield from self._stream_continuation(user, conv_id, row, env)
 
-    def _stream_continuation(self, user: str, conv_id: str, row: dict, env: dict) -> Iterator[dict]:
-        """Stream the post-approval continuation turn (D-62) over SSE, mirroring stream_chat's
-        push→pull queue+worker bridge so the agent's progress flows in real time."""
+    def _stream_reject(self, approval_id: int, user: str, body: dict) -> Iterator[dict]:
+        """Reject a pending action, then STREAM the continuation so the task carries on past the
+        skipped step (D-103) — the streamed twin of _reject, mirroring stream_approval's shape."""
+        row = self.agent.approvals.get(approval_id)
+        if not self.agent.approvals.reject(approval_id, by=user):
+            yield {"type": "error", "error": "not pending"}
+            return
+        self.agent.audit.record(actor=user, tenant_id=(row or {}).get("tenant_id") or "*",
+                                action="approval_rejected", detail=f"approval#{approval_id}")
+        msg = "🚫 Rejected — skipping that action and continuing with the rest of the task."
+        yield {"type": "decided", "executed": False, "rejected": True, "message": msg,
+               "approval_id": approval_id, "tool": (row or {}).get("tool")}
+        conv_id = self._resolve_conv(user, body, row or {})
+        if not conv_id or not row:
+            return                                  # no resumable chat (e.g. API caller) — done
+        self.agent.conversations.resolve_pending(user, conv_id, approval_id, "rejected")
+        self.agent.conversations.add_message(user, conv_id, "assistant", msg,
+                                             meta={"approval_result": approval_id})
+        yield from self._stream_continuation(user, conv_id, row, {"ok": False, "rejected": True},
+                                             note=self._rejection_note(row))
+
+    def _stream_continuation(self, user: str, conv_id: str, row: dict, env: dict,
+                             *, note: Optional[str] = None) -> Iterator[dict]:
+        """Stream the post-decision continuation turn (D-62) over SSE, mirroring stream_chat's
+        push→pull queue+worker bridge so the agent's progress flows in real time. `note` overrides
+        the synthetic instruction — used to drive the REJECT path ("skip this, continue the rest",
+        D-103) instead of the default approved-and-ran note."""
         import json as _json
         from ..runtime import get_client_factory
         convs = self.agent.conversations
@@ -606,7 +634,7 @@ class Api:
                                  "user_profile": self._user_profile(user),
                                  "conversation_id": conv_id})
         history = convs.history(user, conv_id)
-        synthetic = self._continuation_note(row, env)
+        synthetic = note or self._continuation_note(row, env)
         q: "queue.Queue" = queue.Queue()
         DONE = object()
         result: dict = {}
@@ -679,6 +707,24 @@ class Api:
                 f"'{row['tool']}' with the same arguments. Only when NO steps remain, give the "
                 f"owner a short status reply.")
 
+    @staticmethod
+    def _rejection_note(row: dict) -> str:
+        """Synthetic instruction for the continuation turn AFTER the owner REJECTED an action
+        (D-103). Rejecting one proposed write does NOT cancel the task — the owner is curating a
+        multi-step plan ("reject this target, do the next"). So: don't retry the rejected action,
+        don't re-propose it, but DO carry on with every remaining step by actually calling the next
+        tool (each surfaces its own card)."""
+        return (f"[system note — not from the owner] The owner REVIEWED and REJECTED the proposed "
+                f"'{row['tool']}' action — by deliberate choice it did NOT run. Do NOT retry it and "
+                f"do NOT propose that SAME action again (same tool + same arguments). Rejecting ONE "
+                f"action does NOT cancel the task: CONTINUE with the REMAINING steps the owner asked "
+                f"for — including the same KIND of action for OTHER targets (e.g. the next group, "
+                f"user, or mailbox) — by actually CALLING the next tool NOW; do not merely describe "
+                f"it. Approval is automatic — calling a write tool surfaces its own approval card — "
+                f"so NEVER say something is 'submitted', 'pending', 'queued', or 'done' unless you "
+                f"actually called that tool THIS turn and saw its result. When no steps remain, give "
+                f"the owner a short status that notes which action was skipped.")
+
     def _conv_model_id(self, conv: dict) -> Optional[str]:
         """The model the conversation last ran on — parsed from the stored 'provider/model ·'
         label so a gpt-5.5 chat CONTINUES on gpt-5.5 instead of falling to the local default."""
@@ -691,8 +737,10 @@ class Api:
         return None
 
     def _continue_after_approval(self, user: str, conv_id: str, row: dict,
-                                 env: dict) -> Optional[dict]:
-        """Run the agent's continuation turn after an approved action executed (D-62)."""
+                                 env: dict, *, note: Optional[str] = None) -> Optional[dict]:
+        """Run the agent's continuation turn after a decision (D-62). `note` overrides the synthetic
+        instruction — the REJECT path passes _rejection_note so the task continues past a skipped
+        action (D-103). Non-streamed (bell / Teams / API); the inline chat uses the streamed twin."""
         import json as _json
         from ..runtime import get_client_factory
         convs = self.agent.conversations
@@ -708,7 +756,7 @@ class Api:
                                  "user_profile": self._user_profile(user),
                                  "conversation_id": conv_id})
         history = convs.history(user, conv_id)
-        synthetic = self._continuation_note(row, env)
+        synthetic = note or self._continuation_note(row, env)
         turn = self.agent.chat(ctx, synthetic, model_id=model_id, history=history)
         if not (turn.answer or turn.pending):
             return None
@@ -749,15 +797,26 @@ class Api:
             return Resp(409, {"error": "not pending"})
         self.agent.audit.record(actor=user, tenant_id="*", action="approval_rejected",
                                 detail=f"approval#{approval_id}")
-        msg = "🚫 Rejected — the action was cancelled and did not run."
+        msg = "🚫 Rejected — skipping that action and continuing with the rest of the task."
         # Post the note into the originating chat — named by the inline card, else stored on the
-        # row so a BELL rejection lands in the right thread too (D-62 follow-up).
+        # row so a BELL rejection lands in the right thread too (D-62 follow-up). Rejecting ONE
+        # action no longer ends the task: run the continuation so the agent moves to the next step
+        # (D-103). Best-effort — a continuation failure never masks that the action was rejected.
         conv_id = self._resolve_conv(user, body, row or {})
-        if conv_id:
+        continuation = None
+        if conv_id and row:
             self.agent.conversations.resolve_pending(user, conv_id, approval_id, "rejected")
             self.agent.conversations.add_message(user, conv_id, "assistant", msg,
                                                  meta={"approval_result": approval_id})
-        return Resp(200, {"ok": True, "message": msg})
+            try:
+                continuation = self._continue_after_approval(
+                    user, conv_id, row, {"ok": False, "rejected": True},
+                    note=self._rejection_note(row))
+            except Exception as e:                     # noqa: BLE001
+                self.agent.audit.record(actor=user, tenant_id=row["tenant_id"],
+                                        action="approval_continuation_failed", tool=row["tool"],
+                                        result_ok=False, detail=str(e)[:200])
+        return Resp(200, {"ok": True, "message": msg, "continuation": continuation})
 
     def _build_draft(self, body: dict, user: str) -> Resp:
         desc = (body.get("description") or "").strip()

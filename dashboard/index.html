@@ -464,30 +464,25 @@ function approvalCard(p){ if(!p||!p.id) return '';
 // Approve/Reject from inside the chat (D-47): decide, then the server posts the result back as a
 // new assistant message which we append here — so the outcome shows up with no nudge.
 async function decideInline(btn,kind,batch){
-  const id=btn.dataset.a, card=btn.closest('.ap-inline');
+  const id=btn.dataset.a, card=btn.closest('.ap-inline'), reject=(kind==='reject');
   if(card) card.querySelectorAll('button').forEach(b=>b.disabled=true);
-  if(kind==='reject'){
-    let r; try{ r=await api('POST','/api/approvals/'+id+'/reject',{conversation_id:CONV}); }catch(_){ r=null; }
-    if(!r||!r.ok){ toast((r&&r.error)||'failed',false);
-      if(card) card.querySelectorAll('button').forEach(b=>b.disabled=false); return; }
-    if(card) card.outerHTML=`<div class="mt-2 text-[11px] text-rose-400 inline-flex items-center gap-1"><i data-lucide="x-circle" class="text-[12px]"></i> Rejected</div>`;
-    if(r.message){ const t={role:'assistant',answer:r.message,ts:new Date().toISOString()};
-      MSGS.push(t); bubble('ai',aiHtml(t),null,t.ts); }
-    refreshApprovalBadge(); icons(); return;
-  }
-  // Approve → STREAM the execution + continuation live (D-62 follow-up) so the owner sees tool
-  // calls / reasoning / answer tokens arrive instead of a frozen button. We drive the shared
-  // STREAM machinery; the continuation paints into the standard #ai-streaming bubble.
+  // Approve AND Reject both STREAM the continuation (D-103): rejecting ONE action skips it and the
+  // agent carries on with the remaining steps of the task — it no longer stops the whole turn.
+  // The owner sees tool calls / reasoning / answer tokens arrive in the standard #ai-streaming bubble.
   if(STREAM&&!STREAM.done){ toast('A reply is still streaming — hit Stop first',false);
     if(card) card.querySelectorAll('button').forEach(b=>b.disabled=false); return; }
-  btn.innerHTML='<i data-lucide="loader-circle" class="text-[12px] animate-spin"></i> Running &amp; continuing…'; icons();
+  const origHtml=btn.innerHTML;
+  btn.innerHTML=`<i data-lucide="loader-circle" class="text-[12px] animate-spin"></i> ${reject?'Skipping':'Running'} &amp; continuing…`; icons();
+  const dbody=reject?{approval_id:+id,conversation_id:CONV,decision:'reject'}
+                    :{approval_id:+id,conversation_id:CONV,batch:!!batch};
   let resp; try{ resp=await fetch('/api/approvals/stream',{method:'POST',credentials:'same-origin',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({approval_id:+id,conversation_id:CONV,batch:!!batch})}); }catch(_){ resp=null; }
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify(dbody)}); }catch(_){ resp=null; }
   if(!resp||!resp.ok||!resp.body){ if(resp&&resp.status===401) showLogin(); else toast('failed',false);
     if(card) card.querySelectorAll('button').forEach(b=>b.disabled=false);
-    btn.innerHTML='<i data-lucide="check" class="text-[12px]"></i> Approve &amp; run'; icons(); return; }
-  if(card) card.outerHTML=`<div class="mt-2 text-[11px] text-emerald-400 inline-flex items-center gap-1"><i data-lucide="check-circle-2" class="text-[12px]"></i> Approved & ran</div>`;
+    btn.innerHTML=origHtml; icons(); return; }
+  if(card) card.outerHTML=reject
+    ?`<div class="mt-2 text-[11px] text-rose-400 inline-flex items-center gap-1"><i data-lucide="x-circle" class="text-[12px]"></i> Rejected — skipped</div>`
+    :`<div class="mt-2 text-[11px] text-emerald-400 inline-flex items-center gap-1"><i data-lucide="check-circle-2" class="text-[12px]"></i> Approved & ran</div>`;
   STREAM={conv:CONV, acc:'', think:'', tools:[], done:false, turn:null, stopping:false};
   const liveOn=()=>{ if(!document.getElementById('ai-streaming')){ bubble('ai',CHAT_DOTS,'ai-streaming');
     streamUI(true); const sb=$('#stopBtn'); if(sb)sb.onclick=stopStream; } };
@@ -501,7 +496,8 @@ async function decideInline(btn,kind,batch){
           MSGS.push(t); bubble('ai',aiHtml(t),null,t.ts); icons(); } }
         else if(ev.type==='thinking'){ liveOn(); STREAM.think+=ev.text; paintStream(); }
         else if(ev.type==='delta'){ liveOn(); STREAM.acc+=ev.text; paintStream(); }
-        else if(ev.type==='tool_call'){ liveOn(); STREAM.tools.push({name:ev.name,ok:null}); paintStream(); }
+        else if(ev.type==='tool_call'){ liveOn(); STREAM.tools.push({name:ev.name,ok:null,ms:0}); paintStream(); }
+        else if(ev.type==='tool_progress'){ const t=STREAM.tools.find(x=>x.name===ev.name&&x.ok===null); if(t){ t.ms=ev.elapsed_ms; paintStream(); } }
         else if(ev.type==='tool_result'){ const t=STREAM.tools.find(x=>x.name===ev.name&&x.ok===null); if(t)t.ok=ev.ok; else STREAM.tools.push({name:ev.name,ok:ev.ok}); paintStream(); }
         else if(ev.type==='answer'){ STREAM.turn={role:'assistant',answer:ev.answer||STREAM.acc,tools:ev.tool_events||[],citations:ev.citations||[],pending:ev.pending||null,reasoning:ev.reasoning||STREAM.think||'',meta:ev.provider?`${ev.provider}/${ev.model} · ${ev.rounds} round(s)`:''}; }
         else if(ev.type==='error'){ toast(ev.error||'continuation error',false); }
@@ -554,7 +550,9 @@ function chatThinkBlock(){ const think=STREAM?STREAM.think:'', acc=STREAM?STREAM
 function chatToolChips(ts){ return !ts||!ts.length?'':`<div class="mt-2 flex flex-wrap gap-1">`+ts.map(x=>{
   const cls=x.ok===null?'bg-white/10 text-slate-300':x.ok?'bg-emerald-500/15 text-emerald-300':'bg-rose-500/15 text-rose-300';
   const ic=x.ok===null?'loader-circle':x.ok?'check':'x';
-  return `<span class="pill ${cls} inline-flex items-center gap-1"><i data-lucide="${ic}" class="text-[11px] ${x.ok===null?'animate-spin':''}"></i>${esc(x.name)}</span>`;
+  // running chip shows live elapsed time (D-101) so a slow tool reads as "working", not "frozen"
+  const secs=x.ok===null&&x.ms?` · ${(x.ms/1000).toFixed(0)}s`:'';
+  return `<span class="pill ${cls} inline-flex items-center gap-1"><i data-lucide="${ic}" class="text-[11px] ${x.ok===null?'animate-spin':''}"></i>${esc(x.name)}${secs}</span>`;
 }).join('')+`</div>`; }
 function paintStream(){ const e=document.getElementById('ai-streaming'); if(!e||!STREAM)return;
   e.innerHTML=chatThinkBlock()+(STREAM.acc?md(STREAM.acc):(STREAM.think?'':CHAT_DOTS))+chatToolChips(STREAM.tools);
@@ -915,7 +913,7 @@ async function openApPanel(){
     closeApPanel(); refreshApprovalBadge(); });
   p.querySelectorAll('.ap-reject').forEach(b=>b.onclick=async()=>{ b.disabled=true;
     const r=await api('POST','/api/approvals/'+b.dataset.a+'/reject');
-    toast(r&&r.ok?'Rejected':'failed',!!(r&&r.ok));
+    toast(r&&r.ok?((r.continuation&&r.continuation.pending)?'Rejected — task continued; another step needs approval':r.continuation?'Rejected — task continued in chat':'Rejected'):'failed',!!(r&&r.ok));
     closeApPanel(); refreshApprovalBadge(); });
 }
 function icons(){ if(window.lucide) lucide.createIcons(); }
@@ -1366,7 +1364,8 @@ const VIEWS={
               const c=CONVS.find(x=>x.id===CONV); if(c)c.tenant_id=ev.tenant; toast(`Locked to ${ev.tenant} for this chat`); } }
             else if(ev.type==='thinking'){ STREAM.think+=ev.text; paintStream(); }
             else if(ev.type==='delta'){ STREAM.acc+=ev.text; paintStream(); }
-            else if(ev.type==='tool_call'){ STREAM.tools.push({name:ev.name,ok:null}); paintStream(); }
+            else if(ev.type==='tool_call'){ STREAM.tools.push({name:ev.name,ok:null,ms:0}); paintStream(); }
+            else if(ev.type==='tool_progress'){ const t=STREAM.tools.find(x=>x.name===ev.name&&x.ok===null); if(t){ t.ms=ev.elapsed_ms; paintStream(); } }
             else if(ev.type==='tool_result'){ const t=STREAM.tools.find(x=>x.name===ev.name&&x.ok===null); if(t)t.ok=ev.ok; else STREAM.tools.push({name:ev.name,ok:ev.ok}); paintStream(); }
             else if(ev.type==='answer'){ STREAM.turn={role:'assistant',answer:ev.answer||STREAM.acc,tools:ev.tool_events||[],citations:ev.citations||[],suggest_skill:ev.suggest_skill||null,pending:ev.pending||null,reasoning:ev.reasoning||STREAM.think||'',meta:`${ev.provider}/${ev.model} · ${ev.rounds} round(s)`};
               // D-52: the turn locked this all-clients chat onto one client — follow it in the

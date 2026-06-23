@@ -16,6 +16,8 @@ platform is demonstrable with zero infrastructure (never in prod).
 from __future__ import annotations
 
 import json
+import threading
+import time
 import urllib.error
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -369,6 +371,37 @@ class Agent:
         turn.citations = citations
         return turn
 
+    # Heartbeat cadence for a running tool (D-101). A long tool (e.g. an N+1 mailbox sweep) emits
+    # nothing between tool_call and tool_result, so the UI sat on a dead spinner. Run dispatch on a
+    # worker thread and emit elapsed-time progress every HEARTBEAT_S so it visibly keeps working.
+    _HEARTBEAT_S = 1.5
+
+    def _dispatch_heartbeat(self, *, name, ctx, args, approval_token, emit) -> dict:
+        """dispatch() on a worker thread + a {type:tool_progress, elapsed_ms} heartbeat while it
+        runs. dispatch is designed never to raise (failures come back as envelopes); guard anyway.
+        emit is only ever called from THIS (the caller's) thread, so it stays single-writer."""
+        box: dict = {}
+
+        def _do():
+            try:
+                box["env"] = dispatch(
+                    registry=self.registry, audit=self.audit, ctx=ctx,
+                    name=name, args=args, approval_token=approval_token, gate=self.gate,
+                    approvals=getattr(self, "approvals", None))
+            except Exception as e:                       # belt-and-suspenders
+                box["env"] = {"ok": False, "source": name, "error": f"{type(e).__name__}: {e}"}
+
+        th = threading.Thread(target=_do, daemon=True)
+        th.start()
+        t0 = time.monotonic()
+        while True:
+            th.join(timeout=self._HEARTBEAT_S)
+            if not th.is_alive():
+                break
+            emit({"type": "tool_progress", "name": name,
+                  "elapsed_ms": int((time.monotonic() - t0) * 1000)})
+        return box.get("env") or {"ok": False, "source": name, "error": "tool produced no result"}
+
     def _stream_provider(self, provider, messages, tools, model, emit_delta) -> ChatResult:
         try:
             return provider.chat_stream(messages, tools, model, emit_delta)
@@ -474,11 +507,9 @@ class Agent:
                 if stop():                       # never fire a queued tool (esp. a write) after stop
                     return _stopped_turn()
                 emit({"type": "tool_call", "name": name})
-                envelope = dispatch(
-                    registry=self.registry, audit=self.audit, ctx=ctx,
-                    name=name, args=call["arguments"], approval_token=approval_token, gate=self.gate,
-                    approvals=getattr(self, "approvals", None),
-                )
+                envelope = self._dispatch_heartbeat(
+                    name=name, ctx=ctx, args=call["arguments"],
+                    approval_token=approval_token, emit=emit)
                 if envelope["ok"]:
                     citations.append(f"{name}@{ctx.tenant_id}")
                 turn.tool_events.append({"name": name, "ok": envelope["ok"],

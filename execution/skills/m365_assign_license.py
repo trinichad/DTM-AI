@@ -145,16 +145,24 @@ def run(ctx, user: str, license: str, disabled_apps: Optional[list] = None,
                                "removeLicenses": []}, method="POST")
         if isinstance(r, dict) and r.get("error"):
             return {"ok": False, "step": "assign", "error": str(r["error"])}
-        check = scoped_read(ctx, "m365", f"/users/{user}", {"$select": "assignedLicenses"})
+        # assignedLicenses lags the POST by a few seconds — poll before failing (D-104).
+        from . import _graph_common as g
+
+        def _after(c):
+            return next((l for l in ((c or {}).get("assignedLicenses") or [])
+                         if isinstance(l, dict) and str(l.get("skuId")) == sku_id), None)
+        _ok, check = g.settle(
+            lambda: scoped_read(ctx, "m365", f"/users/{user}", {"$select": "assignedLicenses"}),
+            lambda c: _after(c) is not None)
     except HttpError as e:
         return _graph_err(e, "assigning the license")
 
-    after = next((l for l in ((check or {}).get("assignedLicenses") or [])
-                  if isinstance(l, dict) and str(l.get("skuId")) == sku_id), None)
+    after = _after(check)
     if not after:
-        return {"ok": False, "step": "verify",
-                "error": "the assign call returned but the license is not on the user yet — "
-                         "check the M365 admin center before retrying"}
+        return {"ok": False, "step": "verify", "pending": True,
+                "error": "the assign call returned but the license isn't on the user yet — usually "
+                         "propagation lag; re-check with m365_list_user_license_assignments shortly "
+                         "rather than re-running"}
     got_disabled = sorted(str(p) for p in (after.get("disabledPlans") or []))
     if got_disabled != sorted(send_disabled):
         return {"ok": False, "step": "verify",

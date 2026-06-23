@@ -48,6 +48,16 @@ def run(ctx, group: str, member: str, **_: Any):
             return {"ok": False, "error":
                     f"'{grp.get('displayName')}' is a DYNAMIC group — membership comes from its "
                     f"rule; members can't be removed manually."}
+        # On-prem-mastered group: membership lives in Active Directory and AAD Connect re-syncs it,
+        # so a cloud removal either errors or silently reverts ("returned no error but still there").
+        # Name the real fix instead of letting the verify fail cryptically (mirrors the D-91 guard).
+        if grp.get("onPremisesSyncEnabled") is True:
+            return {"ok": False, "on_prem_synced": True, "group": grp.get("displayName"),
+                    "error": (f"'{grp.get('displayName')}' is synced from on-premises Active "
+                              f"Directory (onPremisesSyncEnabled) — its membership is mastered in "
+                              f"AD, not Entra, so a cloud removal won't stick. Remove {member} from "
+                              f"this group in on-prem AD (Active Directory Users & Computers or the "
+                              f"sync source); AAD Connect will then remove it from Entra.")}
         uid, bad = g.resolve_user_id(ctx, member)
         if bad:
             return bad
@@ -59,14 +69,19 @@ def run(ctx, group: str, member: str, **_: Any):
         bad = g.fail(r)
         if bad:
             return bad
-        still = g.is_group_member(ctx, gid, uid)
+        # Membership reads are eventually-consistent — poll until gone before failing (D-104).
+        gone, _ = g.settle(lambda: g.is_group_member(ctx, gid, uid), lambda m: not m)
+        still = not gone
     except HttpError as exc:
         return g.err403(exc, "removing the member",
                         "Group.ReadWrite.All (and the signing admin needs a group-management "
                         "role, e.g. Groups Administrator)")
     if still:
-        return {"ok": False, "step": "verify",
-                "error": "the remove returned no error but the user is still in the member "
-                         "list — check Entra directly"}
+        return {"ok": False, "step": "verify", "pending": True,
+                "group": grp.get("displayName"), "member": member,
+                "error": (f"Entra accepted the removal of {member} from "
+                          f"'{grp.get('displayName')}' but still lists them after a short poll — "
+                          f"usually replication lag; re-check shortly. If it persists, the group "
+                          f"may be on-prem synced or the membership is inherited via a nested group.")}
     return {"ok": True, "group": grp.get("displayName"), "group_id": gid,
             "member_removed": member}

@@ -104,3 +104,13 @@ backend returns 429s when the plan's Codex quota is exhausted; the provider surf
   stream and aggregate for the non-streaming path.
 - 2026-06-10 — model ids other than `gpt-5.5` are rejected for ChatGPT-plan auth even when they exist
   for API-key Codex; don't mirror the API-key catalog here.
+
+## Amendment (2026-06-23, D-100) — request reasoning summaries (the panel was always empty)
+
+The provider listens for `response.reasoning_summary_text.delta` (→ `thinking` channel), but the
+request body never asked for it, so the Codex backend emitted NONE — gpt-5.5 reasoned silently and
+the UI's Reasoning panel (D-61) stayed blank ("I want to see the agent's thought process"). Fix:
+`CodexProvider._build_body` now sends `"reasoning": {"summary": "auto"}`. Summaries are display-only
+— never persisted, never round-tripped as input (the SOP already notes function calls round-trip
+WITHOUT reasoning items, so this is safe). The backend now streams reasoning-summary deltas that the
+existing handler + FE render live.

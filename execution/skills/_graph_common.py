@@ -12,6 +12,41 @@ from typing import Any, Optional
 GUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
 
+# Microsoft Graph DIRECTORY writes are eventually-consistent: the write succeeds but an immediate
+# re-read can still show the OLD state (a removed member still listed, a removed/assigned license
+# still/​not present, a just-created object not yet readable) for a few seconds. A single
+# verify-read therefore false-fails — the recurring bug behind D-99 / D-103b / D-104. `settle` polls
+# the verify instead: it checks IMMEDIATELY first (no latency on the common, already-consistent case)
+# and only sleeps + retries when the read is still stale. EXO Set-Mailbox is read-your-writes and does
+# NOT need this — only Graph and the async mailbox-type conversion (D-99) do.
+_SETTLE_ATTEMPTS = 5
+_SETTLE_DELAY = 1.5
+
+
+def settle(read, ok, *, attempts=None, delay=None) -> tuple[bool, Any]:
+    """Poll `read()` until `ok(result)` is True (Graph eventual consistency — D-104). Returns
+    (satisfied, last_result). Checks once up front, then sleeps `delay` between retries. Read
+    exceptions are swallowed and retried (a just-written object can 404 briefly). `MSPAI_VERIFY_DELAY`
+    overrides the inter-attempt delay (seconds) — tests set 0; ops can lengthen for a slow tenant."""
+    import os
+    import time
+    attempts = _SETTLE_ATTEMPTS if attempts is None else attempts
+    if delay is None:
+        env = os.environ.get("MSPAI_VERIFY_DELAY")
+        delay = float(env) if env not in (None, "") else _SETTLE_DELAY
+    last: Any = None
+    for i in range(attempts):
+        try:
+            last = read()
+            if ok(last):
+                return True, last
+        except Exception:                              # transient (e.g. 404 right after create)
+            pass
+        if i < attempts - 1:
+            time.sleep(delay)
+    return False, last
+
+
 def err403(e, doing: str, scope: str) -> dict:
     if e.status == 403:
         return {"ok": False, "error":
@@ -43,7 +78,8 @@ def resolve_group(ctx, ident: str) -> tuple[Optional[dict], Optional[dict]]:
     ident = (ident or "").strip()
     if not ident:
         return None, {"ok": False, "error": "no group given"}
-    sel = "id,displayName,mailNickname,securityEnabled,mailEnabled,groupTypes,membershipRule"
+    sel = ("id,displayName,mailNickname,securityEnabled,mailEnabled,groupTypes,membershipRule,"
+           "onPremisesSyncEnabled")
     if GUID.match(ident):
         g = scoped_read(ctx, "m365", f"/groups/{ident}", {"$select": sel})
         bad = fail(g)

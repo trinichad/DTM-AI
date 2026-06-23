@@ -1666,6 +1666,47 @@ class D65GraphRemoves(unittest.TestCase):
         self.assertTrue(r["ok"], r)
         self.assertEqual(fake.writes[0], ("DELETE", "/groups/g-1/members/u-1/$ref", None))
 
+    def test_remove_security_group_member_polls_through_replication_lag(self):
+        # D-104: the DELETE succeeds but the membership re-read is stale for a moment — the verify
+        # must POLL, not false-fail on the first stale read.
+        import os
+        os.environ["MSPAI_VERIFY_DELAY"] = "0"
+        self.addCleanup(lambda: os.environ.pop("MSPAI_VERIFY_DELAY", None))
+        from execution.skills import m365_remove_security_group_member as rm
+        # preflight: present · verify#1: STILL present (lag) · verify#2: gone
+        member_lists = iter([{"value": [{"id": "u-1"}]},
+                             {"value": [{"id": "u-1"}]},
+                             {"value": []}])
+
+        class Fake(FakeGraph):
+            def get(self, path, params=None):
+                if path.endswith("/members"):
+                    return next(member_lists)
+                if path == "/groups":
+                    return {"value": [{"id": "g-1", "displayName": "HD", "groupTypes": [],
+                                       "onPremisesSyncEnabled": False}]}
+                if path.startswith("/users/"):
+                    return {"id": "u-1", "userPrincipalName": "user@demodomain.com"}
+                return {"error": f"unexpected {path}"}
+
+            def delete(self, path, body=None):
+                self.writes.append(("DELETE", path, None))
+                return {"ok": True}
+        fake = Fake({})
+        r = rm.run(_graph_ctx(fake), group="HD", member="user@demodomain.com")
+        self.assertTrue(r["ok"], r)                 # recovered via poll, not a false failure
+
+    def test_remove_security_group_member_on_prem_synced_is_guarded(self):
+        # D-103b: an AD-synced group can't be edited in the cloud — refuse up front, no DELETE.
+        from execution.skills import m365_remove_security_group_member as rm
+        fake = FakeGraph({"/groups": {"value": [
+            {"id": "g-1", "displayName": "AD Group", "groupTypes": [],
+             "onPremisesSyncEnabled": True}]}})
+        r = rm.run(_graph_ctx(fake), group="AD Group", member="user@demodomain.com")
+        self.assertFalse(r["ok"])
+        self.assertTrue(r.get("on_prem_synced"))
+        self.assertEqual(fake.writes, [])           # no removal attempted
+
     def test_remove_license_inverse_of_assign(self):
         from execution.skills import m365_remove_license as rl
         skus = {"value": [{"skuPartNumber": "O365_BUSINESS_PREMIUM", "skuId": "sku-1",
@@ -1758,8 +1799,13 @@ class D63RevokeAccess(unittest.TestCase):
     def test_revoke_folder_access(self):
         from execution.skills import exo_revoke_folder_access as rf
         held = [{"User": "tech", "AccessRights": ["Editor"]}]
+        # call order: Get-Mailbox(mailbox preflight) · Get-Mailbox(target user → identifiers, D-98)
+        # · Get-MailboxFolderPermission · Remove · Get-MailboxFolderPermission
+        _USER = [{"PrimarySmtpAddress": "tech@demodomain.com", "Alias": "tech",
+                  "DisplayName": "Tech User"}]
         fake = ScriptedEXO([
             ("Get-Mailbox", [_MB]),
+            ("Get-Mailbox", _USER),
             ("Get-MailboxFolderPermission", held),
             ("Remove-MailboxFolderPermission", {"ok": True}),
             ("Get-MailboxFolderPermission", []),
@@ -1767,10 +1813,12 @@ class D63RevokeAccess(unittest.TestCase):
         r = rf.run(_exo_ctx(fake), mailbox="user@demodomain.com",
                    user="tech@demodomain.com", folder="calendar")
         self.assertTrue(r["ok"], r)
-        self.assertEqual(fake.calls[2][1]["Identity"], "user@demodomain.com:\\Calendar")
+        rm = next(c for c in fake.calls if c[0] == "Remove-MailboxFolderPermission")
+        self.assertEqual(rm[1]["Identity"], "user@demodomain.com:\\Calendar")
         self.assertEqual(r["access_revoked"], "Editor")
         # absent grant → clean no-op
         fake2 = ScriptedEXO([("Get-Mailbox", [_MB]),
+                             ("Get-Mailbox", _USER),
                              ("Get-MailboxFolderPermission", [])])
         r2 = rf.run(_exo_ctx(fake2), mailbox="user@demodomain.com",
                     user="tech@demodomain.com", folder="calendar")
@@ -1905,8 +1953,13 @@ class D58AccessReports(unittest.TestCase):
     def test_grant_folder_access_add_and_update_paths(self):
         from execution.skills import exo_grant_folder_access as gf
         granted = [{"User": "tech", "AccessRights": ["Reviewer"]}]
+        # call order now: Get-Mailbox(mailbox) · Get-Mailbox(target user → identifiers, D-98) ·
+        # Get-MailboxFolderPermission · Add-/Set- · Get-MailboxFolderPermission
+        _USER = [{"PrimarySmtpAddress": "tech@demodomain.com", "Alias": "tech",
+                  "DisplayName": "Tech User"}]
         fake = ScriptedEXO([
             ("Get-Mailbox", [_MB]),
+            ("Get-Mailbox", _USER),
             ("Get-MailboxFolderPermission", []),          # no existing entry → Add-
             ("Add-MailboxFolderPermission", {"ok": True}),
             ("Get-MailboxFolderPermission", granted),
@@ -1914,12 +1967,14 @@ class D58AccessReports(unittest.TestCase):
         r = gf.run(_exo_ctx(fake), mailbox="user@demodomain.com",
                    user="tech@demodomain.com", folder="calendar", access="reviewer")
         self.assertTrue(r["ok"], r)
-        self.assertEqual(fake.calls[2][1]["Identity"], "user@demodomain.com:\\Calendar")
-        self.assertEqual(fake.calls[2][1]["AccessRights"], ["Reviewer"])
+        add = next(c for c in fake.calls if c[0] == "Add-MailboxFolderPermission")
+        self.assertEqual(add[1]["Identity"], "user@demodomain.com:\\Calendar")
+        self.assertEqual(add[1]["AccessRights"], ["Reviewer"])
         # an existing entry switches to Set- (Add- errors on existing)
         editor = [{"User": "tech", "AccessRights": ["Editor"]}]
         fake2 = ScriptedEXO([
             ("Get-Mailbox", [_MB]),
+            ("Get-Mailbox", _USER),
             ("Get-MailboxFolderPermission", granted),     # has Reviewer
             ("Set-MailboxFolderPermission", {"ok": True}),
             ("Get-MailboxFolderPermission", editor),

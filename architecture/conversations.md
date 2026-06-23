@@ -248,3 +248,39 @@ action with the same args, and only invites a status reply when nothing remains.
 continuation ctx also now carries `conversation_id` (parity with the streamed path) so any approval
 it creates is bell-resumable. Test: `test_approve_runs_a_continuation_turn_on_the_conversations_model`
 asserts the note carries APPROVED/ALREADY RAN + "CALL the necessary tool".
+
+## Amendment (2026-06-23, D-101) — tool heartbeat so a slow tool doesn't look frozen
+
+Owner: "I HATE how it just freezes — the dots don't even move." Cause: a long tool (e.g.
+`exo_user_mailbox_access`, an N+1 sweep of ~300 sequential EXO calls) emits `tool_call` then nothing
+until `tool_result`, so the stream goes silent and the running chip's spinner reads as hung. Fix
+(`agent.chat_stream` → new `_dispatch_heartbeat`): dispatch runs on a worker thread while the loop
+emits `{"type":"tool_progress","name","elapsed_ms"}` every 1.5s. dispatch never raises (failures are
+envelopes) and `emit` is only ever called from the loop thread, so it stays single-writer (the
+existing queue is thread-safe regardless). `should_stop` semantics are unchanged — a running tool was
+never cancellable mid-flight. FE: the running tool chip shows live elapsed seconds (`⟳ name · 14s`);
+the `tool_progress` frame is handled in both the chat and approval-continuation SSE readers. Note: this
+surfaces elapsed time, not sub-progress — a future step could thread a progress callback through `ctx`
+so sweep tools report "checked 40/100".
+
+## Amendment (2026-06-23, D-103) — rejecting one action SKIPS it and continues (not "stop")
+
+Owner, mid-offboarding: proposed "remove from group A" was rejected because they didn't want that
+ONE group removed — and the whole turn stopped, stranding the remaining groups. "I can reject one but
+accept another. it doesn't mean stop." Correct: approve/reject is the owner CURATING a multi-step
+plan, per action.
+
+Before: approve ran a continuation turn (the task proceeded); reject only posted "🚫 Rejected — the
+action was cancelled and did not run" and ran NO continuation, so the task halted at the first reject.
+
+Now reject runs a continuation exactly like approve, driven by a new `_rejection_note(row)` synthetic:
+the owner DELIBERATELY declined this action (don't retry it, don't re-propose the same tool+args),
+but rejecting one action does NOT cancel the task — CONTINUE the remaining steps, including the same
+KIND of action for OTHER targets, by actually CALLING the next tool (each surfaces its own card).
+Plumbing: `_stream_continuation` / `_continue_after_approval` take an optional `note=`;
+`stream_approval` branches on `body.decision=="reject"` → new `_stream_reject` (streamed twin of the
+JSON `_reject`, which now also continues + returns `continuation`). FE: `decideInline` streams BOTH
+approve and reject through `/api/approvals/stream` (reject posts `decision:'reject'`), so the agent's
+next step streams live into the same bubble; the bell-panel reject surfaces the continuation in its
+toast. The rejected action still never executes (one-shot guard intact). Test:
+`test_reject_streams_continuation_without_executing`.

@@ -37,15 +37,24 @@ def run(ctx, group: str, **_: Any):
         bad = g.fail(r)
         if bad:
             return bad
-        check = scoped_read(ctx, "m365", f"/groups/{gid}", {"$select": "id"})
+
+        # A deleted group can stay readable for a few seconds (propagation) — poll until it's gone
+        # (404) rather than failing on the first stale read (D-104).
+        def _read_group():
+            try:
+                return scoped_read(ctx, "m365", f"/groups/{gid}", {"$select": "id"})
+            except HttpError as exc:
+                if exc.status == 404:
+                    return {"error": "gone"}               # 404 = deleted = success
+                raise
+        _ok, check = g.settle(_read_group,
+                              lambda c: not (isinstance(c, dict) and c.get("id")))
     except HttpError as exc:
-        if exc.status == 404:
-            check = {"error": "gone"}                      # already deleted = success
-        else:
-            return g.err403(exc, "deleting the group", "Group.ReadWrite.All")
+        return g.err403(exc, "deleting the group", "Group.ReadWrite.All")
     if isinstance(check, dict) and check.get("id"):
-        return {"ok": False, "step": "verify",
-                "error": "the delete returned but the group is still readable — check Entra"}
+        return {"ok": False, "step": "verify", "pending": True,
+                "error": "the delete returned but the group is still readable after a short poll "
+                         "— usually propagation lag; re-check in Entra shortly"}
     return {"ok": True, "deleted": grp.get("displayName"), "id": gid,
             "note": ("the Microsoft 365 group, its SharePoint site and group mailbox are "
                      "recoverable for ~30 days" if is_m365

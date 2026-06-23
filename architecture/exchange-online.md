@@ -398,3 +398,20 @@ Add-→Set- self-heal on the 400; revoke removes a display-name entry.
 
 **Lesson:** any client-side match on a `Get-MailboxFolderPermission` / `Get-MailboxPermission` `User`
 field must resolve the recipient's display name + alias first — never compare the raw address alone.
+
+## Amendment (2026-06-23, D-99) — mailbox-type conversion is eventually-consistent (poll, don't verify once)
+
+Live failure (offboarding mpascal): `exo_convert_mailbox` reported "convert mailbox: the change did
+not stick — check Exchange directly" even though Set-Mailbox -Type returned no error. Root cause:
+`set_and_verify` does ONE immediate Get-Mailbox re-read, but a Type conversion is
+eventually-consistent — Exchange accepts it and keeps reporting the OLD `RecipientTypeDetails`
+(UserMailbox/SharedMailbox) for several seconds (sometimes a minute+) before it flips. The single
+read saw the stale value → false "did not stick."
+
+Fix: `exo_convert_mailbox` no longer uses `set_and_verify`. It runs Set-Mailbox directly, then POLLS
+Get-Mailbox (6 × 2s) until `RecipientTypeDetails` matches the target. If it flips → success. If the
+window elapses → `ok=false, pending=true` with a message that says Exchange ACCEPTED the change and
+it's almost certainly propagation lag — re-check with `exo_mailbox_details` shortly and do NOT re-run
+the convert (it likely already took). This stops the scary false-failure and the pointless retry.
+Tests: flips-after-N-polls → success; never-flips → pending (not "did not stick"); already-target →
+no-op without calling Set-Mailbox.

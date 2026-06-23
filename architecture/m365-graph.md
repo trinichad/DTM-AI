@@ -412,3 +412,78 @@ loop, no answer. Two fixes:
   to fit, the `_truncated` note now says the omitted rows are NOT absent, that re-calling with the
   SAME args returns the SAME page (do NOT loop), and to present what fits + state the total + offer
   to narrow or export. Only a NARROWER query returns different rows.
+
+## Amendment (2026-06-23, D-102) — list a user's group memberships (offboarding read)
+
+Live gap during an offboarding ("remove any groups the user was a member of"): the agent could
+remove a user from a NAMED group (m365_remove_security_group_member / exo_remove_group_member) but
+had no tool to ENUMERATE which groups a user belongs to — so it couldn't act without the owner
+naming each group. Added the missing read.
+
+- `m365_user_groups` (read, default-on): `GET /users/{id}/memberOf/microsoft.graph.group` (typed
+  cast → only group objects, not the directoryRole entries memberOf otherwise returns), paged
+  ($top 999, skiptoken loop, capped). DIRECT memberships by default; `transitive=true` switches to
+  `transitiveMemberOf` (groups inherited via nesting — visibility only, not directly removable).
+  Each group is `classify()`-tagged (security / m365 / distribution-mail-enabled / dynamic) and
+  carries `removable` + `remove_with` (the exact tool to use): distribution/mail-enabled →
+  exo_remove_group_member, security/M365 → m365_remove_security_group_member, dynamic → not
+  removable (rule-based; a `note` lists them and says to fix via the membership rule/attribute).
+  403 names `GroupMember.Read.All`. Path is covered by the existing `/users` read prefix — no
+  allowlist change. This is the read half of the offboarding group cleanup; m365_offboard_user does
+  NOT touch group membership, so the two compose (list → remove each removable group).
+
+## Amendment (2026-06-23, D-103b) — group-member removal: replication-lag poll + on-prem guard
+
+`m365_remove_security_group_member` reported "the remove returned no error but the user is still in
+the member list" during an offboarding. Two causes, both now handled:
+- **Eventual consistency.** The DELETE `/groups/{id}/members/{uid}/$ref` succeeds, but the
+  (ConsistencyLevel: eventual) membership query right after can STILL list the user for a few
+  seconds → false "didn't stick." Now the verify POLLS `is_group_member` (5 × 1.5s) before failing,
+  and on timeout returns `ok=false, pending=true` ("Entra accepted it; replication lag — re-check")
+  instead of the scary message (same lesson as D-99 mailbox-type conversion).
+- **On-prem-synced group.** If `onPremisesSyncEnabled` is true the group's membership is mastered in
+  Active Directory (AAD Connect re-syncs it), so a cloud removal won't stick. `resolve_group` now
+  selects `onPremisesSyncEnabled` and the tool refuses up front with an actionable message: remove
+  the member in on-prem AD, which then syncs to Entra (mirrors the D-91 cloud-management guard).
+Tests: lag → success after poll; on-prem → guarded (no DELETE); persistent → pending; non-member → no-op.
+
+## Amendment (2026-06-23, D-104) — license removal verify polls (eventual consistency, again)
+
+`m365_remove_license` reported "the license is still on the user after removal — check the admin
+center", but an immediate re-check showed the user had NO licenses: the removal succeeded and the
+verify read was stale. `POST /users/{id}/assignLicense` is eventually-consistent — `assignedLicenses`
+lags the write by a few seconds. Fixed the same way as D-103b / D-99: the verify now POLLS the
+re-read (5 × 1.5s) before failing, and on timeout returns `ok=false, pending=true` ("M365 accepted
+it; propagation — re-check with m365_list_user_license_assignments, don't re-run") instead of the
+scary message. Tests: lag → success after poll; persistent → pending; not-assigned → no-op.
+
+**Known follow-up:** `m365_offboard_user` still verifies its inline convert-to-shared (via
+`set_and_verify`, the pre-D-99 single read) and license-removal steps with a SINGLE immediate read,
+so it can emit the same false-negative for those steps. Lower priority (the standalone tools used in
+practice are now fixed); align it — ideally via a shared `poll_until(read, predicate)` helper reused
+by all four verifies — when the offboard path is next touched.
+
+## Amendment (2026-06-23, D-104b) — audit: ALL Graph write-verifies now poll (shared `settle`)
+
+After D-104 (license removal), swept every `m365_*` write tool for the same "write → single immediate
+re-read → false-fail" pattern, since Graph DIRECTORY writes are uniformly eventually-consistent.
+Added one shared helper `_graph_common.settle(read, ok)` — checks IMMEDIATELY first (zero latency on
+the common already-consistent path), then sleeps + retries while stale; `MSPAI_VERIFY_DELAY` (seconds)
+tunes the wait (tests set 0). Applied to every Graph verify that re-reads directory state:
+- membership: `m365_add_security_group_member`, `m365_remove_security_group_member`
+- licenses: `m365_assign_license`, `m365_remove_license`
+- objects: `m365_create_user`, `m365_create_group` (poll until readable), `m365_delete_group`
+  (poll until 404/gone)
+- auth: `m365_add_phone_auth`, `m365_remove_phone_auth`, `m365_set_mfa`
+All now return `pending=true` with a "propagation lag — re-check, don't re-run" message on a genuine
+timeout, instead of "check the admin center directly."
+
+**Deliberately NOT changed:**
+- **EXO Set-Mailbox tools** (`exo_set_*`, `set_and_verify`) — Exchange admin is read-your-writes; the
+  one async exception (mailbox-type conversion) already polls (D-99). DL/permission/alias add-remove
+  in EXO are immediate too.
+- **`m365_remove_autopilot_device`** — Intune propagation is MINUTES, not seconds; a short poll won't
+  help and its message already says "Intune can lag — re-check with m365_list_autopilot_devices."
+- **`m365_offboard_user`** inline convert + license steps still single-read (D-104 follow-up) — align
+  to `settle`/the EXO poll when that path is next touched.
+Tests: `test_remove_security_group_member_polls_through_replication_lag`, `_on_prem_synced_is_guarded`.

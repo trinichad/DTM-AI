@@ -341,6 +341,25 @@ class ApprovalContinuation(unittest.TestCase):
         self.assertEqual(kinds[-1], "answer")                  # continuation streamed to an answer
         self.assertIn("streamed", VaultStore().read_memory("acme"))   # the action actually ran
 
+    def test_reject_streams_continuation_without_executing(self):
+        # D-103: rejecting ONE action skips it and the agent CONTINUES the task (streamed), instead
+        # of the turn stopping. The rejected action must NOT run.
+        convs = self.agent.conversations
+        conv_id = convs.create("admin", tenant_id="acme")["id"]
+        convs.add_message("admin", conv_id, "user", "remove from group A and group B")
+        aid = dispatch(registry=self.agent.registry, audit=self.agent.audit, ctx=self.ctx,
+                       name="fx_client_write", args={"note": "do-not-run"},
+                       gate=self.agent.gate, approvals=self.agent.approvals)["approval_id"]
+        frames = list(self.api.stream_approval(
+            {"approval_id": aid, "conversation_id": conv_id, "decision": "reject"}, "admin"))
+        kinds = [f["type"] for f in frames]
+        self.assertEqual(kinds[0], "decided")
+        self.assertFalse(frames[0]["executed"])
+        self.assertTrue(frames[0].get("rejected"))
+        self.assertEqual(kinds[-1], "answer")                  # continuation ran, didn't stop
+        self.assertEqual(VaultStore().read_memory("acme"), "")  # the rejected write never executed
+        self.assertEqual(self.agent.approvals.get(aid)["status"], "rejected")
+
     def test_stream_approval_rejects_double_decision(self):
         aid = dispatch(registry=self.agent.registry, audit=self.agent.audit, ctx=self.ctx,
                        name="fx_client_write", args={"note": "once"},
