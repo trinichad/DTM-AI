@@ -347,3 +347,54 @@ the loop died (no answer) before finishing even the check phase. Two fixes:
   for any multi-step/per-item task; 20 gives headroom while still bounding runaway loops.
 Test: `test_bulk_gal_handles_mixed_states_in_one_call` (hidden / unchanged / needs_cloud_management
 / error in a single call; only the one real change writes).
+
+## Amendment (2026-06-23, D-97) — list a mailbox FOLDER's permissions (the missing read)
+
+Owner hit it live ("calendar permissions for corp-pto"): we had the grant/revoke writes
+(`exo_grant_folder_access` / `exo_revoke_folder_access`) and the per-USER reverse sweep
+(`exo_user_folder_access`), but no direct "who is on THIS mailbox's calendar?" read — so the agent
+fell back to `exo_mailbox_permissions` (mailbox-level Full Access / Send As / Send on Behalf), which
+answers a different question. `Get-MailboxFolderPermission` was already in the read allowlist (used
+by the grant/revoke verify steps), so no connector change — just the missing skill.
+
+- `exo_folder_permissions` (read, default-on): one mailbox + folder (calendar|contacts, default
+  calendar) → `Get-MailboxFolderPermission "<mb>:\Calendar"` with NO User filter, returning every
+  entry (user + AccessRights). Preflight `get_one_mailbox` resolves the primary SMTP; localized
+  folder-name caveat surfaced as a clear error (same as grant). Unlike `exo_mailbox_permissions`,
+  the `Default`/`Anonymous` rows are KEPT (flagged `well_known`) — on a calendar they are the
+  tenant-wide / external free-busy baseline, not noise — and sorted after the individual grants.
+  Complements `exo_user_folder_access` (per-user across mailboxes) as the per-folder view.
+
+## Amendment (2026-06-23, D-98) — folder-permission match is by DISPLAY NAME, not address
+
+Live failure (RHO_Residential, mutual calendar shares): `exo_grant_folder_access` reported
+"Add returned no error but the Calendar permission doesn't show 'Reviewer' for SGrosso@…" and then,
+on retry, a hard `EXO HTTP 400 UserAlreadyExistsInPermissionEntryException — An existing permission
+entry was found for user: Susan Grosso.` Both are ONE bug.
+
+**Root cause:** `Get-MailboxFolderPermission` echoes each entry's `User` as the resolved DISPLAY
+NAME ("Susan Grosso"), NOT the address passed to `Add-MailboxFolderPermission`. The old
+`_user_entry` matched `User` only against the email and its local-part (`sgrosso@…` / `sgrosso`), so
+for anyone whose display name ≠ email prefix it ALWAYS returned "not found." Consequences chained:
+(1) the post-write verify re-read couldn't find the row it had just created → **false-negative
+failure**; (2) the next preflight still couldn't see the entry → chose `Add-` not `Set-` → Exchange
+rejected the duplicate (the 400). The grant had in fact SUCCEEDED on the first attempt.
+
+**Fix (D-98):**
+- New `exo_grant_folder_access.identifiers(exo, user)` resolves the target via one `Get-Mailbox` and
+  returns the set {address, local-part, DisplayName, Alias, Name, UPN} (all lowercased).
+  `_user_entry(rows, user, idents)` now matches the row's `User` against that set — so the
+  display-name row is found on both preflight and verify.
+- Self-heal: if we chose `Add-` but Exchange returns `…AlreadyExists…`, switch to
+  `Set-MailboxFolderPermission` and proceed (covers any residual name-resolution gap, e.g. localized
+  or unusual display strings).
+- `exo_revoke_folder_access` (shares `_user_entry`) updated identically — it was silently reporting
+  "nothing to remove" for grants it couldn't see.
+- The new read `exo_folder_permissions` (D-97) intentionally returns the raw `User` (display name) —
+  which is what surfaced this. No change there.
+
+Tests (fake EXO): fresh grant verifies via display name; already-held → idempotent no-op;
+Add-→Set- self-heal on the 400; revoke removes a display-name entry.
+
+**Lesson:** any client-side match on a `Get-MailboxFolderPermission` / `Get-MailboxPermission` `User`
+field must resolve the recipient's display name + alias first — never compare the raw address alone.

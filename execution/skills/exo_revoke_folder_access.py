@@ -30,7 +30,7 @@ PARAMETERS: dict[str, Any] = {
 
 def run(ctx, mailbox: str, user: str, folder: str, **_: Any):
     from . import _exo_common as c
-    from .exo_grant_folder_access import _rows, _user_entry
+    from .exo_grant_folder_access import _rows, _user_entry, identifiers
     mailbox, user = (mailbox or "").strip(), (user or "").strip()
     if "@" not in user:
         return {"ok": False, "error": f"'{user}' is not a valid user address"}
@@ -42,9 +42,10 @@ def run(ctx, mailbox: str, user: str, folder: str, **_: Any):
     if bad:
         return bad
     fid = f"{mailbox}:\\{fname}"
+    idents = identifiers(exo, user)
 
     cur = exo.invoke("Get-MailboxFolderPermission", {"Identity": fid})
-    held = _user_entry(_rows(cur), user) if not c.err(cur) else None
+    held = _user_entry(_rows(cur), user, idents) if not c.err(cur) else None
     if not held:
         return {"ok": True, "mailbox": mailbox, "user": user, "folder": fname.lower(),
                 "note": "the user has no explicit grant on that folder — nothing to remove"}
@@ -55,7 +56,7 @@ def run(ctx, mailbox: str, user: str, folder: str, **_: Any):
         return {"ok": False, "step": "revoke", "error": c.err(r)}
 
     check = exo.invoke("Get-MailboxFolderPermission", {"Identity": fid})
-    if not c.err(check) and _user_entry(_rows(check), user):
+    if not c.err(check) and _user_entry(_rows(check), user, idents):
         return {"ok": False, "step": "verify",
                 "error": f"the revoke returned no error but {user} still has rights on "
                          f"{fname} — check Exchange directly"}

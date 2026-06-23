@@ -38,11 +38,28 @@ def _rows(r: Any) -> list[dict]:
     return [x for x in (r if isinstance(r, list) else [r]) if isinstance(x, dict)]
 
 
-def _user_entry(rows: list[dict], user: str) -> dict | None:
-    u, local = user.lower(), user.split("@")[0].lower()
+def identifiers(exo, user: str) -> set[str]:
+    """Every lowercased string a Get-MailboxFolderPermission `User` row might show for `user`.
+    Exchange echoes the resolved DISPLAY NAME (e.g. "Susan Grosso"), not the address you passed —
+    so matching on the email alone silently misses every existing entry (D-98). Resolve the
+    mailbox once and collect its display name / alias / name / UPN too."""
+    from . import _exo_common as c
+    idents = {user.strip().lower(), user.split("@")[0].strip().lower()}
+    mb = exo.invoke("Get-Mailbox", {"Identity": user})
+    rows = _rows(mb)
+    if not c.err(mb) and len(rows) == 1:
+        for k in ("DisplayName", "Alias", "Name", "PrimarySmtpAddress", "UserPrincipalName"):
+            v = str(rows[0].get(k) or "").strip().lower()
+            if v:
+                idents.add(v)
+    return {i for i in idents if i}
+
+
+def _user_entry(rows: list[dict], user: str, idents: set[str] | None = None) -> dict | None:
+    pool = idents if idents is not None else {user.strip().lower(), user.split("@")[0].strip().lower()}
     for row in rows:
-        who = str(row.get("User") or "").lower()
-        if who in (u, local):
+        who = str(row.get("User") or "").strip().lower()
+        if who in pool:
             return row
     return None
 
@@ -64,25 +81,33 @@ def run(ctx, mailbox: str, user: str, folder: str, access: str, **_: Any):
     if bad:
         return bad
     fid = f"{mailbox}:\\{fname}"
+    idents = identifiers(exo, user)
 
     cur = exo.invoke("Get-MailboxFolderPermission", {"Identity": fid})
     if c.err(cur) and "couldn't be found" in c.err(cur).lower():
         return {"ok": False, "error": f"the {fname} folder on '{mailbox}' was not found — "
                                       f"non-English tenants use localized folder names"}
-    held = _user_entry(_rows(cur), user) if not c.err(cur) else None
+    held = _user_entry(_rows(cur), user, idents) if not c.err(cur) else None
     held_rights = " ".join(str(x) for x in (held.get("AccessRights") or [])) if held else ""
     if held and right.lower() in held_rights.lower():
         return {"ok": True, "mailbox": mailbox, "user": user, "folder": fname.lower(),
                 "access": access, "note": "the user already has that access — nothing to do"}
 
+    args = {"Identity": fid, "User": user, "AccessRights": [right], "Confirm": False}
     cmdlet = "Set-MailboxFolderPermission" if held else "Add-MailboxFolderPermission"
-    r = exo.invoke(cmdlet, {"Identity": fid, "User": user, "AccessRights": [right],
-                            "Confirm": False})
+    r = exo.invoke(cmdlet, args)
+    # Self-heal: if we chose Add- but Exchange says the user already has an entry (an earlier
+    # grant our display-name match missed — D-98), switch to Set- instead of failing.
+    if c.err(r) and cmdlet == "Add-MailboxFolderPermission" \
+            and "alreadyexist" in c.err(r).replace(" ", "").lower():
+        cmdlet = "Set-MailboxFolderPermission"
+        r = exo.invoke(cmdlet, args)
+        held = held or {"AccessRights": ["(existing)"]}     # it WAS already present
     if c.err(r):
         return {"ok": False, "step": "grant", "error": c.err(r)}
 
     check = exo.invoke("Get-MailboxFolderPermission", {"Identity": fid})
-    now = _user_entry(_rows(check), user) if not c.err(check) else None
+    now = _user_entry(_rows(check), user, idents) if not c.err(check) else None
     now_rights = " ".join(str(x) for x in (now.get("AccessRights") or [])) if now else ""
     if right.lower() not in now_rights.lower():
         return {"ok": False, "step": "verify",
@@ -90,6 +115,6 @@ def run(ctx, mailbox: str, user: str, folder: str, access: str, **_: Any):
                          f"show '{right}' for {user} — check Exchange directly"}
     return {"ok": True, "mailbox": mailbox, "user": user, "folder": fname.lower(),
             "access_granted": access,
-            **({"replaced": held_rights} if held else {}),
+            **({"replaced": held_rights} if held_rights else {}),
             "note": f"{user} now has {right} on {mailbox}'s {fname.lower()} — Outlook may "
                     f"need a restart to show it"}
