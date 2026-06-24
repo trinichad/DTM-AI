@@ -555,3 +555,16 @@ m365_add_security_group_member, exo_add_group_member, exo_grant_mailbox_access (
 called twice), m365_add_phone_auth, m365_set_mfa. Tests: license-wait (now/no-seat/appears),
 set-contact (set+verify, hybrid-refuse), onboard order (incl. the full+send-as double call), create
 path, hybrid-missing-user refusal.
+
+## Amendment (2026-06-24, D-107) — offboard also lists mailbox access for cleanup
+
+Live offboard (dtmtester@RHO) worked end-to-end but missed the user's Full Access + Send-As on a
+shared mailbox (thealtiers@) — the mirror of what onboard GRANTS was not surfaced. Added a
+`list_mailbox_access` step (flag, default on) to `m365_offboard_user`: after the group listing it runs
+`exo_user_mailbox_access` (limit 300 — thorough sweep) and returns a `mailbox_access_cleanup` block
+(the mailboxes + their access kinds + a strong instruction) exactly like `group_cleanup` — READ-ONLY,
+removes nothing. The agent then asks the owner which to revoke and calls `exo_revoke_mailbox_access`
+(mailbox, user, access ∈ full_access|send_as|send_on_behalf) one per access-type-per-mailbox, each its
+own approval. Description updated; tests: lists-mailbox-access-without-revoking (full_access + send_as
+on one shared mailbox; own mailbox skipped; nothing written). Note: the N+1 sweep is slow on big
+tenants but the D-101 heartbeat shows progress, and offboarding favors completeness.

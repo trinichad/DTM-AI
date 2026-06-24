@@ -2337,7 +2337,7 @@ class D57Offboard(unittest.TestCase):
     def test_full_offboard(self):
         from execution.skills import m365_offboard_user as ob
         graph, exo = self.RoutedGraph(), self._exo_script()
-        r = ob.run(self._ctx(graph, exo), user="user@demodomain.com", list_groups=False)
+        r = ob.run(self._ctx(graph, exo), user="user@demodomain.com", list_groups=False, list_mailbox_access=False)
         self.assertTrue(r["ok"], r)
         s = r["steps"]
         for step in ("block_signin", "sign_out_devices", "reset_password",
@@ -2363,7 +2363,7 @@ class D57Offboard(unittest.TestCase):
         graph = self.RoutedGraph(hybrid=True)
         r = ob.run(self._ctx(graph, ScriptedEXO([])), user="user@demodomain.com",
                    convert_to_shared=False, remove_licenses=False, hide_from_gal=False,
-                   prefix_display_name=False, list_groups=False)
+                   prefix_display_name=False, list_groups=False, list_mailbox_access=False)
         self.assertTrue(r["ok"], r)
         self.assertTrue(r["hybrid"])
         self.assertIn("directory-synced", r["steps"]["reset_password"])
@@ -2390,7 +2390,7 @@ class D57Offboard(unittest.TestCase):
         r = ob.run(self._ctx(graph, exo), user="user@demodomain.com",
                    sign_out_devices=False, reset_password=False, block_signin=False,
                    convert_to_shared=False, remove_licenses=False, hide_from_gal=False,
-                   prefix_display_name=False, list_groups=True)
+                   prefix_display_name=False, list_groups=True, list_mailbox_access=False)
         self.assertTrue(r["ok"], r)
         gc = r["group_cleanup"]
         self.assertEqual([x["name"] for x in gc["distribution_groups"]], ["Sales DL"])
@@ -2398,11 +2398,36 @@ class D57Offboard(unittest.TestCase):
         self.assertIn("NOT AUTOMATIC", gc["instruction"])
         self.assertEqual(graph.writes, [])                   # nothing removed or changed
 
+    def test_lists_mailbox_access_for_owner_without_revoking(self):
+        # D-106 follow-up: offboard surfaces the mailboxes the user has Full Access / Send-As on
+        # (the mirror of what onboard grants) — read-only, never revokes.
+        from execution.skills import m365_offboard_user as ob
+        exo = ScriptedEXO([
+            ("Get-Mailbox", [                                # the access sweep
+                {"PrimarySmtpAddress": "thealtiers@x.com", "DisplayName": "Shared",
+                 "RecipientTypeDetails": "SharedMailbox", "GrantSendOnBehalfTo": []},
+                {"PrimarySmtpAddress": "user@demodomain.com", "DisplayName": "Self",
+                 "RecipientTypeDetails": "UserMailbox", "GrantSendOnBehalfTo": []}]),
+            ("Get-MailboxPermission", [{"AccessRights": ["FullAccess"]}]),     # full access
+            ("Get-RecipientPermission", [{"Trustee": "user@demodomain.com"}]),  # send-as
+        ])
+        graph = self.RoutedGraph()
+        r = ob.run(self._ctx(graph, exo), user="user@demodomain.com",
+                   sign_out_devices=False, reset_password=False, block_signin=False,
+                   convert_to_shared=False, remove_licenses=False, hide_from_gal=False,
+                   prefix_display_name=False, list_groups=False, list_mailbox_access=True)
+        self.assertTrue(r["ok"], r)
+        mac = r["mailbox_access_cleanup"]
+        self.assertEqual([m["mailbox"] for m in mac["mailboxes"]], ["thealtiers@x.com"])
+        self.assertEqual(sorted(mac["mailboxes"][0]["access"]), ["full_access", "send_as"])
+        self.assertIn("NOT AUTOMATIC", mac["instruction"])
+        self.assertEqual(graph.writes, [])                   # nothing revoked or changed
+
     def test_big_mailbox_keeps_licenses_with_warning(self):
         from execution.skills import m365_offboard_user as ob
         graph = self.RoutedGraph()
         exo = self._exo_script(size="61.4 GB (65,927,544,832 bytes)")
-        r = ob.run(self._ctx(graph, exo), user="user@demodomain.com", list_groups=False)
+        r = ob.run(self._ctx(graph, exo), user="user@demodomain.com", list_groups=False, list_mailbox_access=False)
         self.assertTrue(r["ok"], r)                          # a skip-with-warning is still ok
         self.assertIn("SKIPPED", r["steps"]["remove_licenses"])
         self.assertTrue(any("50 GB" in w for w in r["warnings"]))
@@ -2415,7 +2440,7 @@ class D57Offboard(unittest.TestCase):
         exo = ScriptedEXO([])                                # no EXO calls expected
         r = ob.run(self._ctx(graph, exo), user="user@demodomain.com",
                    convert_to_shared=False, remove_licenses=False, hide_from_gal=False,
-                   prefix_display_name=False, reset_password=False, list_groups=False)
+                   prefix_display_name=False, reset_password=False, list_groups=False, list_mailbox_access=False)
         self.assertTrue(r["ok"], r)
         self.assertEqual(sorted(r["steps"]), ["block_signin", "sign_out_devices"])
         self.assertEqual(exo.calls, [])

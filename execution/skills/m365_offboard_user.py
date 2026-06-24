@@ -12,10 +12,12 @@ DESCRIPTION = ("DISABLE / OFFBOARD a user account. Runs the standard sequence IN
                "still needed to keep that data), hide from the address book, and prefix the display "
                "name with zzz_. In a HYBRID (Entra-Connect-synced) tenant the password reset and "
                "sign-in block are mastered in on-prem AD, so they are SKIPPED with guidance. It does "
-               "NOT rename the email (use exo_rename_smtp manually) and does NOT remove groups — it "
-               "LISTS the user's distribution and security groups so you can ask the owner which to "
-               "remove. Every step is an optional flag (all on by default). Reports each step "
-               "separately.")
+               "NOT rename the email (use exo_rename_smtp manually). It does NOT remove groups or "
+               "mailbox permissions — instead it LISTS the user's distribution + security groups AND "
+               "the mailboxes they have Full Access / Send-As on, so you can ask the owner which to "
+               "remove (then call exo_remove_group_member / m365_remove_security_group_member / "
+               "exo_revoke_mailbox_access per item). Every step is an optional flag (all on by "
+               "default). Reports each step separately.")
 SOURCE = "m365"
 CATEGORY = "write"
 RISK_LEVEL = "high"
@@ -31,6 +33,8 @@ _FLAGS = {
     "hide_from_gal": "hide from the Global Address List",
     "prefix_display_name": "prefix the display name with zzz_",
     "list_groups": "list the user's distribution + security groups for the owner to choose removals",
+    "list_mailbox_access": "list the mailboxes the user has Full Access / Send-As on, for the owner "
+                           "to choose revocations",
 }
 PARAMETERS: dict[str, Any] = {
     "type": "object",
@@ -94,10 +98,23 @@ def _list_groups(ctx, user: str) -> dict[str, Any]:
     return out
 
 
+def _list_mailbox_access(ctx, user: str) -> dict[str, Any]:
+    """READ-ONLY: the mailboxes the user has Full Access / Send-As / Send-on-Behalf on. The mirror
+    of the access onboard GRANTS — surfaced for the owner to revoke. Never revokes anything."""
+    try:
+        from .exo_user_mailbox_access import run as mbx_access
+        r = mbx_access(ctx, user=user, limit=300)         # thorough sweep for offboarding
+        if r.get("ok"):
+            return {"mailboxes": r.get("mailboxes") or [], "checked": r.get("mailboxes_checked")}
+        return {"error": r.get("error")}
+    except Exception as e:                            # noqa: BLE001 — e.g. no EXO connection
+        return {"error": str(e)[:200]}
+
+
 def run(ctx, user: str, sign_out_devices: bool = True, reset_password: bool = True,
         block_signin: bool = True, convert_to_shared: bool = True, remove_licenses: bool = True,
         hide_from_gal: bool = True, prefix_display_name: bool = True, list_groups: bool = True,
-        **_: Any):
+        list_mailbox_access: bool = True, **_: Any):
     from ..clients.scopes import scoped_read, scoped_write
     from . import _exo_common as c
     from . import _graph_common as g
@@ -279,6 +296,24 @@ def run(ctx, user: str, sign_out_devices: bool = True, reset_password: bool = Tr
                             f"— one call per group, each its own approval. Dynamic groups can't be "
                             f"removed manually."),
         }
+
+    # 9) list mailbox access (Full Access / Send-As) for the owner to decide on — READ-ONLY
+    if list_mailbox_access:
+        ma = _list_mailbox_access(ctx, user)
+        if "error" in ma:
+            steps["list_mailbox_access"] = f"could not list: {ma['error']}"
+        else:
+            mboxes = ma["mailboxes"]
+            steps["list_mailbox_access"] = f"found {len(mboxes)} mailbox grant(s)"
+            out["mailbox_access_cleanup"] = {
+                "mailboxes": mboxes,
+                "instruction": (f"MAILBOX-ACCESS CLEANUP IS NOT AUTOMATIC and nothing here was "
+                                f"removed. Ask the owner which of these mailboxes to revoke {user}'s "
+                                f"access on — ALL, SOME, or NONE. For each, call "
+                                f"exo_revoke_mailbox_access(mailbox, user={user}, access=<one of the "
+                                f"listed: full_access | send_as | send_on_behalf>) — one call per "
+                                f"access type per mailbox, each its own approval."),
+            }
 
     if warnings:
         out["warnings"] = warnings
