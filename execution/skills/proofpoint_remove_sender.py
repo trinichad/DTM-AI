@@ -10,7 +10,9 @@ from . import _proofpoint_common as _p
 
 NAME = "proofpoint_remove_sender"
 DESCRIPTION = ("Remove a sender from a Proofpoint Essentials user's safe OR blocked list. Give the "
-               "org `domain`, the user `email`, the `sender`, and `list` ('safe' or 'blocked').")
+               "org `domain`, the user `email`, the `sender`, and `list` ('safe' or 'blocked'). "
+               "Pass `emails` (a list) to remove the SAME sender from the SAME list for MANY users "
+               "in ONE call — do NOT call this tool once per user.")
 SOURCE = "proofpoint"
 GROUP = "proofpoint"
 CATEGORY = "write"
@@ -23,26 +25,41 @@ PARAMETERS: dict[str, Any] = {
     "properties": {
         "domain": {"type": "string", "description": "the org's primary domain"},
         "email": {"type": "string", "description": "the user's email"},
+        "emails": {"type": "array", "items": {"type": "string"},
+                   "description": "remove the SAME sender from the SAME list for MANY users in ONE "
+                                  "call — a list of user emails in the same org; results come back "
+                                  "together. Use this instead of calling the tool once per user."},
         "sender": {"type": "string", "description": "sender email or domain to remove"},
         "list": {"type": "string", "enum": list(_LISTS), "description": "'safe' or 'blocked'"},
     },
-    "required": ["domain", "email", "sender", "list"],
+    "required": ["domain", "sender", "list"],
     "additionalProperties": False,
 }
 
 
-def run(ctx, domain: str, email: str, sender: str, list: str, **_: Any):
-    d, e, s = (domain or "").strip(), (email or "").strip(), (sender or "").strip()
+def run(ctx, domain: str, email: str = "", emails: Any = None, sender: str = "", list: str = "",
+        **_: Any):
+    d, s = (domain or "").strip(), (sender or "").strip()
     which = (list or "").strip().lower()
     if not _p.valid_domain(d):
         return {"ok": False, "error": "give a valid domain"}
-    if not _p.valid_email(e):
-        return {"ok": False, "error": "give a valid user email"}
     if not _p.valid_sender(s):
         return {"ok": False, "error": "sender must be an email or a domain"}
     if which not in _LISTS:
         return {"ok": False, "error": "list must be 'safe' or 'blocked'"}
+    wanted = [str(x).strip() for x in (emails or []) if str(x).strip()]
+    if wanted:                                         # batch (D-110) — same sender+list, many users
+        results = [_one(ctx, d, e, s, which) for e in wanted[:500]]
+        return {"ok": any(r.get("ok") for r in results), "users_done": len(results),
+                "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
+    return _one(ctx, d, email, s, which)
+
+
+def _one(ctx, d: str, email: str, s: str, which: str) -> dict:
+    e = (email or "").strip()
+    if not _p.valid_email(e):
+        return {"ok": False, "user": e, "error": "give a valid user email"}
     r = _p.mutate_sender(ctx.client("proofpoint"), d, e, s, which, add=False)
     if isinstance(r, dict) and r.get("error"):
-        return {"ok": False, "error": r["error"]}
+        return {"ok": False, "user": e, "error": r["error"]}
     return {"ok": True, "user": e, "removed": s, "list": which, "note": "removed from the list"}

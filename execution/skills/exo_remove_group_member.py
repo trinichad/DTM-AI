@@ -6,8 +6,10 @@ from typing import Any
 
 NAME = "exo_remove_group_member"
 DESCRIPTION = ("Remove a member from an EMAIL GROUP (distribution list, mail-enabled security "
-               "group, or Microsoft 365 group). Find groups with exo_list_groups. Verifies the "
-               "member is gone before reporting success.")
+               "group, or Microsoft 365 group). Find groups with exo_list_groups. Remove MANY "
+               "members from one group in ONE call by passing `members` (a list) instead of "
+               "`member` — do NOT call this tool once per member. Verifies the member is gone "
+               "before reporting success.")
 SOURCE = "m365"
 CATEGORY = "write"
 RISK_LEVEL = "medium"
@@ -18,8 +20,12 @@ PARAMETERS: dict[str, Any] = {
     "properties": {
         "group": {"type": "string", "description": "the group's email address (or exact name)"},
         "member": {"type": "string", "description": "the member's email address to remove"},
+        "members": {"type": "array", "items": {"type": "string"},
+                    "description": "remove MANY members from this group in ONE call — a list of "
+                                   "member email addresses; results come back together. Use this "
+                                   "instead of calling the tool once per member."},
     },
-    "required": ["group", "member"],
+    "required": ["group"],
     "additionalProperties": False,
 }
 
@@ -37,12 +43,23 @@ def _is_member(rows: list[dict], member: str) -> bool:
     return False
 
 
-def run(ctx, group: str, member: str, **_: Any):
+def run(ctx, group: str, member: str = "", members: Any = None, **_: Any):
+    exo = ctx.client("exo")
+    wanted = [m for m in (str(x).strip() for x in (members or [])) if m]
+    if wanted:                                         # batch remove (D-110) — ONE call, ONE approval
+        results = [_one(ctx, exo, group, m) for m in wanted[:500]]
+        return {"ok": any(r.get("ok") for r in results), "group": (group or "").strip(),
+                "members_done": len(results),
+                "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
+    return _one(ctx, exo, group, member)
+
+
+def _one(ctx, exo, group: str, member: str) -> dict:
     from . import _exo_common as c
     group, member = (group or "").strip(), (member or "").strip()
     if "@" not in member:
-        return {"ok": False, "error": f"'{member}' is not a valid member email address"}
-    exo = ctx.client("exo")
+        return {"ok": False, "member": member,
+                "error": f"'{member}' is not a valid member email address"}
 
     dg = exo.invoke("Get-DistributionGroup", {"Identity": group})
     if not c.err(dg) and _rows(dg):
@@ -54,8 +71,8 @@ def run(ctx, group: str, member: str, **_: Any):
     else:
         ug = exo.invoke("Get-UnifiedGroup", {"Identity": group})
         if c.err(ug) or not _rows(ug):
-            return {"ok": False, "error": f"no email group '{group}' found — list them with "
-                                          f"exo_list_groups"}
+            return {"ok": False, "member": member,
+                    "error": f"no email group '{group}' found — list them with exo_list_groups"}
         kind, rm_cmd, rm_params, list_cmd, list_params = (
             "microsoft365", "Remove-UnifiedGroupLinks",
             {"Identity": group, "LinkType": "Members", "Links": [member], "Confirm": False},
@@ -69,11 +86,12 @@ def run(ctx, group: str, member: str, **_: Any):
 
     r = exo.invoke(rm_cmd, rm_params)
     if c.err(r):
-        return {"ok": False, "step": "remove member", "kind": kind, "error": c.err(r)}
+        return {"ok": False, "member": member, "step": "remove member", "kind": kind,
+                "error": c.err(r)}
 
     after = exo.invoke(list_cmd, list_params)
     if not c.err(after) and _is_member(_rows(after), member):
-        return {"ok": False, "step": "verify", "kind": kind,
+        return {"ok": False, "member": member, "step": "verify", "kind": kind,
                 "error": f"{rm_cmd} returned no error but '{member}' is still in the member "
                          f"list — check Exchange directly"}
     return {"ok": True, "group": group, "member_removed": member, "kind": kind}

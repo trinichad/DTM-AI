@@ -8,8 +8,10 @@ NAME = "exo_grant_mailbox_access"
 DESCRIPTION = ("Grant a user ACCESS to another mailbox (shared or regular). access types: "
                "'full_access' = open/read/manage the mailbox (with Outlook automapping by "
                "default), 'send_as' = send mail AS the mailbox, 'send_on_behalf' = send with "
-               "'on behalf of' shown. One access type per call — call again for another. "
-               "Verifies the grant before reporting success.")
+               "'on behalf of' shown. One access type per call — call again for another. Grant "
+               "the SAME access to MANY users in ONE call by passing `users` (a list) instead of "
+               "`user` — do NOT call this tool once per user. Verifies the grant before reporting "
+               "success.")
 SOURCE = "m365"
 CATEGORY = "write"
 RISK_LEVEL = "high"
@@ -22,13 +24,17 @@ PARAMETERS: dict[str, Any] = {
                     "description": "the mailbox to grant access TO (its primary address)"},
         "user": {"type": "string",
                  "description": "the user RECEIVING access (their sign-in address)"},
+        "users": {"type": "array", "items": {"type": "string"},
+                  "description": "grant the SAME access to MANY users in ONE call — a list of "
+                                 "sign-in addresses; results come back together. Use this instead "
+                                 "of calling the tool once per user."},
         "access": {"type": "string", "enum": ["full_access", "send_as", "send_on_behalf"],
                    "description": "which right to grant"},
         "automap": {"type": "boolean",
                     "description": "full_access only: auto-open the mailbox in the user's "
                                    "Outlook (default true)"},
     },
-    "required": ["mailbox", "user", "access"],
+    "required": ["mailbox", "access"],
     "additionalProperties": False,
 }
 
@@ -114,26 +120,40 @@ def _send_on_behalf(c, exo, mailbox: str, user: str, mb: dict):
             "send_on_behalf_list": after}
 
 
-def run(ctx, mailbox: str, user: str, access: str, automap: bool = True, **_: Any):
+def run(ctx, mailbox: str, user: str = "", access: str = "", automap: bool = True,
+        users: Any = None, **_: Any):
     from . import _exo_common as c
-    mailbox, user = (mailbox or "").strip(), (user or "").strip()
-    if "@" not in user or " " in user:
-        return {"ok": False, "error": f"'{user}' is not a valid user address"}
+    mailbox = (mailbox or "").strip()
+    access = (access or "").strip().lower()
+    if access not in ("full_access", "send_as", "send_on_behalf"):
+        return {"ok": False, "error": "access must be full_access, send_as, or send_on_behalf"}
     exo = ctx.client("exo")
-    mb, bad = c.get_one_mailbox(exo, mailbox)
+    mb, bad = c.get_one_mailbox(exo, mailbox)              # shared preflight — once for the batch
     if bad:
         return bad
 
-    access = (access or "").strip().lower()
+    recipients = [u for u in (str(x).strip() for x in (users or [])) if u]
+    if recipients:                                     # batch grant (D-110) — ONE call, ONE approval
+        results = [_one(c, exo, mailbox, mb, u, access, automap) for u in recipients[:500]]
+        return {"ok": any(r.get("ok") for r in results),
+                "mailbox": mb.get("PrimarySmtpAddress") or mailbox, "access": access,
+                "users_done": len(results),
+                "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
+    return _one(c, exo, mailbox, mb, user, access, automap)
+
+
+def _one(c, exo, mailbox: str, mb: dict, user: str, access: str, automap: bool) -> dict:
+    user = (user or "").strip()
+    if "@" not in user or " " in user:
+        return {"ok": False, "user": user, "error": f"'{user}' is not a valid user address"}
+
     if access == "full_access":
         out = _full_access(c, exo, mailbox, user, automap)
     elif access == "send_as":
         out = _send_as(c, exo, mailbox, user)
-    elif access == "send_on_behalf":
-        out = _send_on_behalf(c, exo, mailbox, user, mb)
     else:
-        return {"ok": False, "error": "access must be full_access, send_as, or send_on_behalf"}
+        out = _send_on_behalf(c, exo, mailbox, user, mb)
+    out.update({"user": user, "access": access} if out.get("ok") else {"user": user})
     if out.get("ok"):
-        out.update({"mailbox": mb.get("PrimarySmtpAddress") or mailbox, "user": user,
-                    "access": access})
+        out["mailbox"] = mb.get("PrimarySmtpAddress") or mailbox
     return out

@@ -7,7 +7,9 @@ from typing import Any
 NAME = "m365_remove_autopilot_device"
 DESCRIPTION = ("Remove a device from Windows AUTOPILOT by serial number (deregisters its "
                "hardware hash). The device itself is untouched; it just won't Autopilot-enroll "
-               "anymore. Verifies removal before reporting success.")
+               "anymore. Pass `serial` for one device or `serials` (a list) to remove MANY in "
+               "ONE call — do NOT call this tool once per device. Verifies removal before "
+               "reporting success.")
 SOURCE = "m365"
 CATEGORY = "write"
 RISK_LEVEL = "medium"
@@ -17,15 +19,27 @@ PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
         "serial": {"type": "string", "description": "the device's serial number"},
+        "serials": {"type": "array", "items": {"type": "string"},
+                    "description": "remove MANY devices in ONE call — a list of serial numbers; "
+                                   "each removal is verified and results come back together. Use "
+                                   "this instead of calling the tool once per device."},
     },
-    "required": ["serial"],
     "additionalProperties": False,
 }
 
 _BASE = "/deviceManagement/windowsAutopilotDeviceIdentities"
 
 
-def run(ctx, serial: str, **_: Any):
+def run(ctx, serial: str = "", serials: Any = None, **_: Any):
+    wanted = [str(x).strip() for x in (serials or []) if str(x).strip()]
+    if wanted:                                         # batch remove (D-110) — one call, many devices
+        results = [_one(ctx, x) for x in wanted[:500]]
+        return {"ok": any(r.get("ok") for r in results), "removals_done": len(results),
+                "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
+    return _one(ctx, serial)
+
+
+def _one(ctx, serial: str) -> dict:
     from ..clients._http import HttpError
     from ..clients.scopes import scoped_delete, scoped_read
     from . import _graph_common as g
@@ -35,20 +49,20 @@ def run(ctx, serial: str, **_: Any):
     try:
         dev, bad = g.find_autopilot_by_serial(ctx, serial)   # spaced-serial safe (D-67)
         if bad:
-            return bad
+            return {**bad, "serial": serial}
         if not dev:
             return {"ok": True, "serial": serial,
                     "note": "no Autopilot device with that serial — nothing to remove"}
         r = scoped_delete(ctx, "m365", f"{_BASE}/{dev.get('id')}")
         bad = g.fail(r)
         if bad:
-            return bad
+            return {**bad, "serial": serial}
         check, _ = g.find_autopilot_by_serial(ctx, serial)
     except HttpError as exc:
-        return g.err403(exc, "removing the device",
-                        "DeviceManagementServiceConfig.ReadWrite.All")
+        return {**g.err403(exc, "removing the device",
+                           "DeviceManagementServiceConfig.ReadWrite.All"), "serial": serial}
     if check:
-        return {"ok": False, "step": "verify",
+        return {"ok": False, "serial": serial, "step": "verify",
                 "error": "the device is still registered after removal (Intune can lag a few "
                          "minutes) — re-check with m365_list_autopilot_devices"}
     return {"ok": True, "serial_removed": serial}
