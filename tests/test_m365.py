@@ -2282,17 +2282,22 @@ class D56Autopilot(unittest.TestCase):
 
 
 class D57Offboard(unittest.TestCase):
-    """The disable-account composite — every step optional, failures don't abort."""
+    """The disable-account composite — reordered + hybrid-aware + lists groups (D-105)."""
 
     class RoutedGraph:
-        def __init__(self, big_mailbox=False):
+        def __init__(self, hybrid=False, memberof=None):
             self.writes = []
             self.licenses = [{"skuId": "s-1"}]
+            self.hybrid = hybrid
+            self.memberof = memberof or []
 
         def get(self, path, params=None):
             sel = (params or {}).get("$select", "")
             if path == "/users/user@demodomain.com":
-                return {"id": "u-1", "userPrincipalName": "user@demodomain.com"}
+                return {"id": "u-1", "userPrincipalName": "user@demodomain.com",
+                        "onPremisesSyncEnabled": self.hybrid}
+            if path == "/users/u-1/memberOf/microsoft.graph.group":
+                return {"value": self.memberof}
             if path == "/users/u-1" and "assignedLicenses" in sel:
                 return {"assignedLicenses": self.licenses}
             if path == "/users/u-1" and "displayName" in sel:
@@ -2310,11 +2315,9 @@ class D57Offboard(unittest.TestCase):
             return {"ok": True}
 
     def _exo_script(self, size="1.2 GB (1,288,490,189 bytes)"):
+        # EXO sequence for the standard mailbox steps (rename removed — now exo_rename_smtp, D-105)
         shared = {**_MB, "RecipientTypeDetails": "SharedMailbox"}
         hidden = {**shared, "HiddenFromAddressListsEnabled": True}
-        renamed = {"PrimarySmtpAddress": "zzz_user@demodomain.com",
-                   "EmailAddresses": ["SMTP:zzz_user@demodomain.com"],
-                   "RecipientTypeDetails": "SharedMailbox"}
         return ScriptedEXO([
             ("Get-Mailbox", [_MB]),                          # initial preflight
             ("Set-Mailbox", {"ok": True}),                   # convert (Set + poll, D-104b)
@@ -2323,9 +2326,6 @@ class D57Offboard(unittest.TestCase):
             ("Get-Mailbox", [shared]),                       # hide: before
             ("Set-Mailbox", {"ok": True}),
             ("Get-Mailbox", [hidden]),                       # hide: verified
-            ("Set-Mailbox", {"ok": True}),                   # rename primary+UPN
-            ("Set-Mailbox", {"ok": True}),                   # drop the old alias
-            ("Get-Mailbox", [renamed]),                      # rename: verified, old gone
         ])
 
     def _ctx(self, graph, exo):
@@ -2336,15 +2336,14 @@ class D57Offboard(unittest.TestCase):
     def test_full_offboard(self):
         from execution.skills import m365_offboard_user as ob
         graph, exo = self.RoutedGraph(), self._exo_script()
-        r = ob.run(self._ctx(graph, exo), user="user@demodomain.com")
+        r = ob.run(self._ctx(graph, exo), user="user@demodomain.com", list_groups=False)
         self.assertTrue(r["ok"], r)
         s = r["steps"]
         for step in ("block_signin", "sign_out_devices", "reset_password",
                      "convert_to_shared", "hide_from_gal", "prefix_display_name"):
             self.assertIn("done", str(s[step]), (step, s[step]))
         self.assertIn("all licenses removed", s["remove_licenses"])
-        self.assertIn("zzz_user@demodomain.com", s["rename_smtp"])
-        self.assertEqual(r["new_address"], "zzz_user@demodomain.com")
+        self.assertNotIn("rename_smtp", s)                   # rename is now a separate tool
         # the scrambled password is never disclosed
         self.assertNotIn("password", str(r).lower().replace("reset_password", ""))
         pw_patch = next(b for m, p, b in graph.writes
@@ -2356,11 +2355,53 @@ class D57Offboard(unittest.TestCase):
                           if b and b.get("displayName") == "zzz_User Person")
         self.assertIsNotNone(name_patch)
 
+    def test_hybrid_skips_ad_mastered_steps(self):
+        # D-105: in a hybrid tenant, password reset + sign-in block are mastered in on-prem AD —
+        # skip them (with guidance), don't fail; sign-out (a cloud op) still runs.
+        from execution.skills import m365_offboard_user as ob
+        graph = self.RoutedGraph(hybrid=True)
+        r = ob.run(self._ctx(graph, ScriptedEXO([])), user="user@demodomain.com",
+                   convert_to_shared=False, remove_licenses=False, hide_from_gal=False,
+                   prefix_display_name=False, list_groups=False)
+        self.assertTrue(r["ok"], r)
+        self.assertTrue(r["hybrid"])
+        self.assertIn("directory-synced", r["steps"]["reset_password"])
+        self.assertIn("directory-synced", r["steps"]["block_signin"])
+        self.assertIn("done", r["steps"]["sign_out_devices"])
+        self.assertFalse(any(b == {"accountEnabled": False} for _m, _p, b in graph.writes))
+        self.assertFalse(any("passwordProfile" in (b or {}) for _m, _p, b in graph.writes))
+
+    def test_lists_groups_for_owner_without_removing(self):
+        # D-105: offboard LISTS distribution (EXO) + security (Graph) groups; removes nothing.
+        from execution.skills import m365_offboard_user as ob
+        graph = self.RoutedGraph(memberof=[
+            {"id": "g-sec", "displayName": "VPN Users", "securityEnabled": True,
+             "mailEnabled": False, "groupTypes": []},
+            {"id": "g-m365", "displayName": "Marketing", "mailEnabled": True,
+             "groupTypes": ["Unified"]},                     # m365 → excluded from security list
+        ])
+        exo = ScriptedEXO([
+            ("Get-Mailbox", [{"PrimarySmtpAddress": "user@demodomain.com",
+                              "DistinguishedName": "CN=User,DC=x"}]),
+            ("Get-Recipient", [{"DisplayName": "Sales DL", "PrimarySmtpAddress": "sales@x",
+                                "RecipientTypeDetails": "MailUniversalDistributionGroup"}]),
+        ])
+        r = ob.run(self._ctx(graph, exo), user="user@demodomain.com",
+                   sign_out_devices=False, reset_password=False, block_signin=False,
+                   convert_to_shared=False, remove_licenses=False, hide_from_gal=False,
+                   prefix_display_name=False, list_groups=True)
+        self.assertTrue(r["ok"], r)
+        gc = r["group_cleanup"]
+        self.assertEqual([x["name"] for x in gc["distribution_groups"]], ["Sales DL"])
+        self.assertEqual([x["name"] for x in gc["security_groups"]], ["VPN Users"])
+        self.assertIn("NOT AUTOMATIC", gc["instruction"])
+        self.assertEqual(graph.writes, [])                   # nothing removed or changed
+
     def test_big_mailbox_keeps_licenses_with_warning(self):
         from execution.skills import m365_offboard_user as ob
         graph = self.RoutedGraph()
         exo = self._exo_script(size="61.4 GB (65,927,544,832 bytes)")
-        r = ob.run(self._ctx(graph, exo), user="user@demodomain.com")
+        r = ob.run(self._ctx(graph, exo), user="user@demodomain.com", list_groups=False)
         self.assertTrue(r["ok"], r)                          # a skip-with-warning is still ok
         self.assertIn("SKIPPED", r["steps"]["remove_licenses"])
         self.assertTrue(any("50 GB" in w for w in r["warnings"]))
@@ -2373,10 +2414,56 @@ class D57Offboard(unittest.TestCase):
         exo = ScriptedEXO([])                                # no EXO calls expected
         r = ob.run(self._ctx(graph, exo), user="user@demodomain.com",
                    convert_to_shared=False, remove_licenses=False, hide_from_gal=False,
-                   rename_smtp=False, prefix_display_name=False, reset_password=False)
+                   prefix_display_name=False, reset_password=False, list_groups=False)
         self.assertTrue(r["ok"], r)
         self.assertEqual(sorted(r["steps"]), ["block_signin", "sign_out_devices"])
         self.assertEqual(exo.calls, [])
+
+
+class D105GroupListAndRename(unittest.TestCase):
+    """D-105 — authoritative DL membership read + the split-out rename tool."""
+
+    def test_user_distribution_groups_lists_and_classifies(self):
+        from execution.skills import exo_user_distribution_groups as dl
+        exo = ScriptedEXO([
+            ("Get-Mailbox", [{"PrimarySmtpAddress": "u@x.com",
+                              "DistinguishedName": "CN=U,DC=x"}]),
+            ("Get-Recipient", [
+                {"DisplayName": "Sales", "PrimarySmtpAddress": "sales@x.com",
+                 "RecipientTypeDetails": "MailUniversalDistributionGroup"},
+                {"DisplayName": "Dyn", "PrimarySmtpAddress": "dyn@x.com",
+                 "RecipientTypeDetails": "DynamicDistributionGroup"}]),
+        ])
+        r = dl.run(_exo_ctx(exo), user="u@x.com")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["count"], 2)
+        by = {g["name"]: g for g in r["groups"]}
+        self.assertEqual(by["Sales"]["remove_with"], "exo_remove_group_member")
+        self.assertFalse(by["Dyn"]["removable"])             # dynamic = not manually removable
+        # the OPATH filter targets the user's DN
+        self.assertIn("Members -eq 'CN=U,DC=x'", fake_filter := exo.calls[1][1]["Filter"])
+
+    def test_rename_smtp_renames_and_drops_old_address(self):
+        from execution.skills import exo_rename_smtp as rn
+        renamed = {"PrimarySmtpAddress": "zzz_user@demodomain.com",
+                   "EmailAddresses": ["SMTP:zzz_user@demodomain.com"]}
+        exo = ScriptedEXO([
+            ("Get-Mailbox", [_MB]),                          # preflight
+            ("Set-Mailbox", {"ok": True}),                   # rename primary + UPN
+            ("Set-Mailbox", {"ok": True}),                   # drop old alias
+            ("Get-Mailbox", [renamed]),                      # verify old gone
+        ])
+        r = rn.run(_exo_ctx(exo), user="user@demodomain.com")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["mailbox"], "zzz_user@demodomain.com")
+
+    def test_rename_smtp_noop_when_already_prefixed(self):
+        from execution.skills import exo_rename_smtp as rn
+        exo = ScriptedEXO([("Get-Mailbox",
+                            [{"PrimarySmtpAddress": "zzz_user@demodomain.com"}])])
+        r = rn.run(_exo_ctx(exo), user="zzz_user@demodomain.com")
+        self.assertTrue(r["ok"])
+        self.assertIn("already renamed", r["note"])
 
 
 if __name__ == "__main__":

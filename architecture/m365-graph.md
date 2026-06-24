@@ -503,3 +503,24 @@ Added a generic `_exo_common.settle(read, ok)` (the EXO twin of `_graph_common.s
 `exo_convert_mailbox` onto it too, so there's ONE poll mechanism per layer. EXO `set_and_verify`
 (ordinary read-your-writes attribute sets) is unchanged. Offboard tests updated (the convert step now
 does Set + one poll-read instead of set_and_verify's preflight+verify pair).
+
+## Amendment (2026-06-23, D-105) — offboard reorder + hybrid-aware + group listing; rename split out
+
+Owner redesigned the offboarding flow:
+- **New step order:** sign_out_devices → reset_password → block_signin → convert_to_shared →
+  remove_licenses (50 GB safeguard) → hide_from_gal → prefix_display_name → list_groups.
+- **Hybrid-aware:** the offboard resolves the user with `onPremisesSyncEnabled`. When TRUE (Entra
+  Connect / hybrid) the password reset and sign-in block are mastered in on-prem AD, so both are
+  SKIPPED with guidance ("disable/reset in on-prem AD — it syncs to Entra"), not failed. sign-out (a
+  cloud session revoke) still runs.
+- **Rename removed from the composite** → new standalone `exo_rename_smtp` (write, high, approval,
+  default-off): rename primary+UPN to zzz_<old>, drop the old proxy so mail bounces, verify; carries
+  the D-91 cloud-management hint. Run manually once a manager confirms no mail flow is needed.
+- **Group cleanup is now LIST-then-ask, never automatic.** Offboard ends by listing the user's
+  DISTRIBUTION groups (EXO-authoritative, see exchange-online.md D-105) + SECURITY groups (Graph,
+  `m365_user_groups` filtered to kind=security) into `group_cleanup` with a strong `instruction`:
+  the agent must ASK the owner which to remove (all/some/none) and then call exo_remove_group_member
+  / m365_remove_security_group_member one-per-group (each its own approval — pairs with the D-103
+  reject-continues flow). The tool itself removes nothing.
+Flags reordered; `rename_smtp` flag dropped; `list_groups` added (default on). Tests: full offboard
+(list_groups off), hybrid-skips, lists-groups-without-removing, big-mailbox, flags-off.

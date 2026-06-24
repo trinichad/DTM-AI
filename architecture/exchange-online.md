@@ -415,3 +415,15 @@ it's almost certainly propagation lag — re-check with `exo_mailbox_details` sh
 the convert (it likely already took). This stops the scary false-failure and the pointless retry.
 Tests: flips-after-N-polls → success; never-flips → pending (not "did not stick"); already-target →
 no-op without calling Set-Mailbox.
+
+## Amendment (2026-06-23, D-105) — authoritative distribution-group membership (Get-Recipient)
+
+Graph `memberOf` (m365_user_groups) reliably lists security/M365 groups but can MISS classic
+distribution lists — Exchange is the authoritative source. Added read-only `Get-Recipient` to the EXO
+connector allowlist (deliberate addition) and a new `exo_user_distribution_groups` (read, default-on):
+resolves the user's `DistinguishedName` via Get-Mailbox, then `Get-Recipient -Filter "Members -eq
+'<DN>'"` (apostrophes doubled) → every distribution / mail-enabled security / M365 / dynamic group the
+user is a DIRECT member of, classified with `removable` + `remove_with` (exo_remove_group_member;
+dynamic = not manually removable). `memberships(ctx, user)` is the reusable core m365_offboard_user
+calls for its group-cleanup listing (D-105). Used together: EXO covers all MAIL-enabled groups
+(authoritative), Graph covers non-mail security groups — a clean, non-overlapping split.

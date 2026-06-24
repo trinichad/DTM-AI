@@ -38,6 +38,7 @@ ALLOWED_CMDLETS: dict[str, str] = {
     "Get-RetentionPolicy": "read",
     "Get-RetentionPolicyTag": "read",
     "Get-MailContact": "read",
+    "Get-Recipient": "read",             # D-105 — "which groups is this user in?" (authoritative DLs)
     "Get-MailboxFolderPermission": "read",
     "Get-MailboxJunkEmailConfiguration": "read",
     "Get-TransportRule": "read",

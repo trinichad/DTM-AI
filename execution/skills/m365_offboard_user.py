@@ -1,33 +1,36 @@
 """Offboard / disable a user account — the full MSP sequence, each step optional
-(D-57; SOP: m365-graph)."""
+(D-57; reordered + hybrid-aware + group listing D-105; SOP: m365-graph)."""
 from __future__ import annotations
 
 import re
 from typing import Any
 
 NAME = "m365_offboard_user"
-DESCRIPTION = ("DISABLE / OFFBOARD a user account. Runs the standard sequence — block sign-in, "
-               "sign out of all devices, scramble the password, convert the mailbox to shared, "
-               "remove licenses (SKIPPED with a warning if the mailbox is over 50 GB — a "
-               "license is still needed to keep that data), hide from the address book, "
-               "rename the email to zzz_<old> so new mail BOUNCES, and prefix the display "
-               "name with zzz_ so IT can spot disabled accounts. EVERY step is an optional "
-               "flag (all on by default) — turn off any the user doesn't want. Reports each "
-               "step's outcome separately.")
+DESCRIPTION = ("DISABLE / OFFBOARD a user account. Runs the standard sequence IN ORDER: sign out of "
+               "all devices, reset the password, block sign-in, convert the mailbox to shared, "
+               "remove licenses (SKIPPED with a warning if the mailbox is over 50 GB — a license is "
+               "still needed to keep that data), hide from the address book, and prefix the display "
+               "name with zzz_. In a HYBRID (Entra-Connect-synced) tenant the password reset and "
+               "sign-in block are mastered in on-prem AD, so they are SKIPPED with guidance. It does "
+               "NOT rename the email (use exo_rename_smtp manually) and does NOT remove groups — it "
+               "LISTS the user's distribution and security groups so you can ask the owner which to "
+               "remove. Every step is an optional flag (all on by default). Reports each step "
+               "separately.")
 SOURCE = "m365"
 CATEGORY = "write"
 RISK_LEVEL = "high"
 REQUIRES_APPROVAL = True
 ENABLED_BY_DEFAULT = False
+# declared in execution order (run() follows this order)
 _FLAGS = {
-    "block_signin": "disable the account sign-in",
     "sign_out_devices": "revoke all active sessions on every device",
-    "reset_password": "scramble the password (not shown to anyone)",
+    "reset_password": "scramble the password (skipped on hybrid — reset in on-prem AD)",
+    "block_signin": "disable the account sign-in (skipped on hybrid — disable in on-prem AD)",
     "convert_to_shared": "convert the mailbox to a shared mailbox",
     "remove_licenses": "remove all licenses (skipped if mailbox > 50 GB)",
     "hide_from_gal": "hide from the Global Address List",
-    "rename_smtp": "rename email to zzz_<old> and drop the old address (mail bounces)",
     "prefix_display_name": "prefix the display name with zzz_",
+    "list_groups": "list the user's distribution + security groups for the owner to choose removals",
 }
 PARAMETERS: dict[str, Any] = {
     "type": "object",
@@ -66,10 +69,35 @@ def _step_graph(steps: dict, name: str, fn, hint_403: str = ""):
         return False
 
 
-def run(ctx, user: str, block_signin: bool = True, sign_out_devices: bool = True,
-        reset_password: bool = True, convert_to_shared: bool = True,
-        remove_licenses: bool = True, hide_from_gal: bool = True,
-        rename_smtp: bool = True, prefix_display_name: bool = True, **_: Any):
+def _list_groups(ctx, user: str) -> dict[str, Any]:
+    """READ-ONLY: the user's distribution groups (EXO, authoritative) + security groups (Graph).
+    Never removes anything — the owner decides. Errors per source are reported, not fatal."""
+    out: dict[str, Any] = {"distribution_groups": None, "security_groups": None, "errors": {}}
+    try:
+        from .exo_user_distribution_groups import memberships
+        dl = memberships(ctx, user)
+        if dl.get("ok"):
+            out["distribution_groups"] = dl["groups"]
+        else:
+            out["errors"]["distribution"] = dl.get("error")
+    except Exception as e:                            # noqa: BLE001 — e.g. no EXO connection
+        out["errors"]["distribution"] = str(e)[:200]
+    try:
+        from .m365_user_groups import run as user_groups
+        ug = user_groups(ctx, user=user)
+        if ug.get("ok"):
+            out["security_groups"] = [x for x in ug["groups"] if x.get("kind") == "security"]
+        else:
+            out["errors"]["security"] = ug.get("error")
+    except Exception as e:                            # noqa: BLE001
+        out["errors"]["security"] = str(e)[:200]
+    return out
+
+
+def run(ctx, user: str, sign_out_devices: bool = True, reset_password: bool = True,
+        block_signin: bool = True, convert_to_shared: bool = True, remove_licenses: bool = True,
+        hide_from_gal: bool = True, prefix_display_name: bool = True, list_groups: bool = True,
+        **_: Any):
     from ..clients.scopes import scoped_read, scoped_write
     from . import _exo_common as c
     from . import _graph_common as g
@@ -78,35 +106,55 @@ def run(ctx, user: str, block_signin: bool = True, sign_out_devices: bool = True
     if "@" not in user:
         return {"ok": False, "error": f"'{user}' is not a sign-in address"}
 
-    # Resolve the OBJECT ID up front — Graph steps keep working after the UPN rename.
-    uid, bad = g.resolve_user_id(ctx, user)
+    # Resolve id + the HYBRID flag up front. The object id keeps Graph steps stable; onPremisesSync
+    # tells us whether sign-in/password are mastered on-prem (then they're skipped, not failed).
+    u0 = scoped_read(ctx, "m365", f"/users/{user}",
+                     {"$select": "id,userPrincipalName,onPremisesSyncEnabled"})
+    bad = g.fail(u0)
     if bad:
         return bad
+    uid = str((u0 or {}).get("id") or "")
+    if not uid:
+        return {"ok": False, "error": f"no user '{user}' found in this client"}
+    hybrid = bool(u0.get("onPremisesSyncEnabled"))
+
     steps: dict[str, Any] = {}
     warnings: list[str] = []
     all_ok = True
 
-    # ── Graph identity steps (by object id) ──────────────────────────────────────────────
-    if block_signin:
-        all_ok &= _step_graph(steps, "block_signin", lambda: scoped_write(
-            ctx, "m365", f"/users/{uid}", body={"accountEnabled": False}, method="PATCH"))
+    # 1) sign out of every device (cloud session revoke — valid in hybrid too)
     if sign_out_devices:
         all_ok &= _step_graph(steps, "sign_out_devices", lambda: scoped_write(
             ctx, "m365", f"/users/{uid}/revokeSignInSessions", body={}, method="POST"))
+
+    # 2) reset password — mastered in on-prem AD when hybrid, so skip with guidance there
     if reset_password:
-        # scrambled on purpose — the new password is NOT returned to anyone
-        all_ok &= _step_graph(steps, "reset_password", lambda: scoped_write(
-            ctx, "m365", f"/users/{uid}",
-            body={"passwordProfile": {"password": _gen_password(),
-                                      "forceChangePasswordNextSignIn": True}},
-            method="PATCH"),
-            hint_403="changing another user's password needs the User-PasswordProfile."
-                     "ReadWrite.All scope in M365_SCOPES (re-sign-in after adding) AND the "
-                     "signing admin must be at least a User Administrator")
+        if hybrid:
+            steps["reset_password"] = ("skipped — directory-synced (hybrid); reset the password in "
+                                       "on-prem Active Directory (it syncs to Entra)")
+        else:
+            all_ok &= _step_graph(steps, "reset_password", lambda: scoped_write(
+                ctx, "m365", f"/users/{uid}",
+                body={"passwordProfile": {"password": _gen_password(),
+                                          "forceChangePasswordNextSignIn": True}},
+                method="PATCH"),
+                hint_403="changing another user's password needs User-PasswordProfile.ReadWrite.All "
+                         "in M365_SCOPES (re-sign-in after adding) AND a User Administrator role")
+
+    # 3) block sign-in — mastered in on-prem AD when hybrid (disable there, it syncs)
+    if block_signin:
+        if hybrid:
+            steps["block_signin"] = ("skipped — directory-synced (hybrid); disable the account in "
+                                     "on-prem Active Directory (it syncs to Entra and blocks "
+                                     "sign-in)")
+        else:
+            all_ok &= _step_graph(steps, "block_signin", lambda: scoped_write(
+                ctx, "m365", f"/users/{uid}", body={"accountEnabled": False}, method="PATCH"))
 
     # ── Mailbox steps (EXO, by the original address) ─────────────────────────────────────
-    needs_exo = convert_to_shared or remove_licenses or hide_from_gal or rename_smtp
+    needs_exo = convert_to_shared or remove_licenses or hide_from_gal
     mb = None
+    exo = None
     if needs_exo:
         try:
             exo = ctx.client("exo")
@@ -116,8 +164,7 @@ def run(ctx, user: str, block_signin: bool = True, sign_out_devices: bool = True
         if bad or mb is None:
             msg = (bad or {}).get("error", "mailbox not found")
             for flag, on in (("convert_to_shared", convert_to_shared),
-                             ("hide_from_gal", hide_from_gal),
-                             ("rename_smtp", rename_smtp)):
+                             ("hide_from_gal", hide_from_gal)):
                 if on:
                     steps[flag] = f"skipped — {msg}"
             if remove_licenses:
@@ -128,13 +175,11 @@ def run(ctx, user: str, block_signin: bool = True, sign_out_devices: bool = True
             warnings.append(f"mailbox steps skipped: {msg}")
             mb = None
 
+    # 4) convert to shared (async — Set + poll, D-104b)
     if mb is not None and convert_to_shared:
         if str(mb.get("RecipientTypeDetails")) == "SharedMailbox":
             steps["convert_to_shared"] = "already shared"
         else:
-            # Type conversion is async/eventually-consistent — Set + POLL, not set_and_verify's
-            # single read, which false-failed the standalone tool too (D-99 / D-104b). Type isn't a
-            # directory-mastered attr, so the cloud-management guard never applied here anyway.
             rset = exo.invoke("Set-Mailbox", {"Identity": user, "Type": "Shared", "Confirm": False})
             if c.err(rset):
                 steps["convert_to_shared"] = c.err(rset)
@@ -147,6 +192,7 @@ def run(ctx, user: str, block_signin: bool = True, sign_out_devices: bool = True
                     "accepted but not yet propagated — re-check with exo_mailbox_details shortly")
                 all_ok &= flipped
 
+    # 5) remove licenses (with the 50 GB data-retention safeguard)
     if remove_licenses:
         too_big = False
         if mb is not None:
@@ -192,39 +238,14 @@ def run(ctx, user: str, block_signin: bool = True, sign_out_devices: bool = True
                 steps["remove_licenses"] = "done (all licenses removed)"
             all_ok &= ok
 
+    # 6) hide from the GAL
     if mb is not None and hide_from_gal:
         r = c.set_and_verify(exo, user, {"HiddenFromAddressListsEnabled": True},
                              {"HiddenFromAddressListsEnabled": True}, label="hide")
         steps["hide_from_gal"] = "done" if r.get("ok") else r.get("error")
         all_ok &= bool(r.get("ok"))
 
-    new_address = None
-    if mb is not None and rename_smtp:
-        from ..clients.exo import hashtable
-        local, domain = user.split("@", 1)
-        new_address = f"zzz_{local}@{domain}"
-        r = exo.invoke("Set-Mailbox", {"Identity": user, "Confirm": False,
-                                       "WindowsEmailAddress": new_address,
-                                       "MicrosoftOnlineServicesID": new_address})
-        if c.err(r):
-            steps["rename_smtp"] = c.err(r)
-            all_ok = False
-        else:
-            r2 = exo.invoke("Set-Mailbox", {"Identity": new_address, "Confirm": False,
-                                            "EmailAddresses":
-                                            hashtable({"Remove": f"smtp:{user}"})})
-            after, bad = c.get_one_mailbox(exo, new_address)
-            old_gone = after is not None and not any(
-                str(a).lower() == f"smtp:{user.lower()}"
-                for a in (after.get("EmailAddresses") or []))
-            if c.err(r2) or not old_gone:
-                steps["rename_smtp"] = (f"renamed to {new_address} but the OLD address may "
-                                        f"still be attached — mail might not bounce; check "
-                                        f"Exchange ({c.err(r2) or 'old alias still listed'})")
-                all_ok = False
-            else:
-                steps["rename_smtp"] = f"done — now {new_address}; mail to {user} bounces"
-
+    # 7) prefix the display name with zzz_
     if prefix_display_name:
         def _prefix():
             u = scoped_read(ctx, "m365", f"/users/{uid}", {"$select": "displayName"})
@@ -238,12 +259,30 @@ def run(ctx, user: str, block_signin: bool = True, sign_out_devices: bool = True
                                 body={"displayName": f"zzz_{name}"}, method="PATCH")
         all_ok &= _step_graph(steps, "prefix_display_name", _prefix)
 
-    out: dict[str, Any] = {"ok": bool(all_ok), "user": user, "steps": steps}
-    if new_address and "done" in str(steps.get("rename_smtp", "")):
-        out["new_address"] = new_address
+    out: dict[str, Any] = {"ok": bool(all_ok), "user": user, "hybrid": hybrid, "steps": steps}
+
+    # 8) list groups for the owner to decide on — READ-ONLY, never auto-removed (best-effort)
+    if list_groups:
+        gc = _list_groups(ctx, user)
+        dg, sg = gc["distribution_groups"], gc["security_groups"]
+        steps["list_groups"] = (f"found {len(dg or [])} distribution + {len(sg or [])} security "
+                                f"group(s)" if (dg is not None or sg is not None)
+                                else "could not list groups")
+        out["group_cleanup"] = {
+            "distribution_groups": dg or [],
+            "security_groups": sg or [],
+            **({"errors": gc["errors"]} if gc["errors"] else {}),
+            "instruction": (f"GROUP CLEANUP IS NOT AUTOMATIC and nothing here was removed. Ask the "
+                            f"owner which of these groups to remove {user} from — ALL, SOME, or "
+                            f"NONE. For each chosen DISTRIBUTION group call exo_remove_group_member; "
+                            f"for each chosen SECURITY group call m365_remove_security_group_member "
+                            f"— one call per group, each its own approval. Dynamic groups can't be "
+                            f"removed manually."),
+        }
+
     if warnings:
         out["warnings"] = warnings
     if not all_ok:
-        out["note"] = "some steps failed or were skipped — see `steps`; re-run with only " \
-                      "the failed flags after fixing the cause"
+        out["note"] = ("some steps failed or were skipped — see `steps`; re-run with only the "
+                       "failed flags after fixing the cause")
     return out
