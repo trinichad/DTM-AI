@@ -1943,13 +1943,34 @@ class D58AccessReports(unittest.TestCase):
             # own mailbox skipped; only info@ is checked
             ("Get-MailboxPermission", [{"User": "tech@demodomain.com",
                                         "AccessRights": ["FullAccess"]}]),
-            ("Get-RecipientPermission", []),
+            ("Get-RecipientPermission", []),              # info@ per-box send-as — none
+            ("Get-RecipientPermission", []),              # direct reverse send-as lookup (D-109)
         ])
         r = ua.run(_exo_ctx(fake), user="tech@demodomain.com")
         self.assertTrue(r["ok"], r)
         self.assertEqual(r["count"], 1)
         self.assertEqual(r["mailboxes"][0]["mailbox"], "info@demodomain.com")
         self.assertEqual(r["mailboxes"][0]["access"], ["full_access"])
+
+    def test_user_mailbox_access_direct_sendas_catches_swept_miss(self):
+        # D-109: a mailbox NOT returned by the Get-Mailbox sweep (e.g. past the old 300 cap) is
+        # still found via the direct Send-As reverse lookup, and its Full Access is then checked.
+        from execution.skills import exo_user_mailbox_access as ua
+        own = {**_MB, "PrimarySmtpAddress": "tech@demodomain.com"}
+        fake = ScriptedEXO([
+            ("Get-Mailbox", [own]),                      # sweep returns only own — thealtiers missed
+            ("Get-RecipientPermission",                  # direct reverse lookup finds it
+             [{"Identity": "thealtiers@x.com", "AccessRights": ["SendAs"]}]),
+            ("Get-Mailbox", [{"PrimarySmtpAddress": "thealtiers@x.com",
+                              "DisplayName": "The Altiers",
+                              "RecipientTypeDetails": "SharedMailbox"}]),   # resolve
+            ("Get-MailboxPermission", [{"User": "tech@demodomain.com",
+                                        "AccessRights": ["FullAccess"]}]),  # full-access check
+        ])
+        r = ua.run(_exo_ctx(fake), user="tech@demodomain.com")
+        self.assertEqual(r["count"], 1)
+        self.assertEqual(r["mailboxes"][0]["mailbox"], "thealtiers@x.com")
+        self.assertEqual(sorted(r["mailboxes"][0]["access"]), ["full_access", "send_as"])
 
     def test_grant_folder_access_add_and_update_paths(self):
         from execution.skills import exo_grant_folder_access as gf
@@ -2411,7 +2432,8 @@ class D57Offboard(unittest.TestCase):
                 {"PrimarySmtpAddress": "user@demodomain.com", "DisplayName": "Self",
                  "RecipientTypeDetails": "UserMailbox", "GrantSendOnBehalfTo": []}]),
             ("Get-MailboxPermission", [{"AccessRights": ["FullAccess"]}]),     # full access
-            ("Get-RecipientPermission", [{"Trustee": "user@demodomain.com"}]),  # send-as
+            ("Get-RecipientPermission", [{"Trustee": "user@demodomain.com"}]),  # per-box send-as
+            ("Get-RecipientPermission", []),                                   # direct reverse (D-109)
         ])
         graph = self.RoutedGraph()
         r = ob.run(self._ctx(graph, exo), user="user@demodomain.com",

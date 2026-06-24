@@ -103,7 +103,7 @@ def _list_mailbox_access(ctx, user: str) -> dict[str, Any]:
     of the access onboard GRANTS — surfaced for the owner to revoke. Never revokes anything."""
     try:
         from .exo_user_mailbox_access import run as mbx_access
-        r = mbx_access(ctx, user=user, limit=300)         # thorough sweep for offboarding
+        r = mbx_access(ctx, user=user)                    # full sweep (no cap) for offboarding
         if r.get("ok"):
             return {"mailboxes": r.get("mailboxes") or [], "checked": r.get("mailboxes_checked")}
         return {"error": r.get("error")}

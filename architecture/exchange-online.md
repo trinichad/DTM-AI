@@ -427,3 +427,20 @@ user is a DIRECT member of, classified with `removable` + `remove_with` (exo_rem
 dynamic = not manually removable). `memberships(ctx, user)` is the reusable core m365_offboard_user
 calls for its group-cleanup listing (D-105). Used together: EXO covers all MAIL-enabled groups
 (authoritative), Graph covers non-mail security groups — a clean, non-overlapping split.
+
+## Amendment (2026-06-24, D-109) — user-mailbox-access sweep was 300-capped (missed mailboxes)
+
+Live offboard of dtmtester@RHO reported 0 mailbox grants but the user DID have Full Access + Send-As
+on the shared mailbox `thealtiers@`. Root cause: `exo_user_mailbox_access` swept `Get-Mailbox`
+hard-capped at `ResultSize: 300`, in identity order — a 't' mailbox past the first 300 was never
+checked, so BOTH its Full Access and Send-As were silently skipped. Rewrote the tool (D-109):
+- **No cap by default** — `ResultSize: Unlimited` (a `limit` param can still bound a huge tenant). The
+  sweep walks every mailbox for Full Access (no reverse query exists) + per-box Send-As + Send-on-Behalf.
+- **Direct Send-As reverse lookup** — `Get-RecipientPermission -Trustee <user>` returns every recipient
+  the user can send as in ONE call, independent of the sweep. For each result not already swept, resolve
+  it (Get-Mailbox) and ALSO check its Full Access — so a mailbox the sweep missed still reports COMPLETE
+  access. This guarantees a both-perms mailbox like thealtiers@ is caught even if the sweep doesn't list it.
+- Results are deduped by primary SMTP; `mailboxes_checked` reports sweep coverage.
+m365_offboard_user now calls it with no limit (full sweep). Tests: reverse lookup (with the new direct
+call), and a direct-Send-As-catches-a-swept-miss case. Trade-off: the unbounded sweep is slower on big
+tenants, but the D-101 heartbeat shows progress and offboarding favors completeness over speed.
