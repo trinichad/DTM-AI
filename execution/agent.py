@@ -510,13 +510,19 @@ class Agent:
                 envelope = self._dispatch_heartbeat(
                     name=name, ctx=ctx, args=call["arguments"],
                     approval_token=approval_token, emit=emit)
+                pending = envelope.get("status") == "pending_approval"
                 if envelope["ok"]:
                     citations.append(f"{name}@{ctx.tenant_id}")
-                turn.tool_events.append({"name": name, "ok": envelope["ok"],
-                                         "category": envelope.get("source"),
-                                         "data": _data_preview(envelope.get("data"))})
-                emit({"type": "tool_result", "name": name, "ok": envelope["ok"],
-                      "source": envelope.get("source")})
+                # A write awaiting sign-off has NOT run or failed — record it as PENDING (ok=None),
+                # not a red-✗ failure. resolve_pending flips the chip to ✓/✗ once decided (D-108).
+                ev_ok = None if pending else envelope["ok"]
+                te: dict[str, Any] = {"name": name, "ok": ev_ok, "category": envelope.get("source"),
+                                      "data": _data_preview(envelope.get("data"))}
+                if pending:
+                    te["pending"] = True
+                turn.tool_events.append(te)
+                emit({"type": "tool_result", "name": name, "ok": ev_ok,
+                      "pending": pending, "source": envelope.get("source")})
                 # focus_client (D-52): lock an 'all clients' chat onto one client. Narrow THIS
                 # turn's ctx so later per-client tools run scoped, and flag the turn so the chat
                 # re-binds the conversation + the UI picker follows. Only narrows from '*'.

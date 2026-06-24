@@ -284,3 +284,22 @@ approve and reject through `/api/approvals/stream` (reject posts `decision:'reje
 next step streams live into the same bubble; the bell-panel reject surfaces the continuation in its
 toast. The rejected action still never executes (one-shot guard intact). Test:
 `test_reject_streams_continuation_without_executing`.
+
+## Amendment (2026-06-24, D-108) — a pending-approval tool chip shows PENDING, not a red ✗
+
+Owner (aesthetic): while a write awaits approval its chip showed a red ✗ — looked like it had already
+failed, before they'd even decided. Cause: a `pending_approval` envelope has `ok=False`, and
+chat_stream recorded/emitted the tool chip as `ok=False` BEFORE the pending check. Fix:
+- `agent.chat_stream` now records the pending tool as `ok=None, pending=true` (tool_event + the
+  `tool_result` SSE frame carries `pending`), not a failure.
+- `conversations.resolve_pending` flips that chip when the owner decides: `executed` → ✓ (`ok=true`,
+  pending cleared), `rejected`/`failed` → ✗ — so it stops showing the waiting symbol and reloads
+  correctly.
+- FE: pending chips render an amber **clock** (live `chatToolChips` + persisted `aiHtml`); running
+  stays the spinner; ✓/✗ as before. `tool_result` handlers propagate the `pending` flag.
+Tests: pending write records ok=None+pending (not False); resolve_pending flips to ✓ on executed and
+✗ on rejected.
+
+Also (D-108, m365-graph): the offboard's `prefix_display_name` is AD-mastered on a hybrid user (the
+live dtmtester run 400'd "on-premises mastered Directory Sync objects"), so it now SKIPS on hybrid
+with guidance — same as the password reset / sign-in block.

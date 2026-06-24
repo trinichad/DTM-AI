@@ -183,6 +183,13 @@ class ConversationStore:
                 if isinstance(pend, dict) and pend.get("id") == approval_id:
                     meta["pending"] = None
                     meta["pending_resolved"] = outcome
+                    # flip the PENDING tool chip to its outcome (D-108): approved+ran = ✓, anything
+                    # else (rejected / failed) = ✗ — so it stops showing the waiting symbol.
+                    tool = pend.get("tool")
+                    for te in meta.get("tools") or []:
+                        if isinstance(te, dict) and te.get("pending") and te.get("name") == tool:
+                            te["ok"] = (outcome == "executed")
+                            te.pop("pending", None)
                     self._conn.execute("UPDATE conversation_messages SET meta=? WHERE id=?",
                                        (json.dumps(meta, default=str), r["id"]))
                     self._conn.commit()

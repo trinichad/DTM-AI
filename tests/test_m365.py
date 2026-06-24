@@ -2357,20 +2357,22 @@ class D57Offboard(unittest.TestCase):
         self.assertIsNotNone(name_patch)
 
     def test_hybrid_skips_ad_mastered_steps(self):
-        # D-105: in a hybrid tenant, password reset + sign-in block are mastered in on-prem AD —
-        # skip them (with guidance), don't fail; sign-out (a cloud op) still runs.
+        # D-105/D-108: in a hybrid tenant, password reset + sign-in block + display-name prefix are
+        # AD-mastered — skip them (with guidance), don't fail; sign-out (a cloud op) still runs.
         from execution.skills import m365_offboard_user as ob
         graph = self.RoutedGraph(hybrid=True)
         r = ob.run(self._ctx(graph, ScriptedEXO([])), user="user@demodomain.com",
                    convert_to_shared=False, remove_licenses=False, hide_from_gal=False,
-                   prefix_display_name=False, list_groups=False, list_mailbox_access=False)
+                   prefix_display_name=True, list_groups=False, list_mailbox_access=False)
         self.assertTrue(r["ok"], r)
         self.assertTrue(r["hybrid"])
         self.assertIn("directory-synced", r["steps"]["reset_password"])
         self.assertIn("directory-synced", r["steps"]["block_signin"])
+        self.assertIn("directory-synced", r["steps"]["prefix_display_name"])
         self.assertIn("done", r["steps"]["sign_out_devices"])
         self.assertFalse(any(b == {"accountEnabled": False} for _m, _p, b in graph.writes))
         self.assertFalse(any("passwordProfile" in (b or {}) for _m, _p, b in graph.writes))
+        self.assertFalse(any(b and "displayName" in b for _m, _p, b in graph.writes))
 
     def test_lists_groups_for_owner_without_removing(self):
         # D-105: offboard LISTS distribution (EXO) + security (Graph) groups; removes nothing.

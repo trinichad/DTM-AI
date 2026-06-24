@@ -262,19 +262,25 @@ def run(ctx, user: str, sign_out_devices: bool = True, reset_password: bool = Tr
         steps["hide_from_gal"] = "done" if r.get("ok") else r.get("error")
         all_ok &= bool(r.get("ok"))
 
-    # 7) prefix the display name with zzz_
+    # 7) prefix the display name with zzz_ — display name is AD-mastered on hybrid (like the
+    #    password/sign-in steps), so skip with guidance there instead of failing on a 400 (D-108).
     if prefix_display_name:
-        def _prefix():
-            u = scoped_read(ctx, "m365", f"/users/{uid}", {"$select": "displayName"})
-            bad2 = g.fail(u)
-            if bad2:
-                return bad2
-            name = str((u or {}).get("displayName") or "")
-            if name.startswith("zzz_"):
-                return {"already": True}
-            return scoped_write(ctx, "m365", f"/users/{uid}",
-                                body={"displayName": f"zzz_{name}"}, method="PATCH")
-        all_ok &= _step_graph(steps, "prefix_display_name", _prefix)
+        if hybrid:
+            steps["prefix_display_name"] = ("skipped — directory-synced (hybrid); the display name "
+                                            "is mastered in on-prem Active Directory — rename it "
+                                            "there if you want the zzz_ marker")
+        else:
+            def _prefix():
+                u = scoped_read(ctx, "m365", f"/users/{uid}", {"$select": "displayName"})
+                bad2 = g.fail(u)
+                if bad2:
+                    return bad2
+                name = str((u or {}).get("displayName") or "")
+                if name.startswith("zzz_"):
+                    return {"already": True}
+                return scoped_write(ctx, "m365", f"/users/{uid}",
+                                    body={"displayName": f"zzz_{name}"}, method="PATCH")
+            all_ok &= _step_graph(steps, "prefix_display_name", _prefix)
 
     out: dict[str, Any] = {"ok": bool(all_ok), "user": user, "hybrid": hybrid, "steps": steps}
 

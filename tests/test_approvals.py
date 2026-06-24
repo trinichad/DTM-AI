@@ -341,6 +341,38 @@ class ApprovalContinuation(unittest.TestCase):
         self.assertEqual(kinds[-1], "answer")                  # continuation streamed to an answer
         self.assertIn("streamed", VaultStore().read_memory("acme"))   # the action actually ran
 
+    def test_pending_write_records_as_pending_not_failed(self):
+        # D-108: a write awaiting approval is PENDING (ok=None), not a red-✗ failure.
+        provider = self.agent.router.mock([
+            {"content": "", "tool_calls": [{"name": "fx_client_write",
+                                            "arguments": {"note": "x"}}]}])
+        frames: list = []
+        turn = self.agent.chat_stream(self.ctx, "do it", lambda e: frames.append(e),
+                                      provider=provider)
+        tr = [f for f in frames if f["type"] == "tool_result"]
+        self.assertEqual(len(tr), 1)
+        self.assertIsNone(tr[0]["ok"])                 # not False
+        self.assertTrue(tr[0]["pending"])
+        self.assertTrue(turn.pending)
+        self.assertIsNone(turn.tool_events[0]["ok"])
+        self.assertTrue(turn.tool_events[0]["pending"])
+
+    def test_resolve_pending_flips_chip_to_outcome(self):
+        # D-108: deciding flips the pending chip to ✓ (executed) or ✗ (rejected/failed).
+        convs = self.agent.conversations
+        for outcome, want_ok in (("executed", True), ("rejected", False)):
+            cid = convs.create("admin", tenant_id="acme")["id"]
+            convs.add_message("admin", cid, "assistant", "I've prepared X", meta={
+                "pending": {"id": 91, "tool": "fx_client_write"},
+                "tools": [{"name": "fx_client_write", "ok": None, "pending": True}]})
+            self.assertTrue(convs.resolve_pending("admin", cid, 91, outcome))
+            msg = [m for m in convs.get("admin", cid)["messages"]
+                   if m["role"] == "assistant"][-1]
+            te = msg["meta"]["tools"][0]
+            self.assertEqual(te["ok"], want_ok)
+            self.assertNotIn("pending", te)
+            self.assertEqual(msg["meta"]["pending_resolved"], outcome)
+
     def test_reject_streams_continuation_without_executing(self):
         # D-103: rejecting ONE action skips it and the agent CONTINUES the task (streamed), instead
         # of the turn stopping. The rejected action must NOT run.

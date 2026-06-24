@@ -498,7 +498,7 @@ async function decideInline(btn,kind,batch){
         else if(ev.type==='delta'){ liveOn(); STREAM.acc+=ev.text; paintStream(); }
         else if(ev.type==='tool_call'){ liveOn(); STREAM.tools.push({name:ev.name,ok:null,ms:0}); paintStream(); }
         else if(ev.type==='tool_progress'){ const t=STREAM.tools.find(x=>x.name===ev.name&&x.ok===null); if(t){ t.ms=ev.elapsed_ms; paintStream(); } }
-        else if(ev.type==='tool_result'){ const t=STREAM.tools.find(x=>x.name===ev.name&&x.ok===null); if(t)t.ok=ev.ok; else STREAM.tools.push({name:ev.name,ok:ev.ok}); paintStream(); }
+        else if(ev.type==='tool_result'){ const t=STREAM.tools.find(x=>x.name===ev.name&&x.ok===null); if(t){ t.ok=ev.pending?null:ev.ok; t.pending=!!ev.pending; } else STREAM.tools.push({name:ev.name,ok:ev.pending?null:ev.ok,pending:!!ev.pending}); paintStream(); }
         else if(ev.type==='answer'){ STREAM.turn={role:'assistant',answer:ev.answer||STREAM.acc,tools:ev.tool_events||[],citations:ev.citations||[],pending:ev.pending||null,reasoning:ev.reasoning||STREAM.think||'',meta:ev.provider?`${ev.provider}/${ev.model} · ${ev.rounds} round(s)`:''}; }
         else if(ev.type==='error'){ toast(ev.error||'continuation error',false); }
       } }
@@ -518,8 +518,12 @@ function aiHtml(t){ let h=md(t.answer||'');
   else if(t.pending_resolved) h+=`<div class="mt-2 text-[11px] ${t.pending_resolved==='rejected'?'text-rose-400':'text-emerald-400'} inline-flex items-center gap-1"><i data-lucide="${t.pending_resolved==='rejected'?'x-circle':'check-circle-2'}" class="text-[12px]"></i> ${t.pending_resolved==='rejected'?'rejected':'approved & '+t.pending_resolved}</div>`;
   if(t.answer&&hasTable(t.answer)){ const _n=parseTables(t.answer).length;
     h+=`<div class="mt-2.5"><button class="open-table inline-flex items-center gap-1.5 text-xs font-semibold grad text-white rounded-lg px-3.5 py-2 shadow-lg shadow-indigo-500/25 hover:brightness-110" data-answer="${encodeURIComponent(t.answer)}"><i data-lucide="table" class="text-[14px]"></i> Open formatted table${_n>1?`s (${_n})`:''}<span class="opacity-80 font-normal">· export CSV / Excel / PDF</span></button></div>`; }
-  if(t.tools&&t.tools.length) h+=`<div class="mt-2 flex flex-wrap gap-1">`+t.tools.map(x=>
-    `<span class="pill ${x.ok?'bg-emerald-500/15 text-emerald-300':'bg-rose-500/15 text-rose-300'} inline-flex items-center gap-1"><i data-lucide="${x.ok?'check':'x'}" class="text-[11px]"></i>${esc(x.name)}</span>`).join('')+`</div>`;
+  if(t.tools&&t.tools.length) h+=`<div class="mt-2 flex flex-wrap gap-1">`+t.tools.map(x=>{
+    // pending approval = amber clock; otherwise ✓/✗ (D-108)
+    const cls=x.pending?'bg-amber-500/15 text-amber-300':x.ok?'bg-emerald-500/15 text-emerald-300':'bg-rose-500/15 text-rose-300';
+    const ic=x.pending?'clock':x.ok?'check':'x';
+    return `<span class="pill ${cls} inline-flex items-center gap-1"><i data-lucide="${ic}" class="text-[11px]"></i>${esc(x.name)}</span>`;
+  }).join('')+`</div>`;
   if(t.tools) h+=t.tools.filter(x=>x.data).map(x=>
     `<details class="mt-1"><summary class="cursor-pointer text-[11px] text-slate-400 hover:text-slate-200 select-none inline-flex items-center gap-1"><i data-lucide="braces" class="text-[11px]"></i>${esc(x.name)} — returned data</summary><pre class="text-[11px] text-slate-300 bg-ink/60 border border-edge rounded-lg p-2 mt-1 overflow-auto max-h-72 whitespace-pre-wrap">${esc(prettyJson(x.data))}</pre></details>`).join('');
   if(t.citations&&t.citations.length) h+=`<div class="mt-2 flex flex-wrap gap-1.5">${t.citations.map(c=>`<span class="cite">↳ ${esc(c)}</span>`).join('')}</div>`;
@@ -548,11 +552,13 @@ function chatThinkBlock(){ const think=STREAM?STREAM.think:'', acc=STREAM?STREAM
   const body=open?`<div class="think-body text-[11px] text-slate-500 bg-ink/40 border border-edge/60 rounded-lg p-2.5 mb-2 whitespace-pre-wrap max-h-48 overflow-auto leading-relaxed">${esc(think)}</div>`:'';
   return head+body; }
 function chatToolChips(ts){ return !ts||!ts.length?'':`<div class="mt-2 flex flex-wrap gap-1">`+ts.map(x=>{
-  const cls=x.ok===null?'bg-white/10 text-slate-300':x.ok?'bg-emerald-500/15 text-emerald-300':'bg-rose-500/15 text-rose-300';
-  const ic=x.ok===null?'loader-circle':x.ok?'check':'x';
+  // pending approval = amber clock (waiting on you); running = spinner; then ✓/✗ (D-108)
+  const cls=x.pending?'bg-amber-500/15 text-amber-300':x.ok===null?'bg-white/10 text-slate-300':x.ok?'bg-emerald-500/15 text-emerald-300':'bg-rose-500/15 text-rose-300';
+  const ic=x.pending?'clock':x.ok===null?'loader-circle':x.ok?'check':'x';
+  const spin=x.ok===null&&!x.pending;
   // running chip shows live elapsed time (D-101) so a slow tool reads as "working", not "frozen"
-  const secs=x.ok===null&&x.ms?` · ${(x.ms/1000).toFixed(0)}s`:'';
-  return `<span class="pill ${cls} inline-flex items-center gap-1"><i data-lucide="${ic}" class="text-[11px] ${x.ok===null?'animate-spin':''}"></i>${esc(x.name)}${secs}</span>`;
+  const secs=spin&&x.ms?` · ${(x.ms/1000).toFixed(0)}s`:'';
+  return `<span class="pill ${cls} inline-flex items-center gap-1"><i data-lucide="${ic}" class="text-[11px] ${spin?'animate-spin':''}"></i>${esc(x.name)}${secs}</span>`;
 }).join('')+`</div>`; }
 function paintStream(){ const e=document.getElementById('ai-streaming'); if(!e||!STREAM)return;
   e.innerHTML=chatThinkBlock()+(STREAM.acc?md(STREAM.acc):(STREAM.think?'':CHAT_DOTS))+chatToolChips(STREAM.tools);
@@ -1366,7 +1372,7 @@ const VIEWS={
             else if(ev.type==='delta'){ STREAM.acc+=ev.text; paintStream(); }
             else if(ev.type==='tool_call'){ STREAM.tools.push({name:ev.name,ok:null,ms:0}); paintStream(); }
             else if(ev.type==='tool_progress'){ const t=STREAM.tools.find(x=>x.name===ev.name&&x.ok===null); if(t){ t.ms=ev.elapsed_ms; paintStream(); } }
-            else if(ev.type==='tool_result'){ const t=STREAM.tools.find(x=>x.name===ev.name&&x.ok===null); if(t)t.ok=ev.ok; else STREAM.tools.push({name:ev.name,ok:ev.ok}); paintStream(); }
+            else if(ev.type==='tool_result'){ const t=STREAM.tools.find(x=>x.name===ev.name&&x.ok===null); if(t){ t.ok=ev.pending?null:ev.ok; t.pending=!!ev.pending; } else STREAM.tools.push({name:ev.name,ok:ev.pending?null:ev.ok,pending:!!ev.pending}); paintStream(); }
             else if(ev.type==='answer'){ STREAM.turn={role:'assistant',answer:ev.answer||STREAM.acc,tools:ev.tool_events||[],citations:ev.citations||[],suggest_skill:ev.suggest_skill||null,pending:ev.pending||null,reasoning:ev.reasoning||STREAM.think||'',meta:`${ev.provider}/${ev.model} · ${ev.rounds} round(s)`};
               // D-52: the turn locked this all-clients chat onto one client — follow it in the
               // picker + rebind the conversation locally so switching client later starts a new chat.
