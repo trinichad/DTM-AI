@@ -1,6 +1,7 @@
 """Microsoft 365 / Graph PER-CLIENT delegated device-code auth tests (D-32/D-33)."""
 import base64
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -2464,6 +2465,143 @@ class D105GroupListAndRename(unittest.TestCase):
         r = rn.run(_exo_ctx(exo), user="zzz_user@demodomain.com")
         self.assertTrue(r["ok"])
         self.assertIn("already renamed", r["note"])
+
+
+class D106Onboard(unittest.TestCase):
+    """D-106 — onboarding: license wait, contact set, and the composite orchestration."""
+
+    def _poll0(self):
+        os.environ["MSPAI_LICENSE_POLL_SECONDS"] = "0"
+        os.environ["MSPAI_VERIFY_DELAY"] = "0"
+        self.addCleanup(lambda: os.environ.pop("MSPAI_LICENSE_POLL_SECONDS", None))
+        self.addCleanup(lambda: os.environ.pop("MSPAI_VERIFY_DELAY", None))
+
+    def test_wait_for_license_available_now(self):
+        self._poll0()
+        from execution.skills import m365_wait_for_license as w
+        fake = FakeGraph({"/subscribedSkus": {"value": [
+            {"skuPartNumber": "SPE_F1", "skuId": "s1",
+             "prepaidUnits": {"enabled": 5}, "consumedUnits": 2}]}})
+        r = w.run(_graph_ctx(fake), license="SPE_F1")
+        self.assertTrue(r["available"])
+        self.assertEqual(r["available"], True)
+
+    def test_wait_for_license_no_seat_then_gives_up(self):
+        self._poll0()
+        from execution.skills import m365_wait_for_license as w
+        fake = FakeGraph({"/subscribedSkus": {"value": [
+            {"skuPartNumber": "SPE_F1", "skuId": "s1",
+             "prepaidUnits": {"enabled": 2}, "consumedUnits": 2}]}})
+        r = w.run(_graph_ctx(fake), license="SPE_F1", minutes=0.001)
+        self.assertFalse(r["available"])
+        self.assertTrue(r["found"])
+
+    def test_wait_for_license_appears_after_polling(self):
+        self._poll0()
+        from execution.skills import m365_wait_for_license as w
+        seq = iter([{"value": []},
+                    {"value": [{"skuPartNumber": "SPE_F1", "skuId": "s1",
+                                "prepaidUnits": {"enabled": 1}, "consumedUnits": 0}]}])
+        fake = FakeGraph({"/subscribedSkus": lambda p: next(seq)})
+        r = w.run(_graph_ctx(fake), license="SPE_F1", minutes=1)
+        self.assertTrue(r["available"])
+
+    def test_set_user_contact_sets_and_verifies(self):
+        self._poll0()
+        from execution.skills import m365_set_user_contact as sc
+
+        class G(FakeGraph):
+            def get(self, path, params=None):
+                sel = (params or {}).get("$select", "")
+                if path == "/users/u@x.com" and "jobTitle" not in sel:
+                    return {"id": "u-1", "onPremisesSyncEnabled": False}
+                if path == "/users/u-1":
+                    return {"id": "u-1", "jobTitle": "Tech", "department": "IT"}
+                return {"error": f"unexpected {path}"}
+        g = G({})
+        r = sc.run(_graph_ctx(g), user="u@x.com", job_title="Tech", department="IT")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(sorted(r["updated"]), ["department", "jobTitle"])
+        patch = next(b for m, p, b in g.writes if m == "PATCH")
+        self.assertEqual(patch, {"jobTitle": "Tech", "department": "IT"})
+
+    def test_set_user_contact_refuses_on_hybrid(self):
+        from execution.skills import m365_set_user_contact as sc
+        g = FakeGraph({"/users/u@x.com": {"id": "u-1", "onPremisesSyncEnabled": True}})
+        r = sc.run(_graph_ctx(g), user="u@x.com", job_title="Tech")
+        self.assertFalse(r["ok"])
+        self.assertTrue(r["on_prem_synced"])
+        self.assertEqual(g.writes, [])
+
+    def _patch_substeps(self, calls):
+        import execution.skills.exo_add_group_member as dg
+        import execution.skills.exo_grant_mailbox_access as gma
+        import execution.skills.m365_add_phone_auth as ap
+        import execution.skills.m365_add_security_group_member as sg
+        import execution.skills.m365_assign_license as al
+        import execution.skills.m365_set_mfa as mfa
+        import execution.skills.m365_set_user_contact as sc
+        mods = {"al": al, "sc": sc, "sg": sg, "dg": dg, "gma": gma, "ap": ap, "mfa": mfa}
+        for m in mods.values():
+            self.addCleanup(setattr, m, "run", m.run)
+        al.run = lambda ctx, **k: (calls.append(("license", k.get("license"),
+                                                 k.get("disabled_apps"))), {"ok": True})[1]
+        sc.run = lambda ctx, **k: (calls.append(("contact", sorted(x for x in k if x != "user"))),
+                                   {"ok": True})[1]
+        sg.run = lambda ctx, **k: (calls.append(("secgrp", k.get("group"))), {"ok": True})[1]
+        dg.run = lambda ctx, **k: (calls.append(("dl", k.get("group"))), {"ok": True})[1]
+        gma.run = lambda ctx, **k: (calls.append(("mbx", k.get("mailbox"), k.get("access"))),
+                                    {"ok": True})[1]
+        ap.run = lambda ctx, **k: (calls.append(("phone", k.get("phone"))), {"ok": True})[1]
+        mfa.run = lambda ctx, **k: (calls.append(("mfa", k.get("state"))), {"ok": True})[1]
+        return mods
+
+    def test_onboard_runs_all_steps_in_order(self):
+        from execution.skills import m365_onboard_user as ob
+        calls: list = []
+        self._patch_substeps(calls)
+        graph = FakeGraph({"/users/jdoe@x.com": {"id": "u-1", "onPremisesSyncEnabled": False}})
+        r = ob.run(_graph_ctx(graph), user="jdoe@x.com",
+                   licenses=[{"sku": "SPE_F1", "disabled_apps": ["TEAMS1"]}],
+                   contact={"job_title": "Tech"}, security_groups=["VPN"],
+                   distribution_groups=["Sales"], mailboxes=["info@x.com"],
+                   mfa_phone="+15551234567", enforce_mfa=True)
+        self.assertTrue(r["ok"], r)
+        self.assertFalse(r["hybrid"])
+        self.assertEqual([c[0] for c in calls],
+                         ["license", "contact", "secgrp", "dl", "mbx", "mbx", "phone", "mfa"])
+        self.assertEqual([c for c in calls if c[0] == "mbx"],
+                         [("mbx", "info@x.com", "full_access"),
+                          ("mbx", "info@x.com", "send_as")])
+        self.assertEqual(calls[-1], ("mfa", "enforced"))
+        self.assertEqual(calls[0], ("license", "SPE_F1", ["TEAMS1"]))
+
+    def test_onboard_creates_user_when_non_hybrid_and_missing(self):
+        import execution.skills.m365_create_user as cu
+        from execution.skills import m365_onboard_user as ob
+        calls: list = []
+        self._patch_substeps(calls)
+        self.addCleanup(setattr, cu, "run", cu.run)
+        created = {}
+        cu.run = lambda ctx, **k: (created.update(k), {"ok": True})[1]
+        graph = FakeGraph({
+            "/organization": {"value": [{"onPremisesSyncEnabled": False}]},
+            # /users/new@x.com falls through to the default unexpected-GET error => "not found"
+        })
+        r = ob.run(_graph_ctx(graph), user="new@x.com", create_first_name="New",
+                   create_last_name="Hire", enforce_mfa=False, licenses=[{"sku": "SPE_E3"}])
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["steps"]["create_user"], "done")
+        self.assertEqual(created["email"], "new@x.com")
+        self.assertEqual((created["first_name"], created["last_name"]), ("New", "Hire"))
+
+    def test_onboard_hybrid_missing_user_refuses_create(self):
+        from execution.skills import m365_onboard_user as ob
+        graph = FakeGraph({"/organization": {"value": [{"onPremisesSyncEnabled": True}]}})
+        r = ob.run(_graph_ctx(graph), user="ghost@x.com", create_first_name="G",
+                   create_last_name="H")
+        self.assertFalse(r["ok"])
+        self.assertTrue(r["tenant_hybrid"])
 
 
 if __name__ == "__main__":

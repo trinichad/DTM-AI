@@ -524,3 +524,34 @@ Owner redesigned the offboarding flow:
   reject-continues flow). The tool itself removes nothing.
 Flags reordered; `rename_smtp` flag dropped; `list_groups` added (default on). Tests: full offboard
 (list_groups off), hybrid-skips, lists-groups-without-removing, big-mailbox, flags-off.
+
+## Amendment (2026-06-23, D-106) — onboarding: m365_onboard_user + contact + license-wait
+
+Owner wanted an onboarding tool mirroring offboard. Built as a composite the AGENT calls once after
+interactively gathering the spec — same model the owner picked (one approval card for the whole plan).
+
+- **`m365_onboard_user`** (write, high, approval, default-off). Order: ensure-account (configure the
+  existing synced user; if the tenant is NOT hybrid and the user is missing, CREATE via
+  m365_create_user — needs create_first/last_name; a hybrid tenant with a missing user is refused with
+  "create it in on-prem AD") -> assign licenses -> set contact info (SKIPPED on hybrid) -> add to
+  security + distribution groups -> grant Full Access + Send-As on each mailbox -> add the cell as an
+  MFA phone -> enforce MFA. Each step reuses the dedicated tool's run() and is reported in `steps`;
+  one bad step doesn't abort the rest. `describe_approval` previews the whole plan (D-90). The
+  **F1 rule** (default apps = Microsoft Entra ID P1 + Microsoft Intune Plan 1 only, but ASK if more
+  are needed) and the **PAX8 wait** live in the DESCRIPTION as agent guidance — the agent assembles
+  `licenses[].disabled_apps` and ensures availability BEFORE calling.
+- **`m365_set_user_contact`** (write): PATCH jobTitle/department/officeLocation/businessPhones/
+  mobilePhone/streetAddress/city/state/postalCode; HYBRID-aware (onPremisesSyncEnabled → refuses with
+  "set in on-prem AD"); verify-poll (D-104). Field naming mirrors m365_create_user.
+- **`m365_wait_for_license`** (read, default-on): polls /subscribedSkus until a SKU has a free seat
+  (PAX8 buy-as-needed) or the time budget elapses (default 10 min, cap 30, ~30s interval;
+  `MSPAI_LICENSE_POLL_SECONDS` tunes/zeroes it). Returns available / not-yet / not-found-in-tenant with
+  guidance to keep waiting or check PAX8. Never assigns. (Bug caught in test: the bool `available` flag
+  must not collide with the seat-count key — the count is `available_seats`.)
+
+Tenant-level hybrid is read from `/organization` onPremisesSyncEnabled (per-user is the user object's).
+Reused existing tools unchanged: m365_list_licenses, m365_assign_license (disabled_apps),
+m365_add_security_group_member, exo_add_group_member, exo_grant_mailbox_access (full_access + send_as,
+called twice), m365_add_phone_auth, m365_set_mfa. Tests: license-wait (now/no-seat/appears),
+set-contact (set+verify, hybrid-refuse), onboard order (incl. the full+send-as double call), create
+path, hybrid-missing-user refusal.
