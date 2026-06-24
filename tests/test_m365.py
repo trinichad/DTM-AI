@@ -2144,6 +2144,38 @@ class D58AccessReports(unittest.TestCase):
                      folder="contacts", access="availability_only")
         self.assertIn("calendars only", bad["error"])
 
+    def test_grant_folder_access_batches_recipients_in_one_call(self):
+        # D-110: grant the SAME folder/level to a list of recipients in ONE call (one approval).
+        # The mailbox preflight (Get-Mailbox) runs once; each recipient is applied + verified.
+        from execution.skills import exo_grant_folder_access as gf
+
+        class StatefulEXO:
+            def __init__(self): self.perms = {}; self.calls = []
+            def invoke(self, cmdlet, params=None):
+                params = params or {}; self.calls.append((cmdlet, params))
+                if cmdlet == "Get-Mailbox":
+                    ident = str(params.get("Identity", ""))
+                    return [{"PrimarySmtpAddress": ident, "Alias": ident.split("@")[0],
+                             "DisplayName": ident}]
+                if cmdlet == "Get-MailboxFolderPermission":
+                    return [{"User": u, "AccessRights": [r]} for u, r in self.perms.items()]
+                if cmdlet in ("Add-MailboxFolderPermission", "Set-MailboxFolderPermission"):
+                    self.perms[params["User"]] = params["AccessRights"][0]
+                    return {"ok": True}
+                return {"error": "unexpected"}
+        fake = StatefulEXO()
+        r = gf.run(_exo_ctx(fake), mailbox="boss@demodomain.com", folder="calendar",
+                   access="reviewer", users=["a@demodomain.com", "b@demodomain.com"])
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["users_granted"], 2)
+        self.assertEqual(r["summary"], {"granted": 2, "unchanged": 0, "error": 0})
+        self.assertEqual({x["user"] for x in r["results"]},
+                         {"a@demodomain.com", "b@demodomain.com"})
+        # the shared mailbox preflight ran exactly once for the whole batch
+        boss_lookups = [c for c in fake.calls
+                        if c[0] == "Get-Mailbox" and c[1].get("Identity") == "boss@demodomain.com"]
+        self.assertEqual(len(boss_lookups), 1)
+
 
 class D58MailHygiene(unittest.TestCase):
     def test_block_auto_forwarding_creates_the_standard_rule(self):

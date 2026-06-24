@@ -452,3 +452,17 @@ alongside `identity`. The batch path returns `{ok, mailboxes_checked, results:[ 
 each row carrying its own `mailbox` so a miss/error is attributable. Body refactored into `_one(exo, ...)`
 sharing the single EXO client; `identity` dropped from `required` so a list-only call validates.
 DESCRIPTION leads with "do NOT call this tool once per mailbox." Test: details-batches-in-one-call.
+
+### Follow-up (D-110) — exo_grant_folder_access batches recipients
+
+Owner saw the agent call `exo_grant_folder_access` ~52× to share one mailbox's calendar with a whole
+team. It now accepts `users[]` (recipients) alongside `user`: ONE call grants the same folder/level to
+the whole list under ONE approval (the write-batch precedent is D-96 `exo_bulk_set_gal_visibility`). The
+mailbox preflight (`get_one_mailbox`) runs once; the per-recipient grant logic is factored into
+`_grant(exo, mailbox, fid, fname, right, access, user)` and still applies + VERIFIES each grant (the
+single-user call sequence is unchanged — Get-Mailbox · Get-Mailbox · Get-MailboxFolderPermission ·
+Add/Set · Get-MailboxFolderPermission). Returns `{ok, mailbox, folder, access, users_granted, summary:
+{granted,unchanged,error}, results:[ per-user ]}`; each per-user row (incl. failures) carries its `user`.
+`user` dropped from `required` (mailbox/folder/access still required). The same shape fits the siblings
+`exo_revoke_folder_access`, `exo_grant_mailbox_access`, `exo_revoke_mailbox_access` if they start looping.
+Test: grant-folder-access-batches-recipients-in-one-call.

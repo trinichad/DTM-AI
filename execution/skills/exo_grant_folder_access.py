@@ -4,12 +4,14 @@ from __future__ import annotations
 from typing import Any
 
 NAME = "exo_grant_folder_access"
-DESCRIPTION = ("Grant a user access to another user's CALENDAR or CONTACTS folder. access "
+DESCRIPTION = ("Grant access to another user's CALENDAR or CONTACTS folder. access "
                "levels: 'reviewer' = read only, 'editor' = read/write items, 'author' = "
                "read + add, 'owner' = full control, 'contributor' = add only; calendar-only: "
                "'availability_only' = free/busy, 'limited_details' = free/busy + subject. "
-               "Updates the level if the user already has one. Verifies before reporting "
-               "success.")
+               "Grant the SAME folder/level to MANY recipients in ONE call by passing `users` (a "
+               "list) instead of `user` — do NOT call this tool once per recipient; the whole list "
+               "is granted under one approval. Updates the level if a user already has one. "
+               "Verifies each grant before reporting success.")
 SOURCE = "m365"
 CATEGORY = "write"
 RISK_LEVEL = "medium"
@@ -25,11 +27,16 @@ PARAMETERS: dict[str, Any] = {
         "mailbox": {"type": "string",
                     "description": "whose folder is being shared (their email address)"},
         "user": {"type": "string", "description": "who RECEIVES access (their email address)"},
+        "users": {"type": "array", "items": {"type": "string"},
+                  "description": "grant the SAME folder/level to MANY recipients in ONE call — a "
+                                 "list of email addresses; each grant is applied and verified, and "
+                                 "a per-user result + summary comes back. Use this instead of "
+                                 "calling the tool once per recipient."},
         "folder": {"type": "string", "enum": list(_FOLDERS), "description": "which folder"},
         "access": {"type": "string", "enum": list(_RIGHTS),
                    "description": "the access level to grant"},
     },
-    "required": ["mailbox", "user", "folder", "access"],
+    "required": ["mailbox", "folder", "access"],
     "additionalProperties": False,
 }
 
@@ -64,11 +71,10 @@ def _user_entry(rows: list[dict], user: str, idents: set[str] | None = None) -> 
     return None
 
 
-def run(ctx, mailbox: str, user: str, folder: str, access: str, **_: Any):
+def run(ctx, mailbox: str, user: str = "", folder: str = "", access: str = "",
+        users: Any = None, **_: Any):
     from . import _exo_common as c
-    mailbox, user = (mailbox or "").strip(), (user or "").strip()
-    if "@" not in user:
-        return {"ok": False, "error": f"'{user}' is not a valid user address"}
+    mailbox = (mailbox or "").strip()
     fname = _FOLDERS.get((folder or "").strip().lower())
     right = _RIGHTS.get((access or "").strip().lower())
     if not fname or not right:
@@ -77,16 +83,36 @@ def run(ctx, mailbox: str, user: str, folder: str, access: str, **_: Any):
     if right in ("AvailabilityOnly", "LimitedDetails") and fname != "Calendar":
         return {"ok": False, "error": f"'{access}' applies to calendars only"}
     exo = ctx.client("exo")
-    mb, bad = c.get_one_mailbox(exo, mailbox)
+    mb, bad = c.get_one_mailbox(exo, mailbox)              # shared preflight — once for the batch
     if bad:
         return bad
     fid = f"{mailbox}:\\{fname}"
+
+    recipients = [u for u in (str(x).strip() for x in (users or [])) if u]
+    if recipients:                                        # batch grant (D-110) — ONE call, ONE approval
+        results = [_grant(exo, mailbox, fid, fname, right, access, u) for u in recipients]
+        summary = {"granted": 0, "unchanged": 0, "error": 0}
+        for r in results:
+            summary["error" if not r.get("ok") else
+                    "granted" if r.get("access_granted") else "unchanged"] += 1
+        return {"ok": summary["error"] < len(results), "mailbox": mailbox,
+                "folder": fname.lower(), "access": access, "users_granted": len(results),
+                "summary": summary, "results": results}
+    return _grant(exo, mailbox, fid, fname, right, access, user)
+
+
+def _grant(exo, mailbox: str, fid: str, fname: str, right: str, access: str, user: str) -> dict:
+    from . import _exo_common as c
+    user = (user or "").strip()
+    if "@" not in user:
+        return {"ok": False, "user": user, "error": f"'{user}' is not a valid user address"}
     idents = identifiers(exo, user)
 
     cur = exo.invoke("Get-MailboxFolderPermission", {"Identity": fid})
     if c.err(cur) and "couldn't be found" in c.err(cur).lower():
-        return {"ok": False, "error": f"the {fname} folder on '{mailbox}' was not found — "
-                                      f"non-English tenants use localized folder names"}
+        return {"ok": False, "user": user,
+                "error": f"the {fname} folder on '{mailbox}' was not found — "
+                         f"non-English tenants use localized folder names"}
     held = _user_entry(_rows(cur), user, idents) if not c.err(cur) else None
     held_rights = " ".join(str(x) for x in (held.get("AccessRights") or [])) if held else ""
     if held and right.lower() in held_rights.lower():
@@ -104,13 +130,13 @@ def run(ctx, mailbox: str, user: str, folder: str, access: str, **_: Any):
         r = exo.invoke(cmdlet, args)
         held = held or {"AccessRights": ["(existing)"]}     # it WAS already present
     if c.err(r):
-        return {"ok": False, "step": "grant", "error": c.err(r)}
+        return {"ok": False, "user": user, "step": "grant", "error": c.err(r)}
 
     check = exo.invoke("Get-MailboxFolderPermission", {"Identity": fid})
     now = _user_entry(_rows(check), user, idents) if not c.err(check) else None
     now_rights = " ".join(str(x) for x in (now.get("AccessRights") or [])) if now else ""
     if right.lower() not in now_rights.lower():
-        return {"ok": False, "step": "verify",
+        return {"ok": False, "user": user, "step": "verify",
                 "error": f"{cmdlet} returned no error but the {fname} permission doesn't "
                          f"show '{right}' for {user} — check Exchange directly"}
     return {"ok": True, "mailbox": mailbox, "user": user, "folder": fname.lower(),
