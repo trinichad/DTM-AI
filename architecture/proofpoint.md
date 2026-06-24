@@ -31,3 +31,11 @@ call 4xx's, read the surfaced error and adjust the field names in _proofpoint_co
 skills (or use proofpoint_write to probe the right shape). Quarantine-release + message-trace are
 weak/UI-only in Essentials and were not built; the Essentials Threat API (threat/click events) is a
 later add.
+
+## Amendment (2026-06-24, D-110) — proofpoint_get_user takes a batch list
+
+`proofpoint_get_user` now accepts `emails[]` alongside `email`. `domain` stays single (the call is
+org-scoped) and only `domain` is required; the batch path returns `{ok, domain, users_checked,
+results:[ <per-user dict> ]}`. Each row is tagged with its `email`; an invalid address becomes an error
+row WITHOUT an HTTP GET. Body refactored into `_one(client, domain, email)`. DESCRIPTION leads with "do
+NOT call this tool once per user." Test: get-user-batches-in-one-call.

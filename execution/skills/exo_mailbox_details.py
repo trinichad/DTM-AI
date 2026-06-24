@@ -4,12 +4,13 @@ from __future__ import annotations
 from typing import Any
 
 NAME = "exo_mailbox_details"
-DESCRIPTION = ("Show ONE mailbox's full admin details: type, aliases, hidden-from-address-book, "
+DESCRIPTION = ("Show a mailbox's full admin details: type, aliases, hidden-from-address-book, "
                "forwarding, max send/receive sizes, retention policy, online-archive state, "
                "whether the user is AD-synced and whether Exchange CLOUD MANAGEMENT is enabled, "
-               "and the CURRENT SIZE of the mailbox and its archive. Use this to check a mailbox's "
-               "configuration (including whether cloud management is already set) or to verify a "
-               "change.")
+               "and the CURRENT SIZE of the mailbox and its archive. Pass `identity` for one "
+               "mailbox or `identities` (a list) to inspect MANY in ONE call — do NOT call this "
+               "tool once per mailbox. Use this to check configuration (including whether cloud "
+               "management is already set) or to verify a change.")
 SOURCE = "m365"
 CATEGORY = "read"
 RISK_LEVEL = "low"
@@ -19,8 +20,11 @@ PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
         "identity": {"type": "string", "description": "the mailbox's primary email address"},
+        "identities": {"type": "array", "items": {"type": "string"},
+                       "description": "inspect MANY mailboxes in ONE call — a list of primary "
+                                      "email addresses; each mailbox's details come back together. "
+                                      "Use this instead of calling the tool once per mailbox."},
     },
-    "required": ["identity"],
     "additionalProperties": False,
 }
 
@@ -42,12 +46,20 @@ def _stats(exo, identity: str, archive: bool) -> dict[str, Any]:
             "deleted_size": row.get("TotalDeletedItemSize")}
 
 
-def run(ctx, identity: str, **_: Any):
-    from . import _exo_common as c
+def run(ctx, identity: str = "", identities: Any = None, **_: Any):
     exo = ctx.client("exo")
+    wanted = [str(i).strip() for i in (identities or []) if str(i).strip()]
+    if wanted:                                         # batch lookup (D-110) — one call, many mailboxes
+        results = [_one(exo, i) for i in wanted]
+        return {"ok": True, "mailboxes_checked": len(results), "results": results}
+    return _one(exo, identity)
+
+
+def _one(exo, identity: str) -> dict:
+    from . import _exo_common as c
     mb, bad = c.get_one_mailbox(exo, identity)
     if bad:
-        return bad
+        return {**bad, "mailbox": identity}
     primary = str(mb.get("PrimarySmtpAddress") or identity)
     archive_guid = str(mb.get("ArchiveGuid") or "")
     has_archive = (bool(archive_guid) and archive_guid != _NO_ARCHIVE_GUID

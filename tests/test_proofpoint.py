@@ -99,6 +99,26 @@ class ProofpointSkills(unittest.TestCase):
         du.run(_ctx(fake), domain="acme.com", email="bob@acme.com")
         self.assertEqual(fake.writes[0], ("DELETE", "/orgs/acme.com/users/bob@acme.com", None))
 
+    def test_get_user_batches_in_one_call(self):
+        # D-110: a list of emails is fetched in ONE call; invalid ones become error rows without
+        # an HTTP GET, so the agent doesn't call the tool once per user.
+        from execution.skills import proofpoint_get_user as gu
+
+        class FP:
+            def __init__(self): self.gets = []
+            def get(self, path, params=None):
+                self.gets.append(path)
+                return {"primary_email": path.rsplit("/", 1)[-1], "license": "beginner"}
+        fake = FP()
+        r = gu.run(_ctx(fake), domain="acme.com",
+                   emails=["a@acme.com", "b@acme.com", "bad-email"])
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["users_checked"], 3)
+        self.assertEqual(len(fake.gets), 2)               # invalid email skipped the HTTP call
+        by = {x["email"]: x for x in r["results"]}
+        self.assertEqual(by["a@acme.com"]["primary_email"], "a@acme.com")
+        self.assertFalse(by["bad-email"]["ok"])           # invalid → error row, no GET
+
     def test_validation(self):
         from execution.skills import proofpoint_get_user as gu, proofpoint_allow_sender as al
         self.assertFalse(gu.run(_ctx(FakePP()), domain="acme.com", email="not-an-email")["ok"])

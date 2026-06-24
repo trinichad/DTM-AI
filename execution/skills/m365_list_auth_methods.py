@@ -6,9 +6,10 @@ from typing import Any
 NAME = "m365_list_auth_methods"
 DESCRIPTION = ("Show WHICH authentication methods a user has registered — Microsoft "
                "Authenticator, phone (SMS/call) with the number, FIDO2 security key, Windows "
-               "Hello, TOTP authenticator app, Temporary Access Pass. Use with "
-               "m365_mfa_status: that says IF MFA is on, this says WITH WHAT. Password and "
-               "recovery email are listed separately (they are not MFA).")
+               "Hello, TOTP authenticator app, Temporary Access Pass. Pass `user` for one person "
+               "or `users` (a list) to check MANY in ONE call — do NOT call this tool once per "
+               "person. Use with m365_mfa_status: that says IF MFA is on, this says WITH WHAT. "
+               "Password and recovery email are listed separately (they are not MFA).")
 SOURCE = "m365"
 CATEGORY = "read"
 RISK_LEVEL = "low"
@@ -18,8 +19,11 @@ PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
         "user": {"type": "string", "description": "the user's sign-in address (UPN)"},
+        "users": {"type": "array", "items": {"type": "string"},
+                  "description": "check MANY users in ONE call — a list of sign-in addresses; "
+                                 "their registered methods come back together. Use this instead "
+                                 "of calling the tool once per user."},
     },
-    "required": ["user"],
     "additionalProperties": False,
 }
 
@@ -52,13 +56,21 @@ _KINDS: dict[str, tuple] = {
 }
 
 
-def run(ctx, user: str, **_: Any):
+def run(ctx, user: str = "", users: Any = None, **_: Any):
+    wanted = [str(u).strip() for u in (users or []) if str(u).strip()]
+    if wanted:                                         # batch lookup (D-110) — one call, many users
+        results = [_one(ctx, u) for u in wanted]
+        return {"ok": True, "users_checked": len(results), "results": results}
+    return _one(ctx, user)
+
+
+def _one(ctx, user: str) -> dict:
     from ..clients._http import HttpError
     from ..clients.scopes import scoped_read
     from . import _graph_common as g
     user = (user or "").strip()
     if "@" not in user:
-        return {"ok": False, "error": f"'{user}' is not a sign-in address"}
+        return {"ok": False, "user": user, "error": f"'{user}' is not a sign-in address"}
     try:
         data = scoped_read(ctx, "m365", f"/users/{user}/authentication/methods")
     except HttpError as exc:
@@ -66,7 +78,7 @@ def run(ctx, user: str, **_: Any):
                         "UserAuthenticationMethod.Read.All")
     bad = g.fail(data)
     if bad:
-        return bad
+        return {**bad, "user": user}
 
     mfa, other = [], []
     for m in g.rows(data):

@@ -5,14 +5,17 @@ from typing import Any, Callable, Optional
 
 NAME = "m365_list_users"
 DESCRIPTION = ("List or search Microsoft 365 / Entra users (display name, sign-in name, email, "
-               "enabled state, job title, department). Use `search` to find people by name/email "
-               "(Graph keyword search — matches whole words/prefixes, best for big tenants); use "
-               "`name_contains` to find every user whose display name / sign-in / email CONTAINS a "
-               "substring anywhere (case-insensitive) — the right tool for naming conventions like "
-               "a 'zzz_' prefix on archived accounts, since Graph keyword search can't do "
-               "substring matches; or `filter` for an OData query. Scoped to the selected client; "
-               "when the session is 'All clients' (*) it aggregates across every signed-in M365 "
-               "client and tags each user with their `tenant`.")
+               "enabled state, job title, department). To look up MANY specific people at once "
+               "(e.g. resolve a list of names to their email addresses) pass `names` (a list) — "
+               "this resolves the WHOLE list in ONE call; do NOT call this tool once per person. "
+               "Use `search` to find people by a single name/email (Graph keyword search — matches "
+               "whole words/prefixes, best for big tenants); use `name_contains` to find every "
+               "user whose display name / sign-in / email CONTAINS a substring anywhere "
+               "(case-insensitive) — the right tool for naming conventions like a 'zzz_' prefix on "
+               "archived accounts, since Graph keyword search can't do substring matches; or "
+               "`filter` for an OData query. Scoped to the selected client; when the session is "
+               "'All clients' (*) it aggregates across every signed-in M365 client and tags each "
+               "user with their `tenant`.")
 SOURCE = "m365"
 CATEGORY = "read"
 RISK_LEVEL = "low"
@@ -20,9 +23,17 @@ ENABLED_BY_DEFAULT = True
 _SELECT = "id,displayName,userPrincipalName,mail,accountEnabled,jobTitle,department"
 _CONTAINS_FIELDS = ("displayName", "userPrincipalName", "mail")
 _MAX_SCAN_PAGES = 30                 # ~30k users — far beyond any MSP client; bounds a runaway scan
+_NAME_TOP = 25                       # per-name search cap for a batch `names` lookup
+_MAX_NAMES = 200                     # bound a single batch request
 PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
+        "names": {"type": "array", "items": {"type": "string"},
+                  "description": "look up MANY people in ONE call — a list of names (or emails). "
+                                 "Each is resolved by Graph keyword search and the matches are "
+                                 "returned together, each tagged with the `matched_query` that "
+                                 "found it; names with no match are listed under `not_found`. Use "
+                                 "this instead of calling the tool once per person."},
         "search": {"type": "string",
                    "description": "find users whose name/email/sign-in contains this WORD/prefix "
                                   "(Graph keyword search, e.g. 'smith') — fast on large tenants"},
@@ -152,10 +163,86 @@ def _contains_all_clients(ctx, needle: str) -> dict:
     return out
 
 
+def _search_for(get_page: Callable[[dict], Any], name: str) -> tuple[list, Optional[dict]]:
+    """One Graph keyword search for `name`. Returns (raw_users, error_or_None)."""
+    data = get_page(_params(name, "", _NAME_TOP))
+    if isinstance(data, dict) and data.get("error"):
+        return [], data
+    page = (data.get("value") if isinstance(data, dict) else data) or []
+    return [u for u in page if isinstance(u, dict)], None
+
+
+def _collect_names(getters: list[tuple[Optional[str], Callable[[dict], Any]]],
+                   names: list[str]) -> dict:
+    """Resolve each name across every getter (one per connected tenant), consolidating into a
+    single result. This is what collapses N per-person tool calls into ONE (D-110)."""
+    matched, by_name, not_found, errors, seen = [], [], [], [], set()
+    for name in names:
+        hits = 0
+        for tenant, get in getters:
+            users, err = _search_for(get, name)
+            if err:
+                row = {"name": name, "error": str(err.get("error"))[:160]}
+                if tenant:
+                    row["tenant"] = tenant
+                errors.append(row)
+                continue
+            for u in users:
+                hits += 1
+                slim = _slim({**u, "tenant": tenant} if tenant else u)
+                key = (slim.get("userPrincipalName") or "").lower() + "|" + str(tenant or "")
+                if key in seen:
+                    continue
+                seen.add(key)
+                slim["matched_query"] = name
+                matched.append(slim)
+        by_name.append({"name": name, "matched": hits})
+        if not hits:
+            not_found.append(name)
+    out: dict[str, Any] = {"count": len(matched), "users": matched,
+                           "by_name": by_name, "match": "names"}
+    if not_found:
+        out["not_found"] = not_found
+    if errors:
+        out["errors"] = errors
+    return out
+
+
+def _names_one_tenant(ctx, names: list[str]) -> dict:
+    from execution.clients.scopes import scoped_read
+    return _collect_names([(None, lambda p: scoped_read(ctx, "m365", "/users", p))], names)
+
+
+def _names_all_clients(ctx, names: list[str]) -> dict:
+    from execution.core import m365_auth
+    from execution.core.config import get_config
+    from execution.clients.scopes import is_allowed_read
+    cfg = get_config()
+    connected = m365_auth.list_connected(cfg)
+    if not connected:
+        return {"error": "no Microsoft 365 client is signed in yet — connect one on the M365 card"}
+    if ctx.client_factory is None:
+        return {"error": "no client factory available for a cross-client read"}
+    ok, reason = is_allowed_read("m365", "/users")
+    if not ok:
+        return {"error": reason}
+    getters = [(t, (lambda c: lambda p: c.get("/users", p))(ctx.client_factory("m365", t)))
+               for t in connected]
+    out = _collect_names(getters, names)
+    out["scope"] = "all_clients"
+    out["clients_searched"] = connected
+    return out
+
+
 def run(ctx, search: str = "", filter: str = "", name_contains: str = "",
-        top: int = 200, **_: Any):
+        names: Optional[list] = None, top: int = 200, **_: Any):
     from execution.clients.scopes import scoped_read
     is_star = (getattr(ctx, "tenant_id", "") or "") == "*"
+    if names:                                          # batch name→user lookup (D-110)
+        wanted = [str(n).strip() for n in (names if isinstance(names, list) else [names])
+                  if str(n).strip()][:_MAX_NAMES]
+        if wanted:
+            return _names_all_clients(ctx, wanted) if is_star else _names_one_tenant(ctx, wanted)
     needle = (name_contains or "").strip().lower()
     if needle:                                     # substring scan + client-side filter (D-93)
         return _contains_all_clients(ctx, needle) if is_star else _contains_one_tenant(ctx, needle)

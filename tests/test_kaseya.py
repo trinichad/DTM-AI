@@ -568,6 +568,20 @@ class KaseyaADTools(unittest.TestCase):
         self.assertFalse(r["ok"])
         self.assertIn("KASEYA_RUN_COMMAND_PROCEDURE", r["error"])
 
+    def test_get_user_batches_into_one_job(self):
+        # D-110: a list of users becomes ONE PowerShell job (one approval, one output) that
+        # iterates the array — not N separate submissions.
+        from execution.skills import kaseya_ad_get_user as gu
+        fake = FakeKaseya({"/automation/agentprocs": _CMD_PROCS})
+        r = gu.run(_ctx(fake), server="dc-01", users=["bob", "alice"])
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(len(fake.writes), 1)             # ONE job for the whole list
+        cmd = self._cmd(fake)
+        self.assertIn("@('bob', 'alice')", cmd)           # array of quoted identities
+        self.assertIn("ForEach-Object", cmd)
+        self.assertIn("Get-ADUser -Identity $u", cmd)     # iterates the captured item
+        self.assertEqual(r["looking_up"], ["bob", "alice"])
+
     def test_create_user_sets_full_profile(self):
         from execution.skills import kaseya_ad_create_user as cu
         fake = FakeKaseya({"/automation/agentprocs": _CMD_PROCS})

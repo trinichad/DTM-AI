@@ -568,3 +568,31 @@ removes nothing. The agent then asks the owner which to revoke and calls `exo_re
 own approval. Description updated; tests: lists-mailbox-access-without-revoking (full_access + send_as
 on one shared mailbox; own mailbox skipped; nothing written). Note: the N+1 sweep is slow on big
 tenants but the D-101 heartbeat shows progress, and offboarding favors completeness.
+
+## Amendment (2026-06-24, D-110) — per-user READ tools take a batch list (one request → one tool call)
+
+The owner watched the agent call `m365_list_users` five-plus times in a row to resolve a list of ~12
+names to email addresses. Root cause: `search` is a single Graph keyword, so given many names the model
+correctly fans out to one call per person — accurate, but slow and it *looks* broken. Fix follows the
+existing batch precedents (`name_contains` D-93/94 returns the whole match set in one call;
+`exo_bulk_set_gal_visibility` D-96 takes `identities[]`): the M365 per-user READ tools now accept a list
+and resolve it server-side in ONE call.
+
+- **`m365_list_users` `names[]`** — one Graph keyword search per name, consolidated. Each returned user is
+  tagged with the `matched_query` that found it; names with zero hits are listed under `not_found`; raw
+  per-name hit counts under `by_name`. Honors '*' (All clients): fans every name across every signed-in
+  tenant and tags each user's `tenant`. Capped at 200 names / 25 hits per name (`_MAX_NAMES`/`_NAME_TOP`).
+  Single-name `search` / substring `name_contains` / `filter` paths are unchanged.
+- **`m365_mfa_status` `users[]`** — checks a specific list; returns the same bucketed report
+  (enforced/enabled/disabled/unknown/errors) as the whole-client sweep, with `users_checked`. The sweep
+  and list paths now share `_buckets()`/`_summarize()`.
+- **`m365_list_auth_methods` `users[]`** and **`m365_user_groups` `users[]`** — body refactored into
+  `_one(...)`; the batch path returns `{ok, users_checked, results:[ <per-user dict> ]}`, each per-user
+  dict carrying its own `user` so a failure (bad UPN, 403) is attributable. `user` is no longer a required
+  schema field on either (a `users[]`-only call must validate).
+
+Lesson: the DESCRIPTION is what steers the model's tool choice — each of these now says, in the first
+sentence, to pass the list and "do NOT call this tool once per person." When a future single-identifier
+read tool starts getting called in a loop, add a list param + that sentence rather than expecting the
+model to batch on its own. Tests: names-batch (one-tenant + '*'), mfa list, auth-methods list, groups
+list.

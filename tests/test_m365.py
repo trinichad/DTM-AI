@@ -427,10 +427,120 @@ class ListUsersSkill(unittest.TestCase):
         self.assertEqual(r["total_in_tenant"], 240)
         self.assertIn("narrow with", r["note"])
 
+    def test_names_batch_resolves_each_in_one_call(self):
+        # D-110: a list of names is resolved to users in ONE tool call (one Graph search per
+        # name), instead of the agent calling m365_list_users once per person.
+        from execution.core.context import ToolContext
+        from execution.skills import m365_list_users
+        directory = {
+            "alvaro": {"id": "1", "displayName": "Alvaro Diaz",
+                       "userPrincipalName": "alvaro@x.com", "mail": "alvaro@x.com"},
+            "galarza": {"id": "2", "displayName": "Ana Maria Galarza",
+                        "userPrincipalName": "ana@x.com", "mail": "ana@x.com"}}
+
+        class FakeGraph:
+            def __init__(self): self.calls = []
+            def get(self, path, params=None):
+                self.calls.append(dict(params or {}))
+                srch = str((params or {}).get("$search", "")).lower()
+                return {"value": [u for k, u in directory.items() if k in srch]}
+        fake = FakeGraph()
+        ctx = ToolContext(tenant_id="acme", actor="t", client_factory=lambda i, t: fake)
+        r = m365_list_users.run(ctx, names=["Alvaro Diaz", "Ana Maria Galarza", "Ghost Person"])
+        self.assertEqual(r["match"], "names")
+        self.assertEqual(len(fake.calls), 3)                 # one search per name, ONE tool call
+        self.assertEqual(r["count"], 2)
+        self.assertEqual({u["userPrincipalName"] for u in r["users"]}, {"alvaro@x.com", "ana@x.com"})
+        self.assertEqual(r["not_found"], ["Ghost Person"])
+        self.assertTrue(all("matched_query" in u for u in r["users"]))
+
+    def test_names_batch_all_clients_tags_tenant(self):
+        # D-110: under 'All clients' (*) the batch fans each name across every signed-in tenant.
+        import tempfile
+        import unittest.mock as mock
+        from execution.core.context import ToolContext
+        from execution.core import m365_auth
+        from execution.skills import m365_list_users
+        cfg = StubCfg({}, tempfile.mkdtemp())
+        m365_auth.save_tokens(cfg, "acme", {"refresh_token": "r", "access_token": ""})
+        m365_auth.save_tokens(cfg, "globex", {"refresh_token": "r", "access_token": ""})
+
+        class FakeGraph:
+            def __init__(self, t): self.t = t
+            def get(self, path, params=None):
+                return {"value": [{"id": "1", "displayName": "Sam Smith",
+                                   "userPrincipalName": f"sam@{self.t}.com"}]}
+        ctx = ToolContext(tenant_id="*", actor="t",
+                          client_factory=lambda i, t: FakeGraph(t))
+        with mock.patch("execution.core.config.get_config", return_value=cfg):
+            r = m365_list_users.run(ctx, names=["Sam Smith"])
+        self.assertEqual(r["scope"], "all_clients")
+        self.assertEqual(r["count"], 2)
+        self.assertEqual({u["tenant"] for u in r["users"]}, {"acme", "globex"})
+
     def test_scope_allowlist(self):
         from execution.clients.scopes import is_allowed_read
         self.assertTrue(is_allowed_read("m365", "/users")[0])
         self.assertFalse(is_allowed_read("m365", "/applications")[0])
+
+    def test_mfa_status_checks_a_list_in_one_call(self):
+        # D-110: pass a list of users → one consolidated MFA report, no per-user round trips.
+        import unittest.mock as mock
+        from execution.core.context import ToolContext
+        from execution.skills import m365_mfa_status
+        states = {"a@x.com": "enforced", "b@x.com": "disabled"}    # c@x.com → unknown
+        ctx = ToolContext(tenant_id="acme", actor="t")
+        with mock.patch.object(m365_mfa_status, "_state",
+                               side_effect=lambda c, upn: states.get(upn, "unknown")):
+            r = m365_mfa_status.run(ctx, users=["a@x.com", "b@x.com", "c@x.com"])
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["users_checked"], 3)
+        self.assertEqual(r["mfa_enforced"], ["a@x.com"])
+        self.assertEqual(r["mfa_disabled"], ["b@x.com"])
+        self.assertEqual(r["unknown"], ["c@x.com"])
+        self.assertEqual(r["summary"], {"enforced": 1, "enabled": 0, "disabled": 1})
+
+    def test_auth_methods_batch_in_one_call(self):
+        # D-110: registered methods for a list of users, returned together.
+        from execution.core.context import ToolContext
+        from execution.skills import m365_list_auth_methods
+        methods = {
+            "a@x.com": [{"@odata.type": "#microsoft.graph.phoneAuthenticationMethod",
+                         "phoneType": "mobile", "phoneNumber": "+1555"}],
+            "b@x.com": [{"@odata.type": "#microsoft.graph.passwordAuthenticationMethod"}]}
+
+        class FakeGraph:
+            def get(self, path, params=None):
+                upn = path.split("/users/")[1].split("/")[0]
+                return {"value": methods.get(upn, [])}
+        ctx = ToolContext(tenant_id="acme", actor="t", client_factory=lambda i, t: FakeGraph())
+        r = m365_list_auth_methods.run(ctx, users=["a@x.com", "b@x.com"])
+        self.assertEqual(r["users_checked"], 2)
+        by = {x["user"]: x for x in r["results"]}
+        self.assertEqual(len(by["a@x.com"]["mfa_methods"]), 1)
+        self.assertEqual(by["b@x.com"]["mfa_methods"], [])     # password only = no MFA
+
+    def test_user_groups_batch_in_one_call(self):
+        # D-110: group memberships for a list of users, each tagged with its user.
+        from execution.core.context import ToolContext
+        from execution.skills import m365_user_groups
+        users = {"a@x.com": "ua", "b@x.com": "ub"}
+        groups = {"ua": [{"id": "g1", "displayName": "Sales", "securityEnabled": True}],
+                  "ub": []}
+
+        class FakeGraph:
+            def get(self, path, params=None):
+                if "/memberOf" in path or "/transitiveMemberOf" in path:
+                    uid = path.split("/users/")[1].split("/")[0]
+                    return {"value": groups.get(uid, [])}
+                upn = path.split("/users/")[1].split("/")[0]   # resolve_user_id
+                return {"id": users[upn], "userPrincipalName": upn}
+        ctx = ToolContext(tenant_id="acme", actor="t", client_factory=lambda i, t: FakeGraph())
+        r = m365_user_groups.run(ctx, users=["a@x.com", "b@x.com"])
+        self.assertEqual(r["users_checked"], 2)
+        by = {x["user"]: x for x in r["results"]}
+        self.assertEqual(by["a@x.com"]["count"], 1)
+        self.assertEqual(by["b@x.com"]["count"], 0)
 
 
 class ExchangeService(unittest.TestCase):
@@ -891,6 +1001,30 @@ class D55MailboxAdmin(unittest.TestCase):
         self.assertTrue(r["ok"], r)
         self.assertTrue(r["dir_synced"])
         self.assertFalse(r["cloud_managed"])
+
+    def test_mailbox_details_batches_in_one_call(self):
+        # D-110: a list of mailboxes is inspected in ONE call, each result tagged with its mailbox.
+        from execution.skills import exo_mailbox_details
+        mboxes = {
+            "a@x.com": {"PrimarySmtpAddress": "a@x.com", "DisplayName": "A",
+                        "RecipientTypeDetails": "UserMailbox"},
+            "b@x.com": {"PrimarySmtpAddress": "b@x.com", "DisplayName": "B",
+                        "RecipientTypeDetails": "SharedMailbox"}}
+
+        class FakeEXO:
+            def invoke(self, cmdlet, params=None):
+                ident = str((params or {}).get("Identity", "")).lower()
+                if cmdlet == "Get-Mailbox":
+                    mb = mboxes.get(ident)
+                    return [mb] if mb else {"error": "couldn't be found"}
+                if cmdlet == "Get-MailboxStatistics":
+                    return [{"TotalItemSize": "1 MB", "ItemCount": 1}]
+                return {"error": "unexpected"}
+        r = exo_mailbox_details.run(_exo_ctx(FakeEXO()), identities=["a@x.com", "b@x.com"])
+        self.assertEqual(r["mailboxes_checked"], 2)
+        by = {x["mailbox"]: x for x in r["results"]}
+        self.assertEqual(by["a@x.com"]["type"], "UserMailbox")
+        self.assertEqual(by["b@x.com"]["type"], "SharedMailbox")
 
     def test_enable_cloud_management_param_is_allowlisted(self):
         # The one new Set-Mailbox parameter must be permitted by the client allowlist.

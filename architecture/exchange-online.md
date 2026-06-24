@@ -444,3 +444,11 @@ checked, so BOTH its Full Access and Send-As were silently skipped. Rewrote the 
 m365_offboard_user now calls it with no limit (full sweep). Tests: reverse lookup (with the new direct
 call), and a direct-Send-As-catches-a-swept-miss case. Trade-off: the unbounded sweep is slower on big
 tenants, but the D-101 heartbeat shows progress and offboarding favors completeness over speed.
+
+## Amendment (2026-06-24, D-110) — exo_mailbox_details takes a batch list
+
+Same one-call-per-item fix as the M365 Graph reads: `exo_mailbox_details` now accepts `identities[]`
+alongside `identity`. The batch path returns `{ok, mailboxes_checked, results:[ <per-mailbox dict> ]}`,
+each row carrying its own `mailbox` so a miss/error is attributable. Body refactored into `_one(exo, ...)`
+sharing the single EXO client; `identity` dropped from `required` so a list-only call validates.
+DESCRIPTION leads with "do NOT call this tool once per mailbox." Test: details-batches-in-one-call.

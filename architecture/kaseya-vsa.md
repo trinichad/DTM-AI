@@ -354,3 +354,17 @@ builds an injection-safe (ps_quote'd) plink invocation; host key auto-cached by 
 CAVEAT: the SSH password is part of the command → visible on the approval card + Kaseya log
 (inherent to non-interactive SSH). Adopted devices use the controller-configured SSH creds, not
 ubnt/ubnt. Complements the first-class `unifi` controller connector (D-84).
+
+## Amendment (2026-06-24, D-110) — kaseya_ad_get_user batches into ONE PowerShell job
+
+Same one-call-per-item fix the owner asked for, adapted to an async, approval-gated submit tool:
+`kaseya_ad_get_user` now accepts `users[]` alongside `user`. Instead of N submissions (N approvals, N
+`kaseya_command_output` reads), the batch builds ONE PS command that iterates a quoted array —
+`Import-Module ActiveDirectory; @('u1','u2') | ForEach-Object { $u = $_; try { Get-ADUser -Identity $u
+-Properties ... | Select-Object ... | Format-List | Out-String } catch { 'ERROR for ' + $u + ': ' +
+$_.Exception.Message } }`. Note the `$u = $_` capture: inside a `catch` block `$_` is the error record,
+not the pipeline item, so the identity must be saved first. `looking_up` echoes the list. The Get-ADUser
++ Select pipeline is factored into `_pipeline(identity_expr)` shared by the single and batch paths (the
+single-user command is byte-identical to before). `user` dropped from `required` (server still required)
+so a `users[]`-only call validates. ps_quote still neutralizes injection per identity. Test:
+get-user-batches-into-one-job.
