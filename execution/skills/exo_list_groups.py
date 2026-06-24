@@ -6,7 +6,9 @@ from typing import Any
 NAME = "exo_list_groups"
 DESCRIPTION = ("List the client's EMAIL GROUPS: distribution lists, mail-enabled security "
                "groups, and Microsoft 365 groups — name, email address, and kind. Use before "
-               "exo_add_group_member to find the right group. Pass `identity` for one group.")
+               "exo_add_group_member to find the right group. Pass `identity` for one group, or "
+               "`identities` (a list) to look up MANY in ONE call — do NOT call this tool once "
+               "per group.")
 SOURCE = "m365"
 CATEGORY = "read"
 RISK_LEVEL = "low"
@@ -16,6 +18,10 @@ PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
         "identity": {"type": "string", "description": "one group by name/address (optional)"},
+        "identities": {"type": "array", "items": {"type": "string"},
+                       "description": "act on MANY in ONE call — a list of group names/addresses; "
+                                      "results come back together. Use this instead of calling "
+                                      "the tool once per group."},
         "limit": {"type": "integer", "description": "max per kind (default 100, max 500)"},
     },
     "additionalProperties": False,
@@ -37,10 +43,19 @@ def _fetch(exo, cmdlet: str, kind: str, identity: str, limit: int):
              "kind": kind} for g in rows], None
 
 
-def run(ctx, identity: str = "", limit: int = 100, **_: Any):
+def run(ctx, identity: str = "", identities: Any = None, limit: int = 100, **_: Any):
+    exo = ctx.client("exo")
+    wanted = [str(x).strip() for x in (identities or []) if str(x).strip()]
+    if wanted:                                          # batch (D-110) — one call, many groups
+        results = [{"identity": x, **_one(exo, x, limit)} for x in wanted[:500]]
+        return {"ok": True, "groups_done": len(results),
+                "ok_count": sum(1 for r in results if r.get("count")), "results": results}
+    return _one(exo, identity, limit)
+
+
+def _one(exo, identity: str, limit: int = 100) -> dict:
     limit = max(1, min(int(limit or 100), 500))
     identity = (identity or "").strip()
-    exo = ctx.client("exo")
     groups, errors = [], []
     for cmdlet, kind in (("Get-DistributionGroup", "distribution"),
                          ("Get-UnifiedGroup", "microsoft365")):

@@ -9,7 +9,8 @@ DESCRIPTION = ("Add (or update) a user's PHONE as an MFA authentication method �
                "gets texts/calls on for sign-in verification. US numbers can be given any "
                "common way (5551234567, 555-123-4567); other countries must include the "
                "country code like '+44 ...'. phone_type mobile (default), alternateMobile, or "
-               "office. Verifies before reporting success.")
+               "office. Pass `users` (a list) to set the SAME phone on MANY people in ONE call — "
+               "do NOT call this tool once per user. Verifies before reporting success.")
 SOURCE = "m365"
 CATEGORY = "write"
 RISK_LEVEL = "high"            # an attacker-controlled auth phone = account takeover; reviewed
@@ -20,13 +21,17 @@ PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
         "user": {"type": "string", "description": "the user's sign-in address (UPN)"},
+        "users": {"type": "array", "items": {"type": "string"},
+                  "description": "act on MANY users in ONE call — a list of sign-in addresses "
+                                 "(UPNs); results come back together. Use this instead of "
+                                 "calling the tool once per user."},
         "phone": {"type": "string", "description": "the phone number, e.g. '555-123-4567' "
                                                    "(US assumed) or '+1 5551234567'"},
         "phone_type": {"type": "string", "enum": list(_TYPES),
                        "description": "which slot (default mobile — the one used for MFA "
                                       "texts/calls)"},
     },
-    "required": ["user", "phone"],
+    "required": ["phone"],
     "additionalProperties": False,
 }
 
@@ -56,20 +61,31 @@ def normalize_phone(raw: str) -> tuple[str, str]:
                 f"with a space, e.g. '+44 7911123456'")
 
 
-def run(ctx, user: str, phone: str, phone_type: str = "mobile", **_: Any):
+def run(ctx, user: str = "", users: Any = None, phone: str = "",
+        phone_type: str = "mobile", **_: Any):
+    wanted = [str(u).strip() for u in (users or []) if str(u).strip()]
+    if wanted:
+        results = [_one(ctx, u, phone, phone_type) for u in wanted[:500]]
+        return {"ok": any(r.get("ok") for r in results), "users_done": len(results),
+                "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
+    return _one(ctx, user, phone, phone_type)
+
+
+def _one(ctx, user: str, phone: str, phone_type: str = "mobile") -> dict:
     from ..clients._http import HttpError
     from ..clients.scopes import scoped_read, scoped_write
     from . import _graph_common as g
     user = (user or "").strip()
     if "@" not in user:
-        return {"ok": False, "error": f"'{user}' is not a sign-in address"}
+        return {"ok": False, "user": user, "error": f"'{user}' is not a sign-in address"}
     ptype = next((t for t in _TYPES if t.lower() == (phone_type or "").strip().lower()),
                  None)
     if not ptype:
-        return {"ok": False, "error": f"phone_type must be one of: {', '.join(_TYPES)}"}
+        return {"ok": False, "user": user,
+                "error": f"phone_type must be one of: {', '.join(_TYPES)}"}
     number, e = normalize_phone(phone)
     if e:
-        return {"ok": False, "error": e}
+        return {"ok": False, "user": user, "error": e}
 
     base = f"/users/{user}/authentication/phoneMethods"
     scope = "UserAuthenticationMethod.ReadWrite.All"
@@ -77,7 +93,7 @@ def run(ctx, user: str, phone: str, phone_type: str = "mobile", **_: Any):
         cur = scoped_read(ctx, "m365", base)
         bad = g.fail(cur)
         if bad:
-            return bad
+            return {**bad, "user": user}
         existing = next((m for m in g.rows(cur)
                          if str(m.get("phoneType")) == ptype), None)
         if existing and str(existing.get("phoneNumber")) == number:
@@ -93,7 +109,7 @@ def run(ctx, user: str, phone: str, phone_type: str = "mobile", **_: Any):
                              method="POST")
         bad = g.fail(r)
         if bad:
-            return bad
+            return {**bad, "user": user}
 
         # Auth-method reads are eventually-consistent — poll until the new number shows (D-104).
         def _now(c):
@@ -102,11 +118,11 @@ def run(ctx, user: str, phone: str, phone_type: str = "mobile", **_: Any):
             lambda: scoped_read(ctx, "m365", base),
             lambda c: str((_now(c) or {}).get("phoneNumber")) == number)
     except HttpError as exc:
-        return g.err403(exc, "setting the phone method", scope)
+        return {**g.err403(exc, "setting the phone method", scope), "user": user}
 
     now = _now(check)
     if not (now and str(now.get("phoneNumber")) == number):
-        return {"ok": False, "step": "verify", "pending": True,
+        return {"ok": False, "user": user, "step": "verify", "pending": True,
                 "error": "the call returned but the new phone number isn't showing yet — usually "
                          "propagation lag; re-check in Entra shortly"}
     return {"ok": True, "user": user, "phone": number, "phone_type": ptype,

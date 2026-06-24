@@ -11,7 +11,8 @@ DESCRIPTION = ("List every EMAIL group a user is a member of — distribution li
                "authoritative source for distribution lists (Graph / m365_user_groups can miss "
                "classic DLs). Use it before offboarding to see which mail groups to remove a "
                "terminated user from. Direct memberships only. Pair with exo_remove_group_member "
-               "to remove.")
+               "to remove. Pass `users` (a list) to check MANY in ONE call — do NOT call this "
+               "tool once per user.")
 SOURCE = "m365"
 CATEGORY = "read"
 RISK_LEVEL = "low"
@@ -21,8 +22,12 @@ PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
         "user": {"type": "string", "description": "the user's sign-in address"},
+        "users": {"type": "array", "items": {"type": "string"},
+                  "description": "act on MANY in ONE call — a list of mailbox addresses; results "
+                                 "come back together. Use this instead of calling the tool once "
+                                 "per mailbox."},
     },
-    "required": ["user"],
+    "required": [],
     "additionalProperties": False,
 }
 
@@ -73,12 +78,21 @@ def memberships(ctx, user: str) -> dict[str, Any]:
     return {"ok": True, "groups": groups}
 
 
-def run(ctx, user: str, **_: Any):
+def run(ctx, user: str = "", users: Any = None, **_: Any):
+    wanted = [str(x).strip() for x in (users or []) if str(x).strip()]
+    if wanted:                                          # batch (D-110) — one call, many users
+        results = [_one(ctx, x) for x in wanted[:500]]
+        return {"ok": any(r.get("ok") for r in results), "users_checked": len(results),
+                "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
+    return _one(ctx, user)
+
+
+def _one(ctx, user: str) -> dict:
     res = memberships(ctx, user)
     if not res.get("ok"):
-        return res
+        return {**res, "user": user}
     groups = res["groups"]
-    out: dict[str, Any] = {"ok": True, "user": user.strip(),
+    out: dict[str, Any] = {"ok": True, "user": (user or "").strip(),
                            "count": len(groups), "groups": groups}
     dyn = [g["name"] for g in groups if not g["removable"]]
     if dyn:

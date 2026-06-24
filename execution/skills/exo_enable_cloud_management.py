@@ -17,7 +17,8 @@ DESCRIPTION = ("Let Exchange Online manage a synced user's MAILBOX settings (add
                "visibility, aliases, primary email) for an AD-synced Microsoft 365 user. On-prem "
                "Active Directory still controls their sign-in, password, and groups — this only "
                "moves mailbox settings to the cloud so the mailbox tools can edit them. Verifies "
-               "the change before reporting success.")
+               "the change before reporting success. Pass `identities` (a list) to act on MANY "
+               "mailboxes in ONE call — do NOT call this tool once per mailbox.")
 SOURCE = "m365"
 CATEGORY = "write"
 RISK_LEVEL = "medium"           # foundational mailbox-authority change, but reversible + no data loss
@@ -28,8 +29,12 @@ PARAMETERS: dict[str, Any] = {
     "properties": {
         "identity": {"type": "string",
                      "description": "the user's mailbox / primary email address"},
+        "identities": {"type": "array", "items": {"type": "string"},
+                       "description": "act on MANY in ONE call — a list of mailbox addresses; "
+                                      "results come back together. Use this instead of calling "
+                                      "the tool once per mailbox."},
     },
-    "required": ["identity"],
+    "required": [],
     "additionalProperties": False,
 }
 
@@ -45,21 +50,32 @@ def _truthy(v: Any) -> bool:
     return str(v).strip().lower() in ("true", "1", "yes")
 
 
-def run(ctx, identity: str, **_: Any):
-    from . import _exo_common as c
+def run(ctx, identity: str = "", identities: Any = None, **_: Any):
     exo = ctx.client("exo")
+    wanted = [str(x).strip() for x in (identities or []) if str(x).strip()]
+    if wanted:                                          # batch (D-110) — one call, many mailboxes
+        results = [_one(exo, x) for x in wanted[:500]]
+        return {"ok": any(r.get("ok") for r in results), "cloud_management_done": len(results),
+                "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
+    return _one(exo, identity)
+
+
+def _one(exo, identity: str) -> dict:
+    from . import _exo_common as c
     mb, bad = c.get_one_mailbox(exo, identity)
     if bad:
-        return bad
+        return {**bad, "identity": identity}
     dirsynced = _truthy(mb.get("IsDirSynced"))
     if _truthy(mb.get("IsExchangeCloudManaged")):
-        return {"ok": True, "mailbox": mb.get("PrimarySmtpAddress") or identity,
+        return {"ok": True, "identity": identity,
+                "mailbox": mb.get("PrimarySmtpAddress") or identity,
                 "IsDirSynced": mb.get("IsDirSynced"), "IsExchangeCloudManaged": True,
                 "note": "already cloud-managed — nothing to do; the cloud mailbox tools "
                         "(GAL visibility, aliases, primary SMTP) already apply"}
     r = c.set_and_verify(exo, identity, {"IsExchangeCloudManaged": True},
                          {"IsExchangeCloudManaged": True},
                          label="enable Exchange cloud management")
+    r.setdefault("identity", identity)
     if r.get("ok"):
         r["IsDirSynced"] = mb.get("IsDirSynced")
         r["note"] = ("Exchange Online now manages this mailbox's settings (address-book "

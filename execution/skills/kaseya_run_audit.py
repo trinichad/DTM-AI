@@ -4,10 +4,12 @@ from __future__ import annotations
 from typing import Any
 
 NAME = "kaseya_run_audit"
-DESCRIPTION = ("Trigger a Kaseya AUDIT to run now on one machine so its inventory is refreshed. "
+DESCRIPTION = ("Trigger a Kaseya AUDIT to run now on a machine so its inventory is refreshed. "
                "type: 'latest' (default — quick inventory refresh), 'baseline' (full baseline), "
-               "or 'sysinfo' (DMI/SMBIOS hardware). Low risk: collects data, changes nothing on "
-               "the box. Useful before reading software/hardware so the data is current.")
+               "or 'sysinfo' (DMI/SMBIOS hardware). Pass `machine` for one box, or `machines` (a "
+               "list) to do MANY in ONE call — do NOT call this tool once per machine. Low risk: "
+               "collects data, changes nothing on the box. Useful before reading software/"
+               "hardware so the data is current.")
 SOURCE = "kaseya"
 CATEGORY = "write"
 RISK_LEVEL = "low"
@@ -18,27 +20,40 @@ PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
         "machine": {"type": "string", "description": "machine/agent name or AgentId"},
+        "machines": {"type": "array", "items": {"type": "string"},
+                     "description": "act on MANY machines in ONE call — a list of machine/agent "
+                                    "names or AgentIds; results come back together. Use this "
+                                    "instead of calling the tool once per machine."},
         "type": {"type": "string", "enum": list(_TYPES),
                  "description": "audit type (default latest)"},
     },
-    "required": ["machine"],
     "additionalProperties": False,
 }
 
 
-def run(ctx, machine: str, type: str = "latest", **_: Any):
+def run(ctx, machine: str = "", machines: Any = None, type: str = "latest", **_: Any):
+    wanted = [str(m).strip() for m in (machines or []) if str(m).strip()]
+    if wanted:                                         # batch (D-110) — one call, many machines
+        results = [_one(ctx, m, type) for m in wanted[:200]]
+        return {"ok": any(r.get("ok") for r in results), "machines_done": len(results),
+                "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
+    return _one(ctx, machine, type)
+
+
+def _one(ctx, machine: str, type: str = "latest") -> dict:
     from . import _kaseya_common as k
     client = ctx.client("kaseya")
     atype = (type or "latest").strip().lower()
     if atype not in _TYPES:
-        return {"ok": False, "error": f"type must be one of: {', '.join(_TYPES)}"}
+        return {"ok": False, "machine": machine,
+                "error": f"type must be one of: {', '.join(_TYPES)}"}
     agent, err = k.resolve_agent(client, machine)
     if err:
-        return {"ok": False, "error": err}
+        return {"ok": False, "machine": machine, "error": err}
     aid = agent.get("AgentId")
     r = client.write("PUT", f"/assetmgmt/audit/{atype}/{aid}/runnow")
     if isinstance(r, dict) and r.get("error"):
-        return {"ok": False, "error": r["error"]}
+        return {"ok": False, "machine": machine, "error": r["error"]}
     return {"ok": True, "machine": agent.get("AgentName") or agent.get("ComputerName"),
             "agent_id": aid, "audit_type": atype,
             "note": "audit submitted — results land after the agent checks in and runs it"}

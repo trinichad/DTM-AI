@@ -6,8 +6,9 @@ from typing import Any
 
 NAME = "exo_mailbox_permissions"
 DESCRIPTION = ("Show WHO has access to a mailbox: Full Access users, Send As users, and Send "
-               "on Behalf delegates. Pass a mailbox address for one, or leave it empty to "
-               "report on ALL SHARED mailboxes (capped by limit). System entries are "
+               "on Behalf delegates. Pass a mailbox address for one, `identities` (a list) to "
+               "check MANY in ONE call (do NOT call this tool once per mailbox), or leave both "
+               "empty to report on ALL SHARED mailboxes (capped by limit). System entries are "
                "filtered out.")
 SOURCE = "m365"
 CATEGORY = "read"
@@ -20,6 +21,10 @@ PARAMETERS: dict[str, Any] = {
         "identity": {"type": "string",
                      "description": "one mailbox's address (optional — empty = every shared "
                                     "mailbox)"},
+        "identities": {"type": "array", "items": {"type": "string"},
+                       "description": "act on MANY in ONE call — a list of mailbox addresses; "
+                                      "results come back together. Use this instead of calling "
+                                      "the tool once per mailbox."},
         "limit": {"type": "integer",
                   "description": "max shared mailboxes for the sweep (default 50, max 200)"},
     },
@@ -58,14 +63,25 @@ def summarize(exo, mb: dict) -> dict[str, Any]:
     return out
 
 
-def run(ctx, identity: str = "", limit: int = 50, **_: Any):
+def _one(exo, identity: str) -> dict:
+    from . import _exo_common as c
+    mb, bad = c.get_one_mailbox(exo, (identity or "").strip())
+    if bad:
+        return {**bad, "identity": identity}
+    return {"ok": True, "identity": identity, **summarize(exo, mb)}
+
+
+def run(ctx, identity: str = "", identities: Any = None, limit: int = 50, **_: Any):
     from . import _exo_common as c
     exo = ctx.client("exo")
+    wanted = [str(x).strip() for x in (identities or []) if str(x).strip()]
+    if wanted:                                          # batch (D-110) — one call, many mailboxes
+        results = [_one(exo, x) for x in wanted[:500]]
+        return {"ok": any(r.get("ok") for r in results),
+                "mailboxes_checked": len(results),
+                "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
     if (identity or "").strip():
-        mb, bad = c.get_one_mailbox(exo, identity.strip())
-        if bad:
-            return bad
-        return {"ok": True, **summarize(exo, mb)}
+        return _one(exo, identity)
 
     limit = max(1, min(int(limit or 50), 200))
     r = exo.invoke("Get-Mailbox", {"RecipientTypeDetails": "SharedMailbox",

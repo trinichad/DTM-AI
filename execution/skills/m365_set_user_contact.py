@@ -9,7 +9,9 @@ DESCRIPTION = ("Set a user's CONTACT / profile fields: job title, department, of
                "mobile phone, street address, city, state/province, zip/postal code. Pass only the "
                "ones you want to change. In a HYBRID (directory-synced) tenant these attributes are "
                "mastered in on-prem Active Directory, so it refuses with guidance to set them in AD "
-               "instead. Verifies the change before reporting success.")
+               "instead. Pass `users` (a list) to set the SAME fields on MANY people in ONE "
+               "call — do NOT call this tool once per user. Verifies the change before "
+               "reporting success.")
 SOURCE = "m365"
 CATEGORY = "write"
 RISK_LEVEL = "low"
@@ -31,6 +33,10 @@ PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
         "user": {"type": "string", "description": "the user's sign-in address (UPN)"},
+        "users": {"type": "array", "items": {"type": "string"},
+                  "description": "act on MANY users in ONE call — a list of sign-in addresses "
+                                 "(UPNs); results come back together. Use this instead of "
+                                 "calling the tool once per user."},
         "job_title": {"type": "string", "description": "job title"},
         "department": {"type": "string", "description": "department"},
         "office": {"type": "string", "description": "office location"},
@@ -50,13 +56,23 @@ def _norm(v: Any) -> str:
     return str(v if v is not None else "").strip()
 
 
-def run(ctx, user: str, office_phone: Optional[str] = None, **fields: Any):
+def run(ctx, user: str = "", users: Any = None, office_phone: Optional[str] = None,
+        **fields: Any):
+    wanted = [str(u).strip() for u in (users or []) if str(u).strip()]
+    if wanted:
+        results = [_one(ctx, u, office_phone, **fields) for u in wanted[:500]]
+        return {"ok": any(r.get("ok") for r in results), "users_done": len(results),
+                "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
+    return _one(ctx, user, office_phone, **fields)
+
+
+def _one(ctx, user: str, office_phone: Optional[str] = None, **fields: Any) -> dict:
     from ..clients._http import HttpError
     from ..clients.scopes import scoped_read, scoped_write
     from . import _graph_common as g
     user = (user or "").strip()
     if "@" not in user:
-        return {"ok": False, "error": f"'{user}' is not a sign-in address"}
+        return {"ok": False, "user": user, "error": f"'{user}' is not a sign-in address"}
 
     # build the PATCH body from whatever fields were actually supplied
     body: dict[str, Any] = {}
@@ -67,17 +83,19 @@ def run(ctx, user: str, office_phone: Optional[str] = None, **fields: Any):
     if _norm(office_phone):
         body["businessPhones"] = [_norm(office_phone)]
     if not body:
-        return {"ok": False, "error": "no contact fields provided — pass at least one to set"}
+        return {"ok": False, "user": user,
+                "error": "no contact fields provided — pass at least one to set"}
 
     try:
         u0 = scoped_read(ctx, "m365", f"/users/{user}",
                          {"$select": "id,onPremisesSyncEnabled"})
         bad = g.fail(u0)
         if bad:
-            return bad
+            return {**bad, "user": user}
         uid = str((u0 or {}).get("id") or "")
         if not uid:
-            return {"ok": False, "error": f"no user '{user}' found in this client"}
+            return {"ok": False, "user": user,
+                    "error": f"no user '{user}' found in this client"}
         if u0.get("onPremisesSyncEnabled") is True:
             return {"ok": False, "on_prem_synced": True, "user": user,
                     "error": (f"{user} is directory-synced (hybrid) — contact attributes are "
@@ -86,7 +104,7 @@ def run(ctx, user: str, office_phone: Optional[str] = None, **fields: Any):
         r = scoped_write(ctx, "m365", f"/users/{uid}", body=body, method="PATCH")
         bad = g.fail(r)
         if bad:
-            return bad
+            return {**bad, "user": user}
         # re-read (eventually-consistent) and confirm every field landed (D-104)
         want = {k: (v[0] if isinstance(v, list) else v) for k, v in body.items()}
         sel = "id," + ",".join(body)
@@ -96,7 +114,7 @@ def run(ctx, user: str, office_phone: Optional[str] = None, **fields: Any):
                 (str((c.get(k) or [""])[0]) if k == "businessPhones" else str(c.get(k) or ""))
                 == str(w) for k, w in want.items()))
     except HttpError as exc:
-        return g.err403(exc, "updating the contact info", "User.ReadWrite.All")
+        return {**g.err403(exc, "updating the contact info", "User.ReadWrite.All"), "user": user}
     if not ok:
         return {"ok": False, "step": "verify", "pending": True, "user": user,
                 "error": "the update returned but the new values aren't showing yet — usually "

@@ -10,8 +10,9 @@ DESCRIPTION = ("Assign a Microsoft 365 LICENSE to a user, optionally UNCHECKING 
                "to leave UNchecked (names from m365_list_licenses with license=...; empty list "
                "= all apps on). If the user ALREADY has the license, pass disabled_apps to "
                "change which apps are checked. Refuses if no seats are available. Sets the "
-               "user's usage location automatically when missing. Verifies before reporting "
-               "success.")
+               "user's usage location automatically when missing. Pass `users` (a list) to "
+               "assign the SAME license to MANY people in ONE call — do NOT call this tool once "
+               "per user. Verifies before reporting success.")
 SOURCE = "m365"
 CATEGORY = "write"
 RISK_LEVEL = "high"
@@ -21,6 +22,10 @@ PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
         "user": {"type": "string", "description": "the user's sign-in address (UPN)"},
+        "users": {"type": "array", "items": {"type": "string"},
+                  "description": "act on MANY users in ONE call — a list of sign-in addresses "
+                                 "(UPNs); results come back together. Use this instead of "
+                                 "calling the tool once per user."},
         "license": {"type": "string",
                     "description": "SKU part number from m365_list_licenses "
                                    "(e.g. O365_BUSINESS_PREMIUM) or a SKU GUID"},
@@ -33,7 +38,7 @@ PARAMETERS: dict[str, Any] = {
                            "description": "2-letter country code set on the user if they have "
                                           "none (default US — required by Microsoft to license)"},
     },
-    "required": ["user", "license"],
+    "required": ["license"],
     "additionalProperties": False,
 }
 
@@ -76,41 +81,53 @@ def _names_for(sku: dict, plan_ids: set) -> list[str]:
                   if isinstance(p, dict) and str(p.get("servicePlanId")) in plan_ids)
 
 
-def run(ctx, user: str, license: str, disabled_apps: Optional[list] = None,
-        usage_location: str = "US", **_: Any):
+def run(ctx, user: str = "", users: Any = None, license: str = "",
+        disabled_apps: Optional[list] = None, usage_location: str = "US", **_: Any):
+    wanted = [str(u).strip() for u in (users or []) if str(u).strip()]
+    if wanted:
+        results = [_one(ctx, u, license, disabled_apps, usage_location) for u in wanted[:500]]
+        return {"ok": any(r.get("ok") for r in results), "users_done": len(results),
+                "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
+    return _one(ctx, user, license, disabled_apps, usage_location)
+
+
+def _one(ctx, user: str, license: str, disabled_apps: Optional[list] = None,
+         usage_location: str = "US") -> dict:
     from ..clients._http import HttpError
     from ..clients.scopes import scoped_read, scoped_write
     from .m365_list_licenses import find_sku
     user = (user or "").strip()
     want = (license or "").strip()
     if "@" not in user:
-        return {"ok": False, "error": f"'{user}' is not a sign-in address"}
+        return {"ok": False, "user": user, "error": f"'{user}' is not a sign-in address"}
 
     try:
         skus = scoped_read(ctx, "m365", "/subscribedSkus")
     except HttpError as e:
-        return _graph_err(e, "listing licenses")
+        return {**_graph_err(e, "listing licenses"), "user": user}
     rows = (skus.get("value") if isinstance(skus, dict) else skus) or []
     sku = find_sku(rows, want)
     if not sku:
         names = [str(s.get("skuPartNumber")) for s in rows if isinstance(s, dict)]
-        return {"ok": False, "error": f"this client has no license '{want}' — they own: "
-                                      f"{', '.join(names) or '(none)'}"}
+        return {"ok": False, "user": user,
+                "error": f"this client has no license '{want}' — they own: "
+                         f"{', '.join(names) or '(none)'}"}
     sku_id = str(sku.get("skuId"))
 
     disable_ids: Optional[list[str]] = None
     if disabled_apps is not None:
         disable_ids, bad = _resolve_apps(sku, list(disabled_apps))
         if bad:
-            return bad
+            return {**bad, "user": user}
 
     try:
         u = scoped_read(ctx, "m365", f"/users/{user}",
                         {"$select": "id,usageLocation,assignedLicenses"})
         if isinstance(u, dict) and u.get("error"):
-            return {"ok": False, "error": str(u["error"])}
+            return {"ok": False, "user": user, "error": str(u["error"])}
         if not (isinstance(u, dict) and u.get("id")):
-            return {"ok": False, "error": f"no user '{user}' found in this client"}
+            return {"ok": False, "user": user,
+                    "error": f"no user '{user}' found in this client"}
         held = next((l for l in (u.get("assignedLicenses") or [])
                      if isinstance(l, dict) and str(l.get("skuId")) == sku_id), None)
         if held and disable_ids is None:
@@ -129,9 +146,10 @@ def run(ctx, user: str, license: str, disabled_apps: Optional[list] = None,
             total = int((sku.get("prepaidUnits") or {}).get("enabled") or 0)
             available = total - int(sku.get("consumedUnits") or 0)
             if available <= 0:
-                return {"ok": False, "error": f"{sku.get('skuPartNumber')} has no seats "
-                                              f"available ({total} owned, all in use) — buy "
-                                              f"more or free one first"}
+                return {"ok": False, "user": user,
+                        "error": f"{sku.get('skuPartNumber')} has no seats "
+                                 f"available ({total} owned, all in use) — buy "
+                                 f"more or free one first"}
         location_set = None
         if not (u.get("usageLocation") or "").strip():
             loc = (usage_location or "US").strip().upper()[:2]
@@ -144,7 +162,7 @@ def run(ctx, user: str, license: str, disabled_apps: Optional[list] = None,
                                                 "disabledPlans": send_disabled}],
                                "removeLicenses": []}, method="POST")
         if isinstance(r, dict) and r.get("error"):
-            return {"ok": False, "step": "assign", "error": str(r["error"])}
+            return {"ok": False, "user": user, "step": "assign", "error": str(r["error"])}
         # assignedLicenses lags the POST by a few seconds — poll before failing (D-104).
         from . import _graph_common as g
 
@@ -155,17 +173,17 @@ def run(ctx, user: str, license: str, disabled_apps: Optional[list] = None,
             lambda: scoped_read(ctx, "m365", f"/users/{user}", {"$select": "assignedLicenses"}),
             lambda c: _after(c) is not None)
     except HttpError as e:
-        return _graph_err(e, "assigning the license")
+        return {**_graph_err(e, "assigning the license"), "user": user}
 
     after = _after(check)
     if not after:
-        return {"ok": False, "step": "verify", "pending": True,
+        return {"ok": False, "user": user, "step": "verify", "pending": True,
                 "error": "the assign call returned but the license isn't on the user yet — usually "
                          "propagation lag; re-check with m365_list_user_license_assignments shortly "
                          "rather than re-running"}
     got_disabled = sorted(str(p) for p in (after.get("disabledPlans") or []))
     if got_disabled != sorted(send_disabled):
-        return {"ok": False, "step": "verify",
+        return {"ok": False, "user": user, "step": "verify",
                 "error": "the license is assigned but the app choices did not match what was "
                          "requested — check the M365 admin center",
                 "requested_unchecked": _names_for(sku, set(send_disabled)),

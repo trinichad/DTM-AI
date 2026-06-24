@@ -4,10 +4,11 @@ from __future__ import annotations
 from typing import Any
 
 NAME = "kaseya_security_posture"
-DESCRIPTION = ("Show ONE machine's security posture from Kaseya: detected antivirus / firewall "
-               "SECURITY PRODUCTS, and the LOCAL ADMINISTRATOR accounts on the box. Pass the "
-               "machine name or AgentId. Use for 'what AV is on X', 'who are the local admins "
-               "on X'. (For the cloud EDR view use Cylance/Huntress tools.)")
+DESCRIPTION = ("Show a machine's security posture from Kaseya: detected antivirus / firewall "
+               "SECURITY PRODUCTS, and the LOCAL ADMINISTRATOR accounts on the box. Pass "
+               "`machine` for one box, or `machines` (a list) to do MANY in ONE call — do NOT "
+               "call this tool once per machine. Use for 'what AV is on X', 'who are the local "
+               "admins on X'. (For the cloud EDR view use Cylance/Huntress tools.)")
 SOURCE = "kaseya"
 CATEGORY = "read"
 RISK_LEVEL = "low"
@@ -16,8 +17,11 @@ PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
         "machine": {"type": "string", "description": "machine/agent name or AgentId"},
+        "machines": {"type": "array", "items": {"type": "string"},
+                     "description": "act on MANY machines in ONE call — a list of machine/agent "
+                                    "names or AgentIds; results come back together. Use this "
+                                    "instead of calling the tool once per machine."},
     },
-    "required": ["machine"],
     "additionalProperties": False,
 }
 
@@ -27,12 +31,21 @@ _USER = ("UserName", "Name", "FullName", "Disabled", "IsDisabled", "Description"
 _MEMBER = ("MemberName", "UserName", "Name", "GroupName", "Domain")
 
 
-def run(ctx, machine: str, **_: Any):
+def run(ctx, machine: str = "", machines: Any = None, **_: Any):
+    wanted = [str(m).strip() for m in (machines or []) if str(m).strip()]
+    if wanted:                                         # batch (D-110) — one call, many machines
+        results = [_one(ctx, m) for m in wanted[:200]]
+        return {"ok": any(r.get("ok") for r in results), "machines_done": len(results),
+                "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
+    return _one(ctx, machine)
+
+
+def _one(ctx, machine: str) -> dict:
     from . import _kaseya_common as k
     client = ctx.client("kaseya")
     agent, err = k.resolve_agent(client, machine)
     if err:
-        return {"ok": False, "error": err}
+        return {"ok": False, "machine": machine, "error": err}
     aid = agent.get("AgentId")
     out: dict[str, Any] = {"ok": True,
                            "machine": agent.get("AgentName") or agent.get("ComputerName"),
@@ -60,7 +73,7 @@ def run(ctx, machine: str, **_: Any):
 
     if errors and not out.get("security_products") and not out.get("local_administrators") \
             and not out.get("local_accounts"):
-        return {"ok": False, "error": "; ".join(errors)}
+        return {"ok": False, "machine": machine, "error": "; ".join(errors)}
     if errors:
         out["partial_errors"] = errors
     return out

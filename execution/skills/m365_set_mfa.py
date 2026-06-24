@@ -7,7 +7,9 @@ NAME = "m365_set_mfa"
 DESCRIPTION = ("Set a user's PER-USER multifactor authentication state (the classic per-user "
                "MFA portal): 'enforced' = MFA required now, 'enabled' = required after the "
                "user registers (auto-promotes to enforced), 'disabled' = off. Check first "
-               "with m365_mfa_status. Verifies the state before reporting success.")
+               "with m365_mfa_status. Pass `users` (a list) to set MANY people in ONE call — "
+               "do NOT call this tool once per user. Verifies the state before reporting "
+               "success.")
 SOURCE = "m365"
 CATEGORY = "write"
 RISK_LEVEL = "high"
@@ -18,24 +20,38 @@ PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
         "user": {"type": "string", "description": "the user's sign-in address (UPN)"},
+        "users": {"type": "array", "items": {"type": "string"},
+                  "description": "act on MANY users in ONE call — a list of sign-in addresses "
+                                 "(UPNs); results come back together. Use this instead of "
+                                 "calling the tool once per user."},
         "state": {"type": "string", "enum": list(_STATES),
                   "description": "the per-user MFA state to set (usually 'enforced')"},
     },
-    "required": ["user", "state"],
+    "required": ["state"],
     "additionalProperties": False,
 }
 
 
-def run(ctx, user: str, state: str, **_: Any):
+def run(ctx, user: str = "", users: Any = None, state: str = "", **_: Any):
+    wanted = [str(u).strip() for u in (users or []) if str(u).strip()]
+    if wanted:
+        results = [_one(ctx, u, state) for u in wanted[:500]]
+        return {"ok": any(r.get("ok") for r in results), "users_done": len(results),
+                "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
+    return _one(ctx, user, state)
+
+
+def _one(ctx, user: str, state: str) -> dict:
     from ..clients._http import HttpError
     from ..clients.scopes import scoped_read, scoped_write
     from . import _graph_common as g
     user = (user or "").strip()
     if "@" not in user:
-        return {"ok": False, "error": f"'{user}' is not a sign-in address"}
+        return {"ok": False, "user": user, "error": f"'{user}' is not a sign-in address"}
     want = (state or "").strip().lower()
     if want not in _STATES:
-        return {"ok": False, "error": f"state must be one of: {', '.join(_STATES)}"}
+        return {"ok": False, "user": user,
+                "error": f"state must be one of: {', '.join(_STATES)}"}
 
     # /beta: Microsoft ships perUserMfaState only on the Graph beta endpoint (D-60) — v1.0
     # answers "Resource not found for the segment 'requirements'". Drop the prefix when it GAs.
@@ -44,7 +60,7 @@ def run(ctx, user: str, state: str, **_: Any):
         cur = scoped_read(ctx, "m365", path)
         bad = g.fail(cur)
         if bad:
-            return bad
+            return {**bad, "user": user}
         before = str((cur or {}).get("perUserMfaState") or "unknown")
         if before == want:
             return {"ok": True, "user": user, "mfa_state": want,
@@ -52,16 +68,17 @@ def run(ctx, user: str, state: str, **_: Any):
         r = scoped_write(ctx, "m365", path, body={"perUserMfaState": want}, method="PATCH")
         bad = g.fail(r)
         if bad:
-            return bad
+            return {**bad, "user": user}
         # per-user MFA state is eventually-consistent — poll until it flips before failing (D-104).
         _ok, check = g.settle(lambda: scoped_read(ctx, "m365", path),
                               lambda c: str((c or {}).get("perUserMfaState") or "") == want)
     except HttpError as exc:
-        return g.err403(exc, "setting per-user MFA", "Policy.ReadWrite.AuthenticationMethod")
+        return {**g.err403(exc, "setting per-user MFA",
+                           "Policy.ReadWrite.AuthenticationMethod"), "user": user}
 
     now = str((check or {}).get("perUserMfaState") or "")
     if now != want:
-        return {"ok": False, "step": "verify", "pending": True, "was": before,
+        return {"ok": False, "user": user, "step": "verify", "pending": True, "was": before,
                 "now": now or "unknown",
                 "error": "the call returned but the MFA state hasn't flipped yet — usually "
                          "propagation lag; re-check in the Entra admin center shortly"}

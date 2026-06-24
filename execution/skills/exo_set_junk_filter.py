@@ -5,11 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 NAME = "exo_set_junk_filter"
-DESCRIPTION = ("Enable or DISABLE the JUNK EMAIL filter on a mailbox — or on EVERY user "
-               "mailbox at once (leave `identity` empty). MSPs using an external spam filter "
-               "(e.g. Proofpoint) typically disable it so mail isn't filtered twice. Single "
-               "mailbox is fully verified; bulk mode reports applied/failed per mailbox and "
-               "verifies a sample.")
+DESCRIPTION = ("Enable or DISABLE the JUNK EMAIL filter on a mailbox — on a specific LIST of "
+               "mailboxes via `identities` (act on MANY in ONE call — do NOT call this tool once "
+               "per mailbox), or on EVERY user mailbox at once (leave both empty). MSPs using an "
+               "external spam filter (e.g. Proofpoint) typically disable it so mail isn't "
+               "filtered twice. Single/list mailboxes are fully verified; whole-tenant mode "
+               "reports applied/failed per mailbox and verifies a sample.")
 SOURCE = "m365"
 CATEGORY = "write"
 RISK_LEVEL = "medium"
@@ -22,8 +23,12 @@ PARAMETERS: dict[str, Any] = {
         "identity": {"type": "string",
                      "description": "one mailbox (optional — empty applies to ALL user "
                                     "mailboxes)"},
+        "identities": {"type": "array", "items": {"type": "string"},
+                       "description": "act on MANY in ONE call — a list of mailbox addresses; "
+                                      "results come back together. Use this instead of calling "
+                                      "the tool once per mailbox."},
         "limit": {"type": "integer",
-                  "description": "bulk mode: max mailboxes (default 500, max 1000)"},
+                  "description": "whole-tenant mode: max mailboxes (default 500, max 1000)"},
     },
     "required": ["enabled"],
     "additionalProperties": False,
@@ -41,26 +46,41 @@ def _status(c, exo, addr: str):
     return bool(_rows(jc)[0].get("Enabled"))
 
 
-def run(ctx, enabled: bool, identity: str = "", limit: int = 500, **_: Any):
+def _one(exo, identity: str, enabled: bool) -> dict:    # one mailbox, fully verified
+    from . import _exo_common as c
+    want = bool(enabled)
+    addr = (identity or "").strip()
+    if not addr:
+        return {"ok": False, "identity": identity, "error": "no mailbox identity given"}
+    if _status(c, exo, addr) is want:
+        return {"ok": True, "identity": addr, "mailbox": addr,
+                "note": f"junk filter is already {'on' if want else 'off'} — nothing to do"}
+    r = exo.invoke("Set-MailboxJunkEmailConfiguration",
+                   {"Identity": addr, "Enabled": want, "Confirm": False})
+    if c.err(r):
+        return {"ok": False, "identity": addr, "step": "set", "error": c.err(r)}
+    if _status(c, exo, addr) is not want:
+        return {"ok": False, "identity": addr, "step": "verify",
+                "error": "the change didn't stick — known Exchange quirk: mailboxes the "
+                         "user has never signed in to can refuse junk configuration"}
+    return {"ok": True, "identity": addr, "mailbox": addr,
+            "junk_filter": "enabled" if want else "disabled"}
+
+
+def run(ctx, enabled: bool, identity: str = "", identities: Any = None,
+        limit: int = 500, **_: Any):
     from . import _exo_common as c
     exo = ctx.client("exo")
     want = bool(enabled)
 
+    wanted = [str(x).strip() for x in (identities or []) if str(x).strip()]
+    if wanted:                                          # batch (D-110) — one call, many mailboxes
+        results = [_one(exo, x, enabled) for x in wanted[:500]]
+        return {"ok": any(r.get("ok") for r in results), "junk_done": len(results),
+                "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
+
     if (identity or "").strip():                       # ── one mailbox, fully verified ──
-        addr = identity.strip()
-        if _status(c, exo, addr) is want:
-            return {"ok": True, "mailbox": addr,
-                    "note": f"junk filter is already {'on' if want else 'off'} — nothing to do"}
-        r = exo.invoke("Set-MailboxJunkEmailConfiguration",
-                       {"Identity": addr, "Enabled": want, "Confirm": False})
-        if c.err(r):
-            return {"ok": False, "step": "set", "error": c.err(r)}
-        if _status(c, exo, addr) is not want:
-            return {"ok": False, "step": "verify",
-                    "error": "the change didn't stick — known Exchange quirk: mailboxes the "
-                             "user has never signed in to can refuse junk configuration"}
-        return {"ok": True, "mailbox": addr,
-                "junk_filter": "enabled" if want else "disabled"}
+        return _one(exo, identity, enabled)
 
     # ── bulk: every user mailbox ──
     limit = max(1, min(int(limit or 500), 1000))

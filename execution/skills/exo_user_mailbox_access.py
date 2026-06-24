@@ -9,7 +9,8 @@ DESCRIPTION = ("Show every MAILBOX a user has access to — Full Access, Send As
                "Sweeps ALL the client's mailboxes (Full Access has no reverse query, so each is "
                "checked) and ALSO runs a direct Send-As reverse lookup so nothing is missed. The "
                "reverse of exo_mailbox_permissions. Pass `limit` only to cap the sweep on a very "
-               "large tenant (default = all).")
+               "large tenant (default = all). Pass `users` (a list) to check MANY in ONE call — "
+               "do NOT call this tool once per user.")
 SOURCE = "m365"
 CATEGORY = "read"
 RISK_LEVEL = "low"
@@ -19,11 +20,15 @@ PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
         "user": {"type": "string", "description": "the user's sign-in address"},
+        "users": {"type": "array", "items": {"type": "string"},
+                  "description": "act on MANY in ONE call — a list of mailbox addresses; results "
+                                 "come back together. Use this instead of calling the tool once "
+                                 "per mailbox."},
         "limit": {"type": "integer",
                   "description": "cap the Full-Access mailbox sweep (default 0 = all mailboxes; "
                                  "set a number only to bound a very large tenant)"},
     },
-    "required": ["user"],
+    "required": [],
     "additionalProperties": False,
 }
 
@@ -37,13 +42,22 @@ def _has_fullaccess(rows: list[dict]) -> bool:
                for row in rows)
 
 
-def run(ctx, user: str, limit: int = 0, **_: Any):
+def run(ctx, user: str = "", limit: int = 0, users: Any = None, **_: Any):
+    exo = ctx.client("exo")
+    wanted = [str(x).strip() for x in (users or []) if str(x).strip()]
+    if wanted:                                          # batch (D-110) — one call, many users
+        results = [_one(exo, x, limit) for x in wanted[:500]]
+        return {"ok": any(r.get("ok") for r in results), "users_checked": len(results),
+                "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
+    return _one(exo, user, limit)
+
+
+def _one(exo, user: str, limit: int = 0) -> dict:
     from . import _exo_common as c
     user = (user or "").strip()
     if "@" not in user:
-        return {"ok": False, "error": f"'{user}' is not a sign-in address"}
+        return {"ok": False, "user": user, "error": f"'{user}' is not a sign-in address"}
     local = user.split("@")[0].lower()
-    exo = ctx.client("exo")
     found: dict[str, dict] = {}          # smtp.lower() -> {mailbox, display_name, type, access[]}
 
     def _add(addr: str, right: str, display=None, mtype=None):
@@ -68,7 +82,7 @@ def run(ctx, user: str, limit: int = 0, **_: Any):
     rs: Any = "Unlimited" if not limit else max(1, min(int(limit), 5000))
     r = exo.invoke("Get-Mailbox", {"ResultSize": rs})
     if c.err(r):
-        return {"ok": False, "error": c.err(r)}
+        return {"ok": False, "user": user, "error": c.err(r)}
     boxes = _rows(r)
     swept: set[str] = set()
     for mb in boxes:

@@ -5,8 +5,9 @@ from typing import Any
 
 NAME = "kaseya_asset_custom_fields"
 DESCRIPTION = ("Show the CUSTOM FIELDS your team tracks on a machine/asset in Kaseya (e.g. "
-               "warranty, location, owner — whatever custom fields are configured). Pass the "
-               "machine name or AgentId.")
+               "warranty, location, owner — whatever custom fields are configured). Pass "
+               "`machine` for one box, or `machines` (a list) to do MANY in ONE call — do NOT "
+               "call this tool once per machine.")
 SOURCE = "kaseya"
 CATEGORY = "read"
 RISK_LEVEL = "low"
@@ -15,22 +16,34 @@ PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
         "machine": {"type": "string", "description": "machine/agent name or AgentId"},
+        "machines": {"type": "array", "items": {"type": "string"},
+                     "description": "act on MANY machines in ONE call — a list of machine/agent "
+                                    "names or AgentIds; results come back together. Use this "
+                                    "instead of calling the tool once per machine."},
     },
-    "required": ["machine"],
     "additionalProperties": False,
 }
 
 
-def run(ctx, machine: str, **_: Any):
+def run(ctx, machine: str = "", machines: Any = None, **_: Any):
+    wanted = [str(m).strip() for m in (machines or []) if str(m).strip()]
+    if wanted:                                         # batch (D-110) — one call, many machines
+        results = [_one(ctx, m) for m in wanted[:200]]
+        return {"ok": any(r.get("ok") for r in results), "machines_done": len(results),
+                "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
+    return _one(ctx, machine)
+
+
+def _one(ctx, machine: str) -> dict:
     from . import _kaseya_common as k
     client = ctx.client("kaseya")
     agent, err = k.resolve_agent(client, machine)
     if err:
-        return {"ok": False, "error": err}
+        return {"ok": False, "machine": machine, "error": err}
     aid = agent.get("AgentId")
     data, e = k.result(client, f"/assetmgmt/assets/{aid}/customfields")
     if e:
-        return {"ok": False, "error": e}
+        return {"ok": False, "machine": machine, "error": e}
     fields = {}
     for r in k.rows(data):
         name = r.get("FieldName") or r.get("Name") or r.get("Title")

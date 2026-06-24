@@ -9,11 +9,12 @@ from __future__ import annotations
 from typing import Any
 
 NAME = "kaseya_remote_session_history"
-DESCRIPTION = ("Show the REMOTE-CONTROL session history for one machine — who connected to it "
+DESCRIPTION = ("Show the REMOTE-CONTROL session history for a machine — who connected to it "
                "remotely via Kaseya (Live Connect / Remote Control) and WHEN, with each session's "
                "start time, last-active time, the administrator, and IPs when recorded. Most recent "
                "first. Use for 'who connected remotely to X', 'when was X last accessed remotely', "
-               "'last remote session on X'. Pass the machine name or AgentId.")
+               "'last remote session on X'. Pass `machine` for one box, or `machines` (a list) to "
+               "do MANY in ONE call — do NOT call this tool once per machine.")
 SOURCE = "kaseya"
 CATEGORY = "read"
 RISK_LEVEL = "low"
@@ -22,12 +23,15 @@ PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
         "machine": {"type": "string", "description": "machine/agent name or AgentId"},
+        "machines": {"type": "array", "items": {"type": "string"},
+                     "description": "act on MANY machines in ONE call — a list of machine/agent "
+                                    "names or AgentIds; results come back together. Use this "
+                                    "instead of calling the tool once per machine."},
         "limit": {"type": "integer", "description": "max sessions to return (default 50, max 500)"},
         "include_legacy": {"type": "boolean",
                            "description": "also include the legacy remote-control log (default "
                                           "false) — older/other RC tooling"},
     },
-    "required": ["machine"],
     "additionalProperties": False,
 }
 
@@ -40,7 +44,17 @@ def _start(row: dict) -> str:
     return str(row.get("StartTime") or "")
 
 
-def run(ctx, machine: str, limit: int = 50, include_legacy: bool = False, **_: Any):
+def run(ctx, machine: str = "", machines: Any = None, limit: int = 50,
+        include_legacy: bool = False, **_: Any):
+    wanted = [str(m).strip() for m in (machines or []) if str(m).strip()]
+    if wanted:                                         # batch (D-110) — one call, many machines
+        results = [_one(ctx, m, limit, include_legacy) for m in wanted[:200]]
+        return {"ok": any(r.get("ok") for r in results), "machines_done": len(results),
+                "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
+    return _one(ctx, machine, limit, include_legacy)
+
+
+def _one(ctx, machine: str, limit: int = 50, include_legacy: bool = False) -> dict:
     from . import _kaseya_common as k
     client = ctx.client("kaseya")
     try:
@@ -49,7 +63,7 @@ def run(ctx, machine: str, limit: int = 50, include_legacy: bool = False, **_: A
         limit = 50
     agent, err = k.resolve_agent(client, machine)
     if err:
-        return {"ok": False, "error": err}
+        return {"ok": False, "machine": machine, "error": err}
     aid = agent.get("AgentId")
 
     rows: list[dict] = []
@@ -67,7 +81,7 @@ def run(ctx, machine: str, limit: int = 50, include_legacy: bool = False, **_: A
 
     # all requested logs errored → a real failure, not just an empty history
     if errors and not rows and len(errors) == len(sources):
-        return {"ok": False, "error": "; ".join(errors)}
+        return {"ok": False, "machine": machine, "error": "; ".join(errors)}
 
     rows.sort(key=_start, reverse=True)
     sessions = [k.slim(r, _FIELDS) for r in rows[:limit]]
