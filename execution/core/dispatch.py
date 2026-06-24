@@ -61,6 +61,54 @@ def _envelope(
 # the tool's job (it should _slim its payload).
 MAX_RESULT_CHARS = 20_000
 
+# bulk (D-111) bounds a single fan-out. Far beyond any real MSP request; a runaway backstop.
+BULK_MAX_ITEMS = 200
+
+
+def _run_bulk(*, registry, audit, ctx, gate, approvals, valid, deny):
+    """Execute the `bulk` meta-tool: run `valid['tool']` once per `valid['items']` entry, each via
+    a fresh dispatch() so every per-item guardrail still fires. Returns ONE aggregated envelope.
+
+    Approval handling reuses the existing flow verbatim: an item that auto-approves (trusted write
+    or a live D-59 batch grant) runs inline; an item that needs human sign-off makes dispatch()
+    return a pending_approval envelope — bulk surfaces THAT one card and stops, so approvals stay
+    one-at-a-time (no orphan pile-up, D-47). Re-invoke bulk after the owner decides to continue;
+    already-applied items re-run harmlessly because the underlying tools verify/self-heal."""
+    inner = str(valid.get("tool") or "").strip()
+    items = valid.get("items") or []
+    if inner == "bulk":
+        return deny("bulk cannot run 'bulk' (no nesting)")
+    info = registry.get(inner)
+    if info is None:
+        return deny(f"bulk: unknown tool '{inner}'")
+    if len(items) > BULK_MAX_ITEMS:
+        return deny(f"bulk: {len(items)} items exceeds the {BULK_MAX_ITEMS}-item cap — split it up")
+    src = info.source
+    results: list[dict[str, Any]] = []
+    for i, item in enumerate(items):
+        if not isinstance(item, dict):
+            results.append({"index": i, "ok": False,
+                            "error": "each item must be an object of arguments"})
+            continue
+        env = dispatch(registry=registry, audit=audit, ctx=ctx, name=inner, args=item,
+                       gate=gate, approvals=approvals)
+        if env.get("status") == "pending_approval":
+            # one card at a time — surface this approval and pause; bulk is re-invoked to continue.
+            env = dict(env)
+            env["bulk"] = {"tool": inner, "total": len(items), "completed": i,
+                           "remaining": len(items) - i, "paused_index": i, "results": results}
+            return env
+        results.append({"index": i, "ok": bool(env.get("ok")),
+                        **({"data": env.get("data")} if env.get("ok")
+                           else {"error": env.get("error")})})
+    ok_n = sum(1 for r in results if r.get("ok"))
+    audit.record(actor=ctx.actor, tenant_id=ctx.tenant_id, action="tool_call", tool="bulk",
+                 category="read", args={"tool": inner, "items": len(items)}, result_ok=True,
+                 detail=f"bulk {inner} x{len(items)} ({ok_n} ok, {len(results) - ok_n} failed)")
+    return _envelope(True, src, ctx.tenant_id,
+                     data={"tool": inner, "count": len(results), "ok_count": ok_n,
+                           "error_count": len(results) - ok_n, "results": results})
+
 
 def dispatch(
     *,
@@ -98,6 +146,13 @@ def dispatch(
         valid = validate_args(tool.parameters, args)
     except SchemaError as e:
         return deny(f"invalid arguments: {e}", category=tool.category)
+
+    # 3b. bulk meta-tool (D-111): one tool call, many runs. Each item RE-ENTERS dispatch() so it
+    # gets the full gate (validation, kill switch, category + approval, tenant isolation, audit) —
+    # bulk grants no authority, it only collapses the N-round loop into one call.
+    if name == "bulk":
+        return _run_bulk(registry=registry, audit=audit, ctx=ctx, gate=gate,
+                         approvals=approvals, valid=valid, deny=deny)
 
     # 4. CATEGORY enforcement — write/destructive gated by capability + approval workflow
     batch_note: Optional[str] = None

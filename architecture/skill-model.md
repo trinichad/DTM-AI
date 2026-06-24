@@ -106,3 +106,36 @@ Hermes persists/curates its own learned skills (its memory + skills system). MSP
   about to assert completeness (Behavioral Rule #2); give it a filter and tell it when it's seeing a
   partial view. Regression: `tests/test_agent.py::ToolPayload`,
   `tests/test_skills_integration.py::test_kaseya_list_agents_and_filter`.
+
+## Amendment (2026-06-24, D-111) — the `bulk` meta-tool: one call, many runs
+
+**Problem.** The agent fanned out the SAME tool once per item (52× `exo_grant_folder_access`, N×
+`m365_list_users`), which burns the per-turn tool-call budget — it literally hit "reached the tool-call
+limit without a final answer" — and reads as broken even when each call succeeds. Native list params
+(D-110) fix the hottest tools one at a time, but the owner wanted EVERY bulk-able tool covered.
+
+**Solution — a universal meta-tool handled in `dispatch()`.** `bulk(tool="<name>", items=[{…},{…}])`
+runs `<name>` once per item in a SINGLE tool call. It is registered like any skill
+(`skills/bulk.py`, source `msp_ai`, CATEGORY `read`) but `dispatch()` intercepts it (step 3b) and, for
+each item, RE-ENTERS `dispatch()` for the inner tool. Therefore bulk grants **no new authority** — every
+per-item run passes the full stack again: schema validation, the I-4 kill switch, CATEGORY + approval
+gating, tenant isolation, and a per-item audit record. The meta-tool being `read` is not a hole: it never
+executes anything itself; the inner tool's real category is gated on each recursion. Aggregated result:
+`{tool, count, ok_count, error_count, results:[{index, ok, data|error}]}`. Bounded at 200 items
+(`BULK_MAX_ITEMS`); nesting (`tool="bulk"`) and unknown inner tools are refused.
+
+**Approval (reuses D-59 verbatim, honors the Rule #1 floor).** An item that auto-approves (trusted
+write, or a live D-59 batch grant) runs inline — so a fleet of autonomous writes collapses to one call.
+An item that needs human sign-off makes the inner `dispatch()` return `pending_approval`; bulk surfaces
+THAT one card and stops (no orphan pile-up — D-47), carrying progress in a `bulk` block. Re-invoke bulk
+after the owner decides to continue; already-applied items re-run harmlessly because the underlying tools
+verify/self-heal and treat "already in that state" as success. Destructive tools still require their
+per-action approval (they can never be batch-granted) — so a destructive bulk is one tool call but one
+approval per deletion, by design.
+
+**Steering.** The base system prompt now forbids repeating a tool for a list and directs the model to a
+native list param first, else `bulk`. The `bulk` DESCRIPTION says the same. Native params remain the
+preferred surface where they exist (cleaner schema + shared preflights); bulk is the universal fallback
+that makes EVERY tool — including ones added later — batchable. Tests: tests/test_dispatch.py
+(read fan-out, per-item validation, per-item write-gate enforcement, trusted-write batch, approval-pause,
+nesting/unknown refusal, item cap).

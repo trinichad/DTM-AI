@@ -22,6 +22,34 @@ class AllowGate:
         return token == "good"
 
 
+class AutoApproveGate:
+    """Trusted-write gate: write flag on, every write auto-approves (require_approval=False)."""
+    def write_allowed_for_tenant(self, tenant_id, tool):
+        return True
+    def needs_approval(self, tenant_id, tool):
+        return False
+    def consume(self, token, tenant_id, tool, args):
+        return True
+
+
+class PendingGate:
+    """Write needs human approval and never auto-runs (production ConfigurableApprovalGate shape)."""
+    def write_allowed_for_tenant(self, tenant_id, tool):
+        return True
+    def needs_approval(self, tenant_id, tool):
+        return True
+    def consume(self, token, tenant_id, tool, args):
+        return False
+
+
+class FakeApprovals:
+    def __init__(self):
+        self.created = []
+    def create(self, **kw):
+        self.created.append(kw)
+        return 100 + len(self.created)
+
+
 class DispatchGuardrails(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -116,6 +144,61 @@ class DispatchGuardrails(unittest.TestCase):
         # args are stored hashed, never raw
         for r in rows:
             self.assertNotIn("hi", str(r.get("args_hash") or ""))
+
+    # ── bulk meta-tool (D-111) ────────────────────────────────────────────────────────────────
+    def test_bulk_read_fans_out_in_one_call(self):
+        env = self._dispatch("bulk", {"tool": "fx_read",
+                                      "items": [{"x": "a"}, {"x": "b"}, {"x": "c"}]})
+        self.assertTrue(env["ok"])
+        self.assertEqual(env["data"]["count"], 3)
+        self.assertEqual(env["data"]["ok_count"], 3)
+        self.assertEqual([r["data"]["echo"] for r in env["data"]["results"]], ["a", "b", "c"])
+
+    def test_bulk_validates_each_item_independently(self):
+        # a bad item (missing required arg) fails just that item; the rest still run
+        env = self._dispatch("bulk", {"tool": "fx_read",
+                                      "items": [{"x": "ok"}, {"nope": 1}]})
+        self.assertTrue(env["ok"])
+        self.assertEqual(env["data"]["ok_count"], 1)
+        self.assertEqual(env["data"]["error_count"], 1)
+        self.assertFalse(env["data"]["results"][1]["ok"])
+
+    def test_bulk_enforces_write_gate_per_item(self):
+        # bulk grants NO authority: a write with no flag is blocked for every item, none execute
+        env = self._dispatch("bulk", {"tool": "fx_write", "items": [{}, {}]},
+                             gate=DenyAllApprovals())
+        self.assertTrue(env["ok"])                      # the bulk call itself completes
+        self.assertEqual(env["data"]["ok_count"], 0)    # but every write item was blocked
+        self.assertFalse(fx_write.EXECUTED["value"], "no write may run without the flag")
+
+    def test_bulk_runs_trusted_writes_in_one_call(self):
+        env = self._dispatch("bulk", {"tool": "fx_write", "items": [{}, {}, {}]},
+                             gate=AutoApproveGate())
+        self.assertTrue(env["ok"])
+        self.assertEqual(env["data"]["ok_count"], 3)
+        self.assertTrue(fx_write.EXECUTED["value"])
+
+    def test_bulk_pauses_on_first_approval_needed(self):
+        # an item needing human sign-off surfaces ONE approval card and stops (no orphan pile-up)
+        approvals = FakeApprovals()
+        env = self._dispatch("bulk", {"tool": "fx_write", "items": [{}, {}, {}]},
+                             gate=PendingGate(), approvals=approvals)
+        self.assertEqual(env.get("status"), "pending_approval")
+        self.assertEqual(len(approvals.created), 1)     # exactly one card, not three
+        self.assertEqual(env["bulk"]["remaining"], 3)
+        self.assertEqual(env["bulk"]["paused_index"], 0)
+
+    def test_bulk_rejects_nesting_and_unknown_inner(self):
+        self.assertIn("no nesting",
+                      self._dispatch("bulk", {"tool": "bulk", "items": []})["error"])
+        self.assertIn("unknown tool",
+                      self._dispatch("bulk", {"tool": "ghost", "items": [{}]})["error"])
+
+    def test_bulk_item_cap(self):
+        env = self._dispatch("bulk", {"tool": "fx_read",
+                                      "items": [{"x": str(i)} for i in range(201)]})
+        self.assertFalse(env["ok"])
+        self.assertIn("exceeds", env["error"])
 
 
 if __name__ == "__main__":
