@@ -90,7 +90,8 @@ def run(ctx, mailbox: str, user: str = "", folder: str = "", access: str = "",
 
     recipients = [u for u in (str(x).strip() for x in (users or [])) if u]
     if recipients:                                        # batch grant (D-110) — ONE call, ONE approval
-        results = [_grant(exo, mailbox, fid, fname, right, access, u) for u in recipients]
+        results = ctx.map_progress(                        # live "12/52 · user@…" heartbeat (D-112)
+            recipients, lambda u: _grant(exo, mailbox, fid, fname, right, access, u))
         summary = {"granted": 0, "unchanged": 0, "error": 0}
         for r in results:
             summary["error" if not r.get("ok") else

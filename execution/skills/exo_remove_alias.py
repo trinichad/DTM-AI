@@ -38,7 +38,7 @@ def run(ctx, identity: str, alias: str = "", aliases: Any = None, **_: Any):
     exo = ctx.client("exo")
     wanted = [a for a in (str(x).strip() for x in (aliases or [])) if a]
     if wanted:                                         # batch remove (D-110) — ONE call, ONE approval
-        results = [_one(ctx, exo, identity, a) for a in wanted[:500]]
+        results = ctx.map_progress(wanted[:500], lambda a: _one(ctx, exo, identity, a))
         return {"ok": any(r.get("ok") for r in results), "mailbox": (identity or "").strip(),
                 "aliases_done": len(results),
                 "ok_count": sum(1 for r in results if r.get("ok")), "results": results}

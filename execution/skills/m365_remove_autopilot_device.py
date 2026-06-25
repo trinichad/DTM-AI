@@ -33,7 +33,7 @@ _BASE = "/deviceManagement/windowsAutopilotDeviceIdentities"
 def run(ctx, serial: str = "", serials: Any = None, **_: Any):
     wanted = [str(x).strip() for x in (serials or []) if str(x).strip()]
     if wanted:                                         # batch remove (D-110) — one call, many devices
-        results = [_one(ctx, x) for x in wanted[:500]]
+        results = ctx.map_progress(wanted[:500], lambda x: _one(ctx, x))
         return {"ok": any(r.get("ok") for r in results), "removals_done": len(results),
                 "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
     return _one(ctx, serial)

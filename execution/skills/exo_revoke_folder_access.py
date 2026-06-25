@@ -47,7 +47,7 @@ def run(ctx, mailbox: str, user: str = "", folder: str = "", users: Any = None, 
 
     wanted = [u for u in (str(x).strip() for x in (users or [])) if u]
     if wanted:                                         # batch revoke (D-110) — ONE call, ONE approval
-        results = [_one(exo, mailbox, fid, fname, u) for u in wanted[:500]]
+        results = ctx.map_progress(wanted[:500], lambda u: _one(exo, mailbox, fid, fname, u))
         return {"ok": any(r.get("ok") for r in results), "mailbox": mailbox,
                 "folder": fname.lower(), "users_done": len(results),
                 "ok_count": sum(1 for r in results if r.get("ok")), "results": results}

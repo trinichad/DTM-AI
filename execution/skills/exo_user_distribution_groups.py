@@ -81,7 +81,7 @@ def memberships(ctx, user: str) -> dict[str, Any]:
 def run(ctx, user: str = "", users: Any = None, **_: Any):
     wanted = [str(x).strip() for x in (users or []) if str(x).strip()]
     if wanted:                                          # batch (D-110) — one call, many users
-        results = [_one(ctx, x) for x in wanted[:500]]
+        results = ctx.map_progress(wanted[:500], lambda x: _one(ctx, x))
         return {"ok": any(r.get("ok") for r in results), "users_checked": len(results),
                 "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
     return _one(ctx, user)

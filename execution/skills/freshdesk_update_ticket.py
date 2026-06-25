@@ -41,8 +41,9 @@ def run(ctx, ticket_id: Any = None, ticket_ids: Any = None, status: str = "", pr
         type: str = "", group_id: Any = None, agent_id: Any = None, tags: Any = None, **_: Any):
     wanted = [int(x) for x in (ticket_ids or [])]
     if wanted:                                         # batch (D-110) — one call, many tickets
-        results = [_one(ctx, t, status, priority, type, group_id, agent_id, tags)
-                   for t in wanted[:500]]
+        results = ctx.map_progress(
+            wanted[:500],
+            lambda t: _one(ctx, t, status, priority, type, group_id, agent_id, tags))
         return {"ok": any(r.get("ok") for r in results), "tickets_done": len(results),
                 "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
     return _one(ctx, ticket_id, status, priority, type, group_id, agent_id, tags)

@@ -53,7 +53,7 @@ def _one(ctx, device_id: str, policy_id: str) -> dict:
 def run(ctx, device_id: str = "", policy_id: str = "", device_ids: Any = None, **_: Any):
     wanted = [str(d).strip() for d in (device_ids or []) if str(d).strip()]
     if wanted:                                         # batch — one policy, many devices
-        results = [_one(ctx, d, policy_id) for d in wanted[:200]]
+        results = ctx.map_progress(wanted[:200], lambda d: _one(ctx, d, policy_id))
         return {"ok": any(r.get("ok") for r in results), "devices_done": len(results),
                 "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
     return _one(ctx, device_id, policy_id)

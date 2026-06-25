@@ -33,7 +33,7 @@ _FIELDS = ("id", "survey_id", "ticket_id", "agent_id", "group_id", "ratings", "f
 def run(ctx, ticket_id: Any = None, ticket_ids: Any = None, **_: Any):
     wanted = [int(x) for x in (ticket_ids or [])]
     if wanted:                                         # batch (D-110) — one call, many tickets
-        results = [_one(ctx, t) for t in wanted[:500]]
+        results = ctx.map_progress(wanted[:500], lambda t: _one(ctx, t))
         return {"ok": any(r.get("ok") for r in results), "tickets_done": len(results),
                 "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
     return _one_raw(ctx, ticket_id)

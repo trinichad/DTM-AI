@@ -85,7 +85,8 @@ def run(ctx, user: str = "", users: Any = None, license: str = "",
         disabled_apps: Optional[list] = None, usage_location: str = "US", **_: Any):
     wanted = [str(u).strip() for u in (users or []) if str(u).strip()]
     if wanted:
-        results = [_one(ctx, u, license, disabled_apps, usage_location) for u in wanted[:500]]
+        results = ctx.map_progress(
+            wanted[:500], lambda u: _one(ctx, u, license, disabled_apps, usage_location))
         return {"ok": any(r.get("ok") for r in results), "users_done": len(results),
                 "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
     return _one(ctx, user, license, disabled_apps, usage_location)

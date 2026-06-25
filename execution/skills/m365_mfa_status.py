@@ -64,7 +64,8 @@ def _summarize(buckets: dict, **extra: Any) -> dict:
 def _check_list(ctx, upns: list[str]) -> dict:
     """Check a SPECIFIC list of users in one call (D-110) — collapses N per-user tool rounds."""
     buckets = _buckets()
-    for upn in upns:
+    for i, upn in enumerate(upns):
+        ctx.progress(i, len(upns), upn)
         s = _state(ctx, upn)
         if s.startswith("error:"):
             buckets["errors"].append({"user": upn, "error": s[7:]})
@@ -103,7 +104,8 @@ def run(ctx, user: str = "", users: Any = None, limit: int = 100, **_: Any):
         users = [str(u.get("userPrincipalName")) for u in g.rows(data)
                  if u.get("userPrincipalName")]
         buckets = _buckets()
-        for upn in users:
+        for i, upn in enumerate(users):
+            ctx.progress(i, len(users), upn)
             s = _state(ctx, upn)
             if s.startswith("error:"):
                 buckets["errors"].append({"user": upn, "error": s[7:]})

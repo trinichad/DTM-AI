@@ -55,7 +55,7 @@ def run(ctx, identity: str = "", max_send: str = "", max_receive: str = "",
     exo = ctx.client("exo")
     wanted = [str(x).strip() for x in (identities or []) if str(x).strip()]
     if wanted:                                          # batch (D-110) — one call, many mailboxes
-        results = [_one(exo, x, max_send, max_receive) for x in wanted[:500]]
+        results = ctx.map_progress(wanted[:500], lambda x: _one(exo, x, max_send, max_receive))
         return {"ok": any(r.get("ok") for r in results), "quota_done": len(results),
                 "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
     return _one(exo, identity, max_send, max_receive)

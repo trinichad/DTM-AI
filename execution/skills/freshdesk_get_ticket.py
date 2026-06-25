@@ -34,7 +34,7 @@ PARAMETERS: dict[str, Any] = {
 def run(ctx, ticket_id: Any = None, ticket_ids: Any = None, include: str = "", **_: Any):
     wanted = [int(x) for x in (ticket_ids or [])]
     if wanted:                                         # batch (D-110) — one call, many tickets
-        results = [_one(ctx, t, include) for t in wanted[:500]]
+        results = ctx.map_progress(wanted[:500], lambda t: _one(ctx, t, include))
         return {"ok": any(r.get("ok") for r in results), "tickets_done": len(results),
                 "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
     return _one(ctx, ticket_id, include)

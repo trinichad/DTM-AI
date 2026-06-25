@@ -29,7 +29,7 @@ PARAMETERS: dict[str, Any] = {
 def run(ctx, incident_id: str = "", incident_ids: Any = None, **_: Any):
     wanted = [str(x).strip() for x in (incident_ids or []) if str(x).strip()]
     if wanted:                                         # batch (D-110) — one call, many incidents
-        results = [_one(ctx, x) for x in wanted[:500]]
+        results = ctx.map_progress(wanted[:500], lambda x: _one(ctx, x))
         return {"ok": any(r.get("ok") for r in results), "incidents_done": len(results),
                 "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
     return _one(ctx, incident_id)

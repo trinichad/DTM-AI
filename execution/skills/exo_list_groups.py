@@ -47,7 +47,7 @@ def run(ctx, identity: str = "", identities: Any = None, limit: int = 100, **_: 
     exo = ctx.client("exo")
     wanted = [str(x).strip() for x in (identities or []) if str(x).strip()]
     if wanted:                                          # batch (D-110) — one call, many groups
-        results = [{"identity": x, **_one(exo, x, limit)} for x in wanted[:500]]
+        results = ctx.map_progress(wanted[:500], lambda x: {"identity": x, **_one(exo, x, limit)})
         return {"ok": True, "groups_done": len(results),
                 "ok_count": sum(1 for r in results if r.get("count")), "results": results}
     return _one(exo, identity, limit)

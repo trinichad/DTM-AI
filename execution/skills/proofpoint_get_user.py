@@ -36,7 +36,7 @@ def run(ctx, domain: str, email: str = "", emails: Any = None, **_: Any):
     client = ctx.client("proofpoint")
     wanted = [str(x).strip() for x in (emails or []) if str(x).strip()]
     if wanted:                                         # batch lookup (D-110) — one call, many users
-        results = [_one(client, d, e) for e in wanted]
+        results = ctx.map_progress(wanted, lambda e: _one(client, d, e))
         return {"ok": True, "domain": d, "users_checked": len(results), "results": results}
     return _one(client, d, email)
 

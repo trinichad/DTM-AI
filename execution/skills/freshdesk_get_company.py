@@ -28,7 +28,7 @@ PARAMETERS: dict[str, Any] = {
 def run(ctx, company_id: Any = None, company_ids: Any = None, **_: Any):
     wanted = [int(x) for x in (company_ids or [])]
     if wanted:                                         # batch (D-110) — one call, many companies
-        results = [_one(ctx, c) for c in wanted[:500]]
+        results = ctx.map_progress(wanted[:500], lambda c: _one(ctx, c))
         return {"ok": any(r.get("ok") for r in results), "companies_done": len(results),
                 "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
     return _one(ctx, company_id)

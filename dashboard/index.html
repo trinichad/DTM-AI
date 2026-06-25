@@ -457,7 +457,7 @@ function approvalCard(p){ if(!p||!p.id) return '';
       <button class="ap-in-batch bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/25 rounded-lg px-3 py-1.5 text-xs inline-flex items-center gap-1" data-a="${p.id}" title="Run this one AND auto-approve the next 25 ${esc(p.tool||'')} runs for this client (15 min, never destructive, revocable from the bell)"><i data-lucide="repeat" class="text-[12px]"></i> + repeats</button>
       <button class="ap-in-reject bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/20 rounded-lg px-3 py-1.5 text-xs" data-a="${p.id}">Reject</button></div>`
     :'<div class="text-[10px] text-slate-500 mt-1.5">Waiting for an admin to approve.</div>';
-  return `<div class="ap-inline mt-2.5 rounded-xl border border-amber-500/30 bg-amber-500/[.06] p-3" data-a="${p.id}">
+  return `<div class="ap-inline mt-2.5 rounded-xl border border-amber-500/30 bg-amber-500/[.06] p-3" data-a="${p.id}" data-tool="${esc(p.tool||'')}">
     <div class="flex items-center gap-1.5 text-xs font-medium text-amber-300"><i data-lucide="shield-alert" class="text-[13px]"></i> Approval needed · <span class="font-mono">${esc(p.tool||'')}</span></div>
     <div class="text-[11px] text-slate-500 mt-0.5">client <span class="text-slate-300">${esc(p.tenant||TENANT||'*')}</span> — nothing runs until you decide.</div>
     ${args}${btns}</div>`; }
@@ -480,9 +480,20 @@ async function decideInline(btn,kind,batch){
   if(!resp||!resp.ok||!resp.body){ if(resp&&resp.status===401) showLogin(); else toast('failed',false);
     if(card) card.querySelectorAll('button').forEach(b=>b.disabled=false);
     btn.innerHTML=origHtml; icons(); return; }
+  // Resolve the matching tool CHIP in the same message too (D-112): the card became
+  // "Approved & ran" but its amber pending-clock pill stayed amber — the same message then read as
+  // both "ran" and "pending". Flip that one pill to ✓ (approve) / ✗ (reject) so it's consistent.
+  const _host=card?card.parentElement:null, _tool=card?(card.dataset.tool||''):'';
+  // Don't claim "ran" before it has — the action actually executes during the continuation stream
+  // below (slow on a cloud model). Show "Approved — running…" now; finalize to "ran" when done.
   if(card) card.outerHTML=reject
     ?`<div class="mt-2 text-[11px] text-rose-400 inline-flex items-center gap-1"><i data-lucide="x-circle" class="text-[12px]"></i> Rejected — skipped</div>`
-    :`<div class="mt-2 text-[11px] text-emerald-400 inline-flex items-center gap-1"><i data-lucide="check-circle-2" class="text-[12px]"></i> Approved & ran</div>`;
+    :`<div class="ap-done mt-2 text-[11px] text-amber-300 inline-flex items-center gap-1"><i data-lucide="loader-circle" class="text-[12px] animate-spin"></i> Approved — running…</div>`;
+  const _badge=_host?_host.querySelector('.ap-done'):null;
+  if(_host&&_tool){ let done=false; _host.querySelectorAll('.pill').forEach(p=>{
+    if(done||p.textContent.trim()!==_tool||!p.className.includes('amber'))return; done=true;
+    p.className='pill '+(reject?'bg-rose-500/15 text-rose-300':'bg-emerald-500/15 text-emerald-300')+' inline-flex items-center gap-1';
+    const i=p.querySelector('i'); if(i)i.setAttribute('data-lucide',reject?'x':'check'); }); icons(); }
   STREAM={conv:CONV, acc:'', think:'', tools:[], done:false, turn:null, stopping:false};
   const liveOn=()=>{ if(!document.getElementById('ai-streaming')){ bubble('ai',CHAT_DOTS,'ai-streaming');
     streamUI(true); const sb=$('#stopBtn'); if(sb)sb.onclick=stopStream; } };
@@ -497,13 +508,15 @@ async function decideInline(btn,kind,batch){
         else if(ev.type==='thinking'){ liveOn(); STREAM.think+=ev.text; paintStream(); }
         else if(ev.type==='delta'){ liveOn(); STREAM.acc+=ev.text; paintStream(); }
         else if(ev.type==='tool_call'){ liveOn(); STREAM.tools.push({name:ev.name,ok:null,ms:0}); paintStream(); }
-        else if(ev.type==='tool_progress'){ const t=STREAM.tools.find(x=>x.name===ev.name&&x.ok===null); if(t){ t.ms=ev.elapsed_ms; paintStream(); } }
+        else if(ev.type==='tool_progress'){ const t=STREAM.tools.find(x=>x.name===ev.name&&x.ok===null); if(t){ t.ms=ev.elapsed_ms; if(ev.progress)t.prog=ev.progress; paintStream(); } }
         else if(ev.type==='tool_result'){ const t=STREAM.tools.find(x=>x.name===ev.name&&x.ok===null); if(t){ t.ok=ev.pending?null:ev.ok; t.pending=!!ev.pending; } else STREAM.tools.push({name:ev.name,ok:ev.pending?null:ev.ok,pending:!!ev.pending}); paintStream(); }
         else if(ev.type==='answer'){ STREAM.turn={role:'assistant',answer:ev.answer||STREAM.acc,tools:ev.tool_events||[],citations:ev.citations||[],pending:ev.pending||null,reasoning:ev.reasoning||STREAM.think||'',meta:ev.provider?`${ev.provider}/${ev.model} · ${ev.rounds} round(s)`:''}; }
         else if(ev.type==='error'){ toast(ev.error||'continuation error',false); }
       } }
   }catch(_){}
   STREAM.done=true;
+  if(_badge) _badge.innerHTML='<i data-lucide="check-circle-2" class="text-[12px]"></i> Approved &amp; ran';
+  if(_badge) _badge.className='ap-done mt-2 text-[11px] text-emerald-400 inline-flex items-center gap-1';
   const turn=STREAM.turn||(STREAM.acc||STREAM.tools.length?{role:'assistant',answer:STREAM.acc,reasoning:STREAM.think,tools:STREAM.tools}:null);
   const e=document.getElementById('ai-streaming');
   if(turn){ turn.ts=turn.ts||new Date().toISOString(); MSGS.push(turn);
@@ -558,7 +571,10 @@ function chatToolChips(ts){ return !ts||!ts.length?'':`<div class="mt-2 flex fle
   const spin=x.ok===null&&!x.pending;
   // running chip shows live elapsed time (D-101) so a slow tool reads as "working", not "frozen"
   const secs=spin&&x.ms?` · ${(x.ms/1000).toFixed(0)}s`:'';
-  return `<span class="pill ${cls} inline-flex items-center gap-1"><i data-lucide="${ic}" class="text-[11px] ${spin?'animate-spin':''}"></i>${esc(x.name)}${secs}</span>`;
+  // batch tools also stream item progress (D-112): "12/52 · KSiza@…" so a long fan-out shows motion
+  let prog=''; if(spin&&x.prog){ const p=x.prog; const c=p.total?` · ${p.done}/${p.total}`:'';
+    const lbl=p.label?` · ${esc(p.label)}`:''; prog=`${c}${lbl}`; }
+  return `<span class="pill ${cls} inline-flex items-center gap-1"><i data-lucide="${ic}" class="text-[11px] ${spin?'animate-spin':''}"></i>${esc(x.name)}${secs}${prog}</span>`;
 }).join('')+`</div>`; }
 function paintStream(){ const e=document.getElementById('ai-streaming'); if(!e||!STREAM)return;
   e.innerHTML=chatThinkBlock()+(STREAM.acc?md(STREAM.acc):(STREAM.think?'':CHAT_DOTS))+chatToolChips(STREAM.tools);
@@ -1371,7 +1387,7 @@ const VIEWS={
             else if(ev.type==='thinking'){ STREAM.think+=ev.text; paintStream(); }
             else if(ev.type==='delta'){ STREAM.acc+=ev.text; paintStream(); }
             else if(ev.type==='tool_call'){ STREAM.tools.push({name:ev.name,ok:null,ms:0}); paintStream(); }
-            else if(ev.type==='tool_progress'){ const t=STREAM.tools.find(x=>x.name===ev.name&&x.ok===null); if(t){ t.ms=ev.elapsed_ms; paintStream(); } }
+            else if(ev.type==='tool_progress'){ const t=STREAM.tools.find(x=>x.name===ev.name&&x.ok===null); if(t){ t.ms=ev.elapsed_ms; if(ev.progress)t.prog=ev.progress; paintStream(); } }
             else if(ev.type==='tool_result'){ const t=STREAM.tools.find(x=>x.name===ev.name&&x.ok===null); if(t){ t.ok=ev.pending?null:ev.ok; t.pending=!!ev.pending; } else STREAM.tools.push({name:ev.name,ok:ev.pending?null:ev.ok,pending:!!ev.pending}); paintStream(); }
             else if(ev.type==='answer'){ STREAM.turn={role:'assistant',answer:ev.answer||STREAM.acc,tools:ev.tool_events||[],citations:ev.citations||[],suggest_skill:ev.suggest_skill||null,pending:ev.pending||null,reasoning:ev.reasoning||STREAM.think||'',meta:`${ev.provider}/${ev.model} · ${ev.rounds} round(s)`};
               // D-52: the turn locked this all-clients chat onto one client — follow it in the

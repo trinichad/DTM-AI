@@ -47,7 +47,7 @@ def run(ctx, group: str, member: str = "", members: Any = None, **_: Any):
     exo = ctx.client("exo")
     wanted = [m for m in (str(x).strip() for x in (members or [])) if m]
     if wanted:                                         # batch remove (D-110) — ONE call, ONE approval
-        results = [_one(ctx, exo, group, m) for m in wanted[:500]]
+        results = ctx.map_progress(wanted[:500], lambda m: _one(ctx, exo, group, m))
         return {"ok": any(r.get("ok") for r in results), "group": (group or "").strip(),
                 "members_done": len(results),
                 "ok_count": sum(1 for r in results if r.get("ok")), "results": results}

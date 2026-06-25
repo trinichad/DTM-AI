@@ -397,6 +397,10 @@ class Agent:
             except Exception as e:                       # belt-and-suspenders
                 box["env"] = {"ok": False, "source": name, "error": f"{type(e).__name__}: {e}"}
 
+        try:
+            ctx._progress = None                     # clear stale batch progress before this run
+        except Exception:
+            pass
         th = threading.Thread(target=_do, daemon=True)
         th.start()
         t0 = time.monotonic()
@@ -404,8 +408,12 @@ class Agent:
             th.join(timeout=self._HEARTBEAT_S)
             if not th.is_alive():
                 break
-            emit({"type": "tool_progress", "name": name,
-                  "elapsed_ms": int((time.monotonic() - t0) * 1000)})
+            ev = {"type": "tool_progress", "name": name,
+                  "elapsed_ms": int((time.monotonic() - t0) * 1000)}
+            prog = getattr(ctx, "_progress", None)    # item-level batch progress (D-112), if any
+            if prog:
+                ev["progress"] = prog
+            emit(ev)
         return box.get("env") or {"ok": False, "source": name, "error": "tool produced no result"}
 
     def _stream_provider(self, provider, messages, tools, model, emit_delta) -> ChatResult:

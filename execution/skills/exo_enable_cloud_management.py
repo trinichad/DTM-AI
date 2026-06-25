@@ -54,7 +54,7 @@ def run(ctx, identity: str = "", identities: Any = None, **_: Any):
     exo = ctx.client("exo")
     wanted = [str(x).strip() for x in (identities or []) if str(x).strip()]
     if wanted:                                          # batch (D-110) — one call, many mailboxes
-        results = [_one(exo, x) for x in wanted[:500]]
+        results = ctx.map_progress(wanted[:500], lambda x: _one(exo, x))
         return {"ok": any(r.get("ok") for r in results), "cloud_management_done": len(results),
                 "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
     return _one(exo, identity)

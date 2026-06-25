@@ -42,7 +42,7 @@ _MAX_PAGES = 20            # ~20k groups before we stop paging — far beyond an
 def run(ctx, user: str = "", users: Any = None, transitive: bool = False, **_: Any):
     wanted = [str(u).strip() for u in (users or []) if str(u).strip()]
     if wanted:                                         # batch lookup (D-110) — one call, many users
-        results = [_one(ctx, u, transitive) for u in wanted]
+        results = ctx.map_progress(wanted, lambda u: _one(ctx, u, transitive))
         return {"ok": True, "users_checked": len(results),
                 "scope": "transitiveMemberOf" if transitive else "memberOf",
                 "results": results}

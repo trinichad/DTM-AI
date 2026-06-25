@@ -59,7 +59,7 @@ def run(ctx, client_id: str = "", action: str = "", site: str = "",
         client_ids: Any = None, **_: Any):
     wanted = [str(c).strip() for c in (client_ids or []) if str(c).strip()]
     if wanted:                                         # batch — same action, many clients
-        results = [_one(ctx, c, action, site) for c in wanted[:200]]
+        results = ctx.map_progress(wanted[:200], lambda c: _one(ctx, c, action, site))
         return {"ok": any(r.get("ok") for r in results), "devices_done": len(results),
                 "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
     return _one(ctx, client_id, action, site)

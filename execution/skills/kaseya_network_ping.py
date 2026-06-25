@@ -37,7 +37,7 @@ _TARGET = re.compile(r"^[A-Za-z0-9._:-]+$")           # hostname or IP — no sh
 def run(ctx, machine: str = "", machines: Any = None, target: str = "", count: int = 4, **_: Any):
     wanted = [str(m).strip() for m in (machines or []) if str(m).strip()]
     if wanted:                                         # batch (D-110) — one call, many machines
-        results = [_one(ctx, m, target, count) for m in wanted[:200]]
+        results = ctx.map_progress(wanted[:200], lambda m: _one(ctx, m, target, count))
         return {"ok": any(r.get("ok") for r in results), "machines_done": len(results),
                 "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
     return _one(ctx, machine, target, count)

@@ -49,7 +49,7 @@ def run(ctx, domain: str, email: str = "", emails: Any = None, sender: str = "",
         return {"ok": False, "error": "list must be 'safe' or 'blocked'"}
     wanted = [str(x).strip() for x in (emails or []) if str(x).strip()]
     if wanted:                                         # batch (D-110) — same sender+list, many users
-        results = [_one(ctx, d, e, s, which) for e in wanted[:500]]
+        results = ctx.map_progress(wanted[:500], lambda e: _one(ctx, d, e, s, which))
         return {"ok": any(r.get("ok") for r in results), "users_done": len(results),
                 "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
     return _one(ctx, d, email, s, which)

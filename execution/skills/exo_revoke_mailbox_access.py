@@ -121,7 +121,8 @@ def run(ctx, mailbox: str, user: str = "", access: str = "", users: Any = None, 
 
     recipients = [u for u in (str(x).strip() for x in (users or [])) if u]
     if recipients:                                     # batch revoke (D-110) — ONE call, ONE approval
-        results = [_one(c, exo, mailbox, mb, u, access) for u in recipients[:500]]
+        results = ctx.map_progress(recipients[:500],
+                                   lambda u: _one(c, exo, mailbox, mb, u, access))
         return {"ok": any(r.get("ok") for r in results),
                 "mailbox": mb.get("PrimarySmtpAddress") or mailbox, "access": access,
                 "users_done": len(results),

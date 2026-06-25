@@ -36,7 +36,8 @@ def run(ctx, serial: str = "", serials: Any = None, group_tag: str = "", assigne
         display_name: str = "", **_: Any):
     wanted = [str(x).strip() for x in (serials or []) if str(x).strip()]
     if wanted:                                         # batch update (D-110) — one call, many devices
-        results = [_one(ctx, x, group_tag, assigned_user, display_name) for x in wanted[:500]]
+        results = ctx.map_progress(
+            wanted[:500], lambda x: _one(ctx, x, group_tag, assigned_user, display_name))
         return {"ok": any(r.get("ok") for r in results), "updates_done": len(results),
                 "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
     return _one(ctx, serial, group_tag, assigned_user, display_name)

@@ -172,12 +172,13 @@ def _search_for(get_page: Callable[[dict], Any], name: str) -> tuple[list, Optio
     return [u for u in page if isinstance(u, dict)], None
 
 
-def _collect_names(getters: list[tuple[Optional[str], Callable[[dict], Any]]],
+def _collect_names(ctx, getters: list[tuple[Optional[str], Callable[[dict], Any]]],
                    names: list[str]) -> dict:
     """Resolve each name across every getter (one per connected tenant), consolidating into a
     single result. This is what collapses N per-person tool calls into ONE (D-110)."""
     matched, by_name, not_found, errors, seen = [], [], [], [], set()
-    for name in names:
+    for i, name in enumerate(names):
+        ctx.progress(i, len(names), name)
         hits = 0
         for tenant, get in getters:
             users, err = _search_for(get, name)
@@ -210,7 +211,7 @@ def _collect_names(getters: list[tuple[Optional[str], Callable[[dict], Any]]],
 
 def _names_one_tenant(ctx, names: list[str]) -> dict:
     from execution.clients.scopes import scoped_read
-    return _collect_names([(None, lambda p: scoped_read(ctx, "m365", "/users", p))], names)
+    return _collect_names(ctx, [(None, lambda p: scoped_read(ctx, "m365", "/users", p))], names)
 
 
 def _names_all_clients(ctx, names: list[str]) -> dict:
@@ -228,7 +229,7 @@ def _names_all_clients(ctx, names: list[str]) -> dict:
         return {"error": reason}
     getters = [(t, (lambda c: lambda p: c.get("/users", p))(ctx.client_factory("m365", t)))
                for t in connected]
-    out = _collect_names(getters, names)
+    out = _collect_names(ctx, getters, names)
     out["scope"] = "all_clients"
     out["clients_searched"] = connected
     return out

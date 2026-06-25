@@ -56,8 +56,9 @@ def run(ctx, identities: list, hidden: bool = True, **_: Any):
     results: list[dict[str, Any]] = []
     summary = {"hidden": 0, "shown": 0, "unchanged": 0, "needs_cloud_management": 0, "error": 0}
     seen: set[str] = set()
-    for raw in identities:
+    for i, raw in enumerate(identities):
         ident = str(raw or "").strip()
+        ctx.progress(i, len(identities), ident)          # live heartbeat (D-112)
         if not ident or ident.lower() in seen:
             continue
         seen.add(ident.lower())

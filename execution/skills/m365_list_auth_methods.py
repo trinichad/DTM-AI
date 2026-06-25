@@ -59,7 +59,7 @@ _KINDS: dict[str, tuple] = {
 def run(ctx, user: str = "", users: Any = None, **_: Any):
     wanted = [str(u).strip() for u in (users or []) if str(u).strip()]
     if wanted:                                         # batch lookup (D-110) — one call, many users
-        results = [_one(ctx, u) for u in wanted]
+        results = ctx.map_progress(wanted, lambda u: _one(ctx, u))
         return {"ok": True, "users_checked": len(results), "results": results}
     return _one(ctx, user)
 

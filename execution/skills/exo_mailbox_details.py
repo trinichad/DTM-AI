@@ -50,7 +50,7 @@ def run(ctx, identity: str = "", identities: Any = None, **_: Any):
     exo = ctx.client("exo")
     wanted = [str(i).strip() for i in (identities or []) if str(i).strip()]
     if wanted:                                         # batch lookup (D-110) — one call, many mailboxes
-        results = [_one(exo, i) for i in wanted]
+        results = ctx.map_progress(wanted, lambda i: _one(exo, i))
         return {"ok": True, "mailboxes_checked": len(results), "results": results}
     return _one(exo, identity)
 

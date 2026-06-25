@@ -86,6 +86,10 @@ def _run_bulk(*, registry, audit, ctx, gate, approvals, valid, deny):
     src = info.source
     results: list[dict[str, Any]] = []
     for i, item in enumerate(items):
+        try:
+            ctx.progress(i, len(items), inner)        # live heartbeat: "12/52 <tool>" (D-112)
+        except Exception:
+            pass
         if not isinstance(item, dict):
             results.append({"index": i, "ok": False,
                             "error": "each item must be an object of arguments"})

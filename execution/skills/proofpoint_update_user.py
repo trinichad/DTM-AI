@@ -43,8 +43,9 @@ def run(ctx, domain: str, email: str = "", emails: Any = None, first_name: str =
         return {"ok": False, "error": "give a valid domain"}
     wanted = [str(x).strip() for x in (emails or []) if str(x).strip()]
     if wanted:                                         # batch (D-110) — same changes, many users
-        results = [_one(ctx, d, e, first_name, last_name, type, aliases, active)
-                   for e in wanted[:500]]
+        results = ctx.map_progress(
+            wanted[:500],
+            lambda e: _one(ctx, d, e, first_name, last_name, type, aliases, active))
         return {"ok": any(r.get("ok") for r in results), "users_done": len(results),
                 "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
     return _one(ctx, d, email, first_name, last_name, type, aliases, active)

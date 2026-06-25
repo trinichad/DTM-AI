@@ -32,7 +32,7 @@ PARAMETERS: dict[str, Any] = {
 def run(ctx, machine: str = "", machines: Any = None, power_up_if_offline: bool = False, **_: Any):
     wanted = [str(m).strip() for m in (machines or []) if str(m).strip()]
     if wanted:                                         # batch (D-110) — one call, many machines
-        results = [_one(ctx, m, power_up_if_offline) for m in wanted[:200]]
+        results = ctx.map_progress(wanted[:200], lambda m: _one(ctx, m, power_up_if_offline))
         return {"ok": any(r.get("ok") for r in results), "machines_done": len(results),
                 "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
     return _one(ctx, machine, power_up_if_offline)

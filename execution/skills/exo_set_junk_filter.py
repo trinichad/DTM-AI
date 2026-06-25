@@ -75,7 +75,7 @@ def run(ctx, enabled: bool, identity: str = "", identities: Any = None,
 
     wanted = [str(x).strip() for x in (identities or []) if str(x).strip()]
     if wanted:                                          # batch (D-110) — one call, many mailboxes
-        results = [_one(exo, x, enabled) for x in wanted[:500]]
+        results = ctx.map_progress(wanted[:500], lambda x: _one(exo, x, enabled))
         return {"ok": any(r.get("ok") for r in results), "junk_done": len(results),
                 "ok_count": sum(1 for r in results if r.get("ok")), "results": results}
 
