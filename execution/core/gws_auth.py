@@ -58,7 +58,9 @@ SCOPES_KEY = "GWS_SCOPES"
 DEFAULT_SCOPES = (
     "openid email "
     "https://www.googleapis.com/auth/admin.directory.user.readonly "
-    "https://www.googleapis.com/auth/admin.directory.group.readonly"
+    "https://www.googleapis.com/auth/admin.directory.group.readonly "
+    "https://www.googleapis.com/auth/admin.directory.group.member.readonly "
+    "https://www.googleapis.com/auth/admin.directory.orgunit.readonly"
 )
 
 CRED_LABEL = "gws_oauth"

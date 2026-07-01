@@ -39,10 +39,10 @@ READ_SCOPES: dict[str, tuple[str, ...]] = {
         "/instaquery/v2",       # Optics InstaQuery results (D-82)
     ),
     "gws": (                    # Google Workspace Admin SDK Directory API (read-only — D-118)
-        "/admin/directory/v1/users",
-        "/admin/directory/v1/groups",
-        "/admin/directory/v1/customers",       # customer/domain record (probe + org info)
-        "/admin/directory/v1/orgunits",
+        "/admin/directory/v1/users",           # users + a user's aliases (users/{key}/aliases)
+        "/admin/directory/v1/groups",          # groups + members (groups/{key}/members)
+        "/admin/directory/v1/customers",       # customer/domain record (probe) — note: plural
+        "/admin/directory/v1/customer",        # org units live under customer/{id}/orgunits (singular)
     ),
     "m365": (                   # Microsoft Graph v1.0 (delegated, read-only — D-32)
         "/users",

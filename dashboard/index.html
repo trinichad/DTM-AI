@@ -2485,6 +2485,7 @@ async function toggleCreds(integration, box){
   if(integration==='msteams') await teamsPanel(box);
   if(integration==='email') await emailPanel(box);
   if(integration==='m365') await m365Signin(box);
+  if(integration==='gws') await gwsSignin(box);
   icons();
 }
 // "Sign in with Microsoft" — PER CLIENT (D-33). One app (client id above) is reused; each MSP AI
@@ -2584,6 +2585,92 @@ async function m365Signin(box){
         if(stat){stat.className='m3-stat text-[11px] text-rose-400 flex items-center gap-1.5';
         stat.innerHTML='<i data-lucide="x-circle"></i> '+esc(p.error||'sign-in failed'); icons();} }
     },iv);
+  });
+}
+// "Sign in with Google" — PER CLIENT (D-118). One OAuth app (the owner's Google Cloud project) is
+// reused; each client's super-admin consents once in a popup and we store that client's refresh
+// token. Authorization-code flow (Google's device flow can't do Admin SDK scopes): we open the
+// consent URL, Google redirects to our callback, and we refresh the list on success.
+async function gwsSignin(box){
+  const data=await api('GET','/api/integrations/gws/clients').catch(()=>({clients:[],app_configured:false,redirect_uri:''}));
+  const sec=document.createElement('div');
+  sec.className='border-t border-edge mt-3 pt-3 space-y-2';
+  const ago=ts=>{ if(!ts) return ''; const s=Math.max(0,Math.floor(Date.now()/1000)-ts);
+    if(s<3600) return Math.floor(s/60)+'m ago'; if(s<86400) return Math.floor(s/3600)+'h ago';
+    return Math.floor(s/86400)+'d ago'; };
+  const status=c=>{
+    if(!c.connected) return '<span class="text-[10px] text-slate-500">not connected</span>';
+    if(c.last_error) return `<span class="text-[10px] text-rose-400 flex items-center gap-1" title="${esc(c.last_error)}"><i data-lucide="alert-triangle" class="text-[10px]"></i> re-consent needed</span>`;
+    const who=c.admin_email?esc(c.admin_email):(c.domain?esc(c.domain):'connected');
+    return `<span class="text-[10px] text-slate-500">${who}${c.last_refresh?' · renewed '+ago(c.last_refresh):''}</span>`;
+  };
+  const actBtn=(t,conn,err)=>`<button class="gw-act ml-auto text-[11px] ${conn?'text-slate-500 hover:text-rose-300':'text-accent hover:underline'}" data-t="${esc(t)}" data-conn="${conn?1:''}">${conn?(err?'Re-consent →':'Disconnect'):'Sign in →'}</button>`;
+  const row=c=>`<div class="border-b border-edge/40 py-1.5 flex items-center gap-2 text-xs" data-t="${esc(c.tenant)}">
+      <i data-lucide="${!c.connected?'building':c.last_error?'alert-triangle':'badge-check'}" class="${!c.connected?'text-slate-600':c.last_error?'text-rose-400':'text-emerald-300'} text-[13px]"></i>
+      <div class="min-w-0"><div class="font-medium truncate">${esc(c.tenant)}</div>${status(c)}</div>
+      ${actBtn(c.tenant,c.connected,c.last_error)}</div>`;
+  const anyConn=data.clients.some(c=>c.connected);
+  const cfgNote=data.app_configured
+    ? `<div class="text-[11px] text-slate-500">Each client's <b class="text-slate-400">super-admin</b> consents once in a popup (Google sign-in). Tokens auto-renew; the agent reads a client's Google data only when that client is selected.</div>`
+    : `<div class="text-[11px] text-amber-300 leading-relaxed">Set <b>GWS_CLIENT_ID</b>, <b>GWS_CLIENT_SECRET</b> and <b>GWS_REDIRECT_URI</b> above first (your Google Cloud OAuth <i>Web application</i> client). Add this exact redirect URI in that client: <span class="font-mono text-slate-400 break-all">${esc(data.redirect_uri||'(set GWS_REDIRECT_URI)')}</span></div>`;
+  sec.innerHTML=`<div class="text-xs font-medium flex items-center gap-1.5"><i data-lucide="building-2" class="text-accent text-[12px]"></i> Per-client Google Workspace sign-in
+      ${anyConn?`<button class="gw-renew ml-auto text-[10px] text-slate-500 hover:text-accent inline-flex items-center gap-1" title="Refresh every connected client's token now"><i data-lucide="refresh-cw" class="text-[10px]"></i> Renew all</button>`:''}</div>
+    ${cfgNote}
+    ${data.clients.length>8?`<input class="gw-search w-full bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs mt-1 focus:border-accent focus:outline-none" placeholder="Search ${data.clients.length} clients…" autocomplete="off">`:''}
+    <div class="gw-list"></div>
+    <div class="gw-flow"></div>`;
+  box.firstElementChild.appendChild(sec);
+  const listEl=sec.querySelector('.gw-list');
+  const renderList=q=>{ const f=(q||'').trim().toLowerCase();
+    if(!data.clients.length){ listEl.innerHTML='<div class="text-[11px] text-slate-500 py-2">No clients registered yet — add clients in the Memory tab.</div>'; return; }
+    const shown=data.clients.filter(c=>!f||(c.tenant||'').toLowerCase().includes(f));
+    listEl.innerHTML=shown.length?shown.map(row).join('')
+      :`<div class="text-[11px] text-slate-500 py-2">No clients match “${esc(f)}”.</div>`;
+    icons(); };
+  renderList('');
+  const sb=sec.querySelector('.gw-search'); if(sb) sb.oninput=()=>renderList(sb.value);
+  icons();
+  const refresh=()=>{ box.innerHTML=''; box.dataset.open=''; toggleCreds('gws',box); };
+  const rn=sec.querySelector('.gw-renew');
+  if(rn) rn.onclick=async()=>{ rn.classList.add('opacity-50'); toast('renewing tokens…');
+    const r=await api('POST','/api/integrations/gws/renew',{});
+    if(r&&r.ok){ const lk=(r.locked||[]).length; toast(`renewed ${r.ok.length} client(s)${r.failed.length?', '+r.failed.length+' need re-consent':''}${lk?', '+lk+' skipped (unlock the credential vault)':''}`,!r.failed.length&&!lk); }
+    refresh(); };
+  sec.addEventListener('click',async e=>{
+    const b=e.target.closest('.gw-act'); if(!b||!sec.contains(b))return;
+    const tenant=b.dataset.t;
+    if(b.dataset.conn){
+      if(!confirm(`Disconnect Google Workspace for ${tenant}? The agent loses Google admin access for this client until it signs in again.`))return;
+      const r=await api('DELETE','/api/integrations/gws/clients/'+encodeURIComponent(tenant));
+      r&&r.ok?(toast(`${tenant} Google Workspace disconnected`),refresh()):toast((r&&r.error)||'failed',false);
+      return;
+    }
+    const fl=sec.querySelector('.gw-flow');
+    fl.innerHTML='<div class="text-[11px] text-slate-500">starting sign-in…</div>';
+    const r=await api('POST','/api/integrations/gws/oauth/start',{tenant});
+    if(r.error){ fl.innerHTML=''; toast(esc(r.error),false); return; }
+    const win=window.open(r.auth_url,'gws_oauth','width=520,height=680');
+    fl.innerHTML=`<div class="border border-edge rounded-lg p-2.5 mt-1 bg-ink/40">
+      <div class="text-xs text-slate-300 leading-relaxed">Signing in <b class="text-slate-200">${esc(tenant)}</b> — a Google window opened; sign in with <b>this client's super-admin</b> and grant access.</div>
+      <a href="${esc(r.auth_url)}" target="gws_oauth" class="gw-open w-full grad text-white rounded-lg py-2 text-xs font-semibold flex items-center justify-center gap-1.5 mt-2"><i data-lucide="external-link" class="text-[12px]"></i> Reopen Google sign-in</a>
+      <div class="gw-stat text-[11px] text-slate-500 flex items-center gap-1.5 mt-1.5"><i data-lucide="loader-2" class="animate-spin"></i> Waiting for ${esc(tenant)} to finish…</div></div>`;
+    icons();
+    // Success arrives either as a postMessage from the callback page or by polling the list.
+    const deadline=Date.now()+900*1000; let done=false;
+    const finish=()=>{ if(done)return; done=true; clearInterval(window._gwPoll);
+      window.removeEventListener('message',onMsg); toast(`Google Workspace connected for ${tenant}`); refresh(); };
+    const onMsg=ev=>{ const d=ev&&ev.data; if(d&&d.source==='gws-oauth'&&d.ok) finish(); };
+    window.addEventListener('message',onMsg);
+    clearInterval(window._gwPoll);
+    window._gwPoll=setInterval(async()=>{
+      if(!document.body.contains(fl)||done){ clearInterval(window._gwPoll); return; }
+      const stat=fl.querySelector('.gw-stat');
+      if(Date.now()>deadline){ clearInterval(window._gwPoll); window.removeEventListener('message',onMsg);
+        if(stat){stat.className='gw-stat text-[11px] text-rose-400 flex items-center gap-1.5';
+        stat.innerHTML='<i data-lucide="x-circle"></i> Sign-in timed out — click Sign in again.'; icons();} return; }
+      let p; try{ p=await api('GET','/api/integrations/gws/clients'); }catch(_){ return; }
+      if(p&&(p.clients||[]).some(c=>c.tenant===tenant&&c.connected)) finish();
+    },2500);
   });
 }
 // Email card extra (D-28): allowed-recipients list (view/add/remove) + send a real test email.

@@ -279,6 +279,15 @@ class Api:
                 and len(path.split("/")) == 7 and path.split("/")[6] in ("exo", "spo"):
             return self._require_admin(role) or self._m365_disconnect(path.split("/")[5], user,
                                                                       service=path.split("/")[6])
+        if method == "POST" and path == "/api/integrations/gws/oauth/start":
+            return self._require_admin(role) or self._gws_oauth_start(body)
+        if method == "GET" and path == "/api/integrations/gws/clients":
+            return self._require_admin(role) or self._gws_clients()
+        if method == "POST" and path == "/api/integrations/gws/renew":
+            return self._require_admin(role) or self._gws_renew(body, user)
+        if method == "DELETE" and path.startswith("/api/integrations/gws/clients/") \
+                and len(path.split("/")) == 6:
+            return self._require_admin(role) or self._gws_disconnect(path.split("/")[5], user)
         if method == "GET" and path == "/api/capabilities":
             from ..core.tool_groups import GROUP_INFO
             return Resp(200, {"capabilities": self._tools(),     # tools carry their policy
@@ -2510,6 +2519,140 @@ class Api:
         self.agent.audit.record(actor=user, tenant_id=tenant, action="config_change",
                                 tool=service, detail=f"{label} disconnected for client '{tenant}'")
         return Resp(200, {"ok": True, "tenant": tenant, "service": service})
+
+    # ── Google Workspace per-client OAuth (D-118) — authorization-code flow ──
+    def _gws_clients(self) -> Resp:
+        """Per-client Google Workspace connection status for the card."""
+        from ..core import gws_auth
+        from ..core.config import get_config
+        from ..core.memory import VaultStore
+        cfg = get_config()
+        connected = set(gws_auth.list_connected(cfg))
+        clients = []
+        for c in VaultStore().list_clients():
+            row = {"tenant": c, "connected": c in connected,
+                   "fingerprint": gws_auth.fingerprint_for(cfg, c) if c in connected else None}
+            if c in connected:
+                row.update(gws_auth.health(cfg, c))
+            clients.append(row)
+        return Resp(200, {"app_configured": gws_auth.is_configured(cfg),
+                          "redirect_uri": gws_auth._redirect_uri(cfg),
+                          "renew_hours": cfg.int("MSPAI_GWS_RENEW_HOURS", 12), "clients": clients})
+
+    def _gws_oauth_start(self, body: dict) -> Resp:
+        """Begin a per-client Google sign-in: returns the consent URL the client's super-admin opens.
+        Google redirects back to GWS_REDIRECT_URI, handled by gws_oauth_callback (HTML)."""
+        from ..core import gws_auth
+        from ..core.config import get_config
+        from ..core.memory import VaultStore
+        tenant = str((body or {}).get("tenant") or "").strip()
+        if tenant not in VaultStore().list_clients():
+            return Resp(400, {"error": "pick a registered client to sign in"})
+        login_hint = str((body or {}).get("login_hint") or "").strip()
+        hosted_domain = str((body or {}).get("hosted_domain") or "").strip()
+        try:
+            r = gws_auth.start_auth(get_config(), tenant, login_hint=login_hint,
+                                    hosted_domain=hosted_domain)
+        except credentials.MissingCredential as e:
+            return Resp(400, {"error": str(e)})
+        except Exception as e:                       # noqa: BLE001
+            return Resp(502, {"error": f"could not start Google sign-in: {e}"})
+        return Resp(200, r)
+
+    def gws_oauth_callback(self, query: dict, user: str) -> str:
+        """Handle Google's redirect (?code&state) — a browser GET that returns an HTML page. The
+        unguessable, short-lived `state` (issued only to an admin who started the flow via the
+        admin-gated /start) authorizes the exchange; no separate role check is possible on a
+        third-party redirect. Returns a small self-closing page reporting success/failure."""
+        from ..core import gws_auth
+        from ..core.config import get_config
+        state = str((query or {}).get("state") or "").strip()
+        code = str((query or {}).get("code") or "").strip()
+        err = str((query or {}).get("error") or "").strip()
+        if err:
+            return self._gws_callback_html(False, f"Google returned an error: {err}")
+        try:
+            status, msg = gws_auth.complete_auth(get_config(), state, code)
+        except Exception as e:                       # noqa: BLE001
+            return self._gws_callback_html(False, f"sign-in failed: {e}")
+        if status != "connected":
+            return self._gws_callback_html(False, msg or "sign-in failed")
+        try:
+            get_client_factory().invalidate("gws")
+        except Exception:
+            pass
+        self.agent.audit.record(actor=user or "oauth-callback", tenant_id=msg or "*",
+                                action="credential_set", tool="gws",
+                                detail=f"Google Workspace connected for client '{msg}' (OAuth)")
+        return self._gws_callback_html(True, f"Google Workspace connected for client '{msg}'.")
+
+    @staticmethod
+    def _gws_callback_html(ok: bool, message: str) -> str:
+        import html as _html
+        color = "#16a34a" if ok else "#dc2626"
+        icon = "✓" if ok else "✕"
+        return (
+            "<!doctype html><html><head><meta charset='utf-8'><title>Google Workspace</title>"
+            "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+            "<style>body{font-family:system-ui,sans-serif;background:#0b0f19;color:#e5e7eb;"
+            "display:flex;align-items:center;justify-content:center;height:100vh;margin:0}"
+            ".card{background:#111827;border:1px solid #1f2937;border-radius:16px;padding:32px 40px;"
+            "text-align:center;max-width:420px}.ic{font-size:44px;line-height:1}"
+            "h1{font-size:18px;margin:12px 0 6px}p{color:#9ca3af;font-size:14px;margin:0 0 18px}"
+            "button{background:#4f46e5;color:#fff;border:0;border-radius:10px;padding:9px 18px;"
+            "font-size:14px;cursor:pointer}</style></head><body><div class='card'>"
+            f"<div class='ic' style='color:{color}'>{icon}</div>"
+            f"<h1>{'Connected' if ok else 'Not connected'}</h1>"
+            f"<p>{_html.escape(message)}</p>"
+            "<button onclick='window.close()'>Close this window</button>"
+            "<script>try{if(window.opener)window.opener.postMessage("
+            f"{{source:'gws-oauth',ok:{'true' if ok else 'false'}}},'*');}}catch(e){{}}</script>"
+            "</div></body></html>")
+
+    def _gws_renew(self, body: dict, user: str) -> Resp:
+        """Force a token keep-alive now — one client (body.tenant) or all connected."""
+        from ..core import gws_auth
+        from ..core.config import get_config
+        from ..core.credvault import VaultLocked
+        cfg = get_config()
+        tenant = str((body or {}).get("tenant") or "").strip()
+        if tenant:
+            try:
+                ok = gws_auth.renew(cfg, tenant)
+                result = {"ok": [tenant], "failed": []} if ok else {"ok": [], "failed": [tenant]}
+            except VaultLocked:
+                result = {"ok": [], "failed": [], "locked": [tenant]}
+        else:
+            result = gws_auth.renew_all(cfg)
+        result.setdefault("locked", [])
+        try:
+            get_client_factory().invalidate("gws")
+        except Exception:
+            pass
+        self.agent.audit.record(actor=user, tenant_id=tenant or "*", action="config_change",
+                                tool="gws", detail=f"Google Workspace token renew "
+                                f"({len(result['ok'])} ok, {len(result['failed'])} failed, "
+                                f"{len(result['locked'])} vault-locked)")
+        return Resp(200, {**result, "clients": self._gws_clients().payload["clients"]})
+
+    def _gws_disconnect(self, tenant: str, user: str) -> Resp:
+        from ..core import gws_auth
+        from ..core.config import get_config
+        from ..core.credvault import VaultLocked
+        try:
+            removed = gws_auth.clear_tokens(get_config(), tenant)
+        except VaultLocked:
+            return Resp(409, {"error": "the credential vault is locked — unlock it to disconnect "
+                                       "Google Workspace (the stored token must really be deleted)"})
+        if not removed:
+            return Resp(404, {"error": f"client '{tenant}' was not connected"})
+        try:
+            get_client_factory().invalidate("gws")
+        except Exception:
+            pass
+        self.agent.audit.record(actor=user, tenant_id=tenant, action="config_change",
+                                tool="gws", detail=f"Google Workspace disconnected for client '{tenant}'")
+        return Resp(200, {"ok": True, "tenant": tenant})
 
     def _set_capability(self, name: str, body: dict, user: str = "owner") -> Resp:
         if self.agent.registry.get(name) is None:

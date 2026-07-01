@@ -54,9 +54,13 @@ class HostRouting(unittest.TestCase):
 
 class Scopes(unittest.TestCase):
     def test_read_allowlist_is_directory_only(self):
-        self.assertTrue(is_allowed_read("gws", "/admin/directory/v1/users")[0])
-        self.assertTrue(is_allowed_read("gws", "/admin/directory/v1/groups")[0])
-        self.assertTrue(is_allowed_read("gws", "/admin/directory/v1/customers/my_customer")[0])
+        for ok_path in ("/admin/directory/v1/users",
+                        "/admin/directory/v1/users/a@b.com",
+                        "/admin/directory/v1/groups",
+                        "/admin/directory/v1/groups/g@b.com/members",
+                        "/admin/directory/v1/customers/my_customer",
+                        "/admin/directory/v1/customer/my_customer/orgunits"):
+            self.assertTrue(is_allowed_read("gws", ok_path)[0], ok_path)
         # not (yet) allowlisted → fail closed
         self.assertFalse(is_allowed_read("gws", "/admin/directory/v1/domains")[0])
         self.assertFalse(is_allowed_read("gws", "/drive/v3/drives")[0])

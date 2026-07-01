@@ -139,13 +139,27 @@ def run(ctx, user: str, sign_out_devices: bool = True, reset_password: bool = Tr
     warnings: list[str] = []
     all_ok = True
 
+    # Live per-step progress for the UI heartbeat (D-112). This is a long composite write, so without
+    # it the dashboard just shows "Waiting" for the whole run. tick() names the step about to run
+    # ("3/9 — converting mailbox to shared"); skipped mailbox steps simply don't tick.
+    total = sum(1 for x in (sign_out_devices, reset_password, block_signin, convert_to_shared,
+                            remove_licenses, hide_from_gal, prefix_display_name, list_groups,
+                            list_mailbox_access) if x)
+    _step_no = {"n": 0}
+
+    def tick(label: str) -> None:
+        _step_no["n"] += 1
+        ctx.progress(_step_no["n"], total, label)
+
     # 1) sign out of every device (cloud session revoke — valid in hybrid too)
     if sign_out_devices:
+        tick("signing out of all devices")
         all_ok &= _step_graph(steps, "sign_out_devices", lambda: scoped_write(
             ctx, "m365", f"/users/{uid}/revokeSignInSessions", body={}, method="POST"))
 
     # 2) reset password — mastered in on-prem AD when hybrid, so skip with guidance there
     if reset_password:
+        tick("resetting password")
         if hybrid:
             steps["reset_password"] = ("skipped — directory-synced (hybrid); reset the password in "
                                        "on-prem Active Directory (it syncs to Entra)")
@@ -160,6 +174,7 @@ def run(ctx, user: str, sign_out_devices: bool = True, reset_password: bool = Tr
 
     # 3) block sign-in — mastered in on-prem AD when hybrid (disable there, it syncs)
     if block_signin:
+        tick("blocking sign-in")
         if hybrid:
             steps["block_signin"] = ("skipped — directory-synced (hybrid); disable the account in "
                                      "on-prem Active Directory (it syncs to Entra and blocks "
@@ -173,6 +188,7 @@ def run(ctx, user: str, sign_out_devices: bool = True, reset_password: bool = Tr
     mb = None
     exo = None
     if needs_exo:
+        ctx.progress(_step_no["n"], total, "looking up mailbox")   # not a step — just a status line
         try:
             exo = ctx.client("exo")
             mb, bad = c.get_one_mailbox(exo, user)
@@ -194,6 +210,7 @@ def run(ctx, user: str, sign_out_devices: bool = True, reset_password: bool = Tr
 
     # 4) convert to shared (async — Set + poll, D-104b)
     if mb is not None and convert_to_shared:
+        tick("converting mailbox to shared")
         if str(mb.get("RecipientTypeDetails")) == "SharedMailbox":
             steps["convert_to_shared"] = "already shared"
         else:
@@ -211,6 +228,7 @@ def run(ctx, user: str, sign_out_devices: bool = True, reset_password: bool = Tr
 
     # 5) remove licenses (with the 50 GB data-retention safeguard)
     if remove_licenses:
+        tick("removing licenses")
         too_big = False
         if mb is not None:
             stats = exo.invoke("Get-MailboxStatistics", {"Identity": user})
@@ -257,6 +275,7 @@ def run(ctx, user: str, sign_out_devices: bool = True, reset_password: bool = Tr
 
     # 6) hide from the GAL
     if mb is not None and hide_from_gal:
+        tick("hiding from the address book")
         r = c.set_and_verify(exo, user, {"HiddenFromAddressListsEnabled": True},
                              {"HiddenFromAddressListsEnabled": True}, label="hide")
         steps["hide_from_gal"] = "done" if r.get("ok") else r.get("error")
@@ -265,6 +284,7 @@ def run(ctx, user: str, sign_out_devices: bool = True, reset_password: bool = Tr
     # 7) prefix the display name with zzz_ — display name is AD-mastered on hybrid (like the
     #    password/sign-in steps), so skip with guidance there instead of failing on a 400 (D-108).
     if prefix_display_name:
+        tick("prefixing the display name (zzz_)")
         if hybrid:
             steps["prefix_display_name"] = ("skipped — directory-synced (hybrid); the display name "
                                             "is mastered in on-prem Active Directory — rename it "
@@ -286,6 +306,7 @@ def run(ctx, user: str, sign_out_devices: bool = True, reset_password: bool = Tr
 
     # 8) list groups for the owner to decide on — READ-ONLY, never auto-removed (best-effort)
     if list_groups:
+        tick("listing the user's groups")
         gc = _list_groups(ctx, user)
         dg, sg = gc["distribution_groups"], gc["security_groups"]
         steps["list_groups"] = (f"found {len(dg or [])} distribution + {len(sg or [])} security "
@@ -305,6 +326,7 @@ def run(ctx, user: str, sign_out_devices: bool = True, reset_password: bool = Tr
 
     # 9) list mailbox access (Full Access / Send-As) for the owner to decide on — READ-ONLY
     if list_mailbox_access:
+        tick("listing mailbox access (this can take a moment)")
         ma = _list_mailbox_access(ctx, user)
         if "error" in ma:
             steps["list_mailbox_access"] = f"could not list: {ma['error']}"
@@ -321,6 +343,7 @@ def run(ctx, user: str, sign_out_devices: bool = True, reset_password: bool = Tr
                                 f"access type per mailbox, each its own approval."),
             }
 
+    ctx.progress(total, total, "")          # close the live progress bar (D-112)
     if warnings:
         out["warnings"] = warnings
     if not all_ok:

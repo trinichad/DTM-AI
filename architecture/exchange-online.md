@@ -466,3 +466,163 @@ Add/Set · Get-MailboxFolderPermission). Returns `{ok, mailbox, folder, access, 
 `user` dropped from `required` (mailbox/folder/access still required). The same shape fits the siblings
 `exo_revoke_folder_access`, `exo_grant_mailbox_access`, `exo_revoke_mailbox_access` if they start looping.
 Test: grant-folder-access-batches-recipients-in-one-call.
+
+## Amendment (2026-06-26, D-113) — force-start the Managed Folder Assistant
+
+After applying a retention policy (`exo_set_retention_policy`) or enabling the online archive
+(`exo_set_archive`), the rules only take effect when the **Managed Folder Assistant (MFA)** next
+processes the mailbox — on its own ~7-day cycle. Owners (and the AdminToolKit) routinely kick it off
+immediately. The agent had no enabled tool for this, so it correctly declined rather than improvise.
+
+New tool **`exo_start_archive`** (write, RISK medium, approval-gated, default-off). It mirrors the
+proven AdminToolKit flow: resolve the mailbox's **Primary GUID**, then
+`Start-ManagedFolderAssistant <guid>`. The Primary GUID is `Get-Mailbox`'s **`ExchangeGuid`** — exactly
+what `Get-MailboxLocation` returns for the Primary location — so it comes free from the standard
+preflight read; we do NOT need to add `Get-MailboxLocation` to the allowlist, and we target the GUID
+(not the email) so the right mailbox is processed once an archive mailbox also exists. THIS call creates
+and deletes nothing — it only triggers the already-scheduled assistant to run sooner; the actual
+retention/archive tagging still happens asynchronously over minutes-to-hours, so there is no synchronous
+state to verify (the tool reports that the assistant was started, with the targeted `primary_guid`).
+
+Allowlist addition (deliberate, minimal): `Start-ManagedFolderAssistant` → write, param-allowlisted to
+`{Identity}` only. Batches via `identities[]` (D-110 pattern): one call → many mailboxes →
+`{ok, started, ok_count, results:[ per-mailbox ]}`, each row carrying its `identity`/`primary_guid`.
+Test: tests/test_exo_start_archive.py.
+
+## Amendment (2026-06-26, D-114) — tenant-wide mailbox usage / storage-triage report
+
+New read tool **`exo_mailbox_usage_report`** (read, default-on) answers "which mailboxes are near full,
+and are they archiving / on what retention policy?" in ONE call so the owner can decide a procedure
+(enable archive, set retention, etc.). It lists every mailbox (`Get-Mailbox`, type/limit filterable) and
+per mailbox reports size, quota, **percent full**, archive state (+ archive size if on), and retention
+policy. `min_percent` (e.g. 90) filters to the near-full ones; results sort fullest-first.
+
+Efficiency note: the QUOTA comes free from the listing's `ProhibitSendQuota`, so only the SIZE needs a
+per-mailbox `Get-MailboxStatistics` — one stat call per mailbox (two if it has an archive), streamed via
+`ctx.map_progress` so the scan shows live "n/total" progress. Percent is computed from the parsed
+`(… bytes)` tail; when `ProhibitSendQuota` is "Unlimited"/DB-default with no explicit value the tool
+assumes the EXO 100 GB default and flags the row `quota_assumed:true` (honest, not silent). No new
+cmdlets — uses the already-allowlisted `Get-Mailbox` + `Get-MailboxStatistics`. Generic across all
+clients; client-specific knowledge (e.g. RHO's Policy 1/2/3 → policy-name + title→policy mapping) lives
+in that client's vault `memory.md`, NOT in the tool. Test: tests/test_exo_mailbox_usage_report.py.
+
+### Follow-up (D-114) — exo_describe_retention_policies (policies with tags expanded)
+
+`exo_list_retention_policies` shows a policy's tag NAMES; `exo_list_retention_tags` shows what each tag
+does — but deciding "which policy do I apply?" on a client without a standard set meant cross-referencing
+the two by hand. New read tool **`exo_describe_retention_policies`** (default-on) joins them: for each
+policy it expands every linked tag to `{action, age_days, applies_to(scope), enabled}` plus a
+plain-English per-tag summary (`move to archive @ 730d [All]`, `delete (PERMANENT) @ 2555d [All]`) and a
+one-line policy summary. `name` filters to one policy. A linked tag that no longer exists in the tag list
+is surfaced under `unresolved_tags` (not dropped silently). RetentionAction→label map mirrors
+exo_create_retention_tag's `_ACTIONS` reversed. No new cmdlets (Get-RetentionPolicy + Get-RetentionPolicyTag,
+both already allowlisted). Test: tests/test_exo_describe_retention_policies.py.
+
+## Amendment (2026-06-30, D-115) — Content Search (Purview eDiscovery), phase 1: create → start → status → preview
+
+**Same compliance endpoint, no new sign-in.** Content Search is the `*-ComplianceSearch` cmdlet family on
+the SAME Security & Compliance PowerShell endpoint (`ps.compliance.protection.outlook.com`) the D-58
+ProtectionAlert tools already reach via `EXOClient.invoke_compliance()` — so no new client, audience, or
+device-code flow. We extend the tiny compliance allowlist; everything else (token redemption, param
+allowlist enforcement, audit) is reused unchanged.
+
+**Allowlist additions** (`COMPLIANCE_CMDLETS` + `PARAM_ALLOWLIST`, both in `clients/exo.py`):
+- reads: `Get-ComplianceSearch` (`Identity`, `ResultSize`), `Get-ComplianceSearchAction`
+  (`Identity`, `Details`, `ResultSize`).
+- writes: `New-ComplianceSearch` (`Name`, `ExchangeLocation`, `ExchangeLocationExclusion`,
+  `ContentMatchQuery`, `Description`, `AllowNotFoundExchangeLocationsEnabled`),
+  `Start-ComplianceSearch` (`Identity`), `New-ComplianceSearchAction` (`SearchName`, `Preview`).
+
+**Safety property — Export/Purge are structurally unreachable.** `New-ComplianceSearchAction` is the cmdlet
+that would also do `-Export` (download) and `-Purge` (DELETE matching mail, destructive). Its param
+allowlist contains ONLY `SearchName` + `Preview`, so `invoke_compliance` rejects `-Export`/`-Purge` before
+any HTTP — phase 1 can preview but can neither export nor delete. Export arrives in phase 2 as its own
+deliberately-added param + tool; Purge stays off entirely (same stance as `Remove-Mailbox`, D-54).
+
+**The two-layer query model.** "Addresses involved" is two different things and the tools keep them
+separate: WHERE to search = `-ExchangeLocation` (a list of mailboxes, or `"All"`); WHO a message is
+from/to = KQL inside `-ContentMatchQuery` (`from:` / `to:` / `participants:`). `_content_search.build_kql`
+assembles the KQL from `keywords`, `from_address`→`from:`, `to_address`→`to:`, `participants`→`participants:`
+(sender OR any recipient), `subject`→`subject:"…"`, `date_from`/`date_to`→`received>=/<=`,
+`has_attachment`→`hasattachment:true`; a raw `kql` arg is an escape hatch that bypasses assembly. Embedded
+`"` are stripped (KQL has no clean escape). An EMPTY assembled query matches ALL items, so the create tool
+refuses it — at least one criterion (or raw kql) is required, so you can't dump a mailbox by omission.
+
+**No accidental tenant-wide scan.** `exo_content_search_create` requires EITHER an explicit `mailboxes`
+list OR `all_mailboxes:true`; there is no implicit `"All"` default (the open scoping question from the
+build request — resolved to the tighter option). Specific-mailbox searches set
+`AllowNotFoundExchangeLocationsEnabled:true` so one bad address/alias doesn't fail the whole creation.
+
+Skills (all `SOURCE=m365`, `ENABLED_BY_DEFAULT=False`):
+- `exo_content_search_create` (write, **RISK_LEVEL=high** — reads other people's mail): build KQL + locations,
+  `New-ComplianceSearch`, verify by `Get-ComplianceSearch` (never report an unverified write — D-43), then
+  `Start-ComplianceSearch` unless `start:false`. Returns name, query, locations, initial status.
+- `exo_content_search_status` (read): `Get-ComplianceSearch` for one `name` (or ALL when omitted). Reports
+  `Status`, estimated `Items`/`Size` (humanized), the query, the locations, and a per-mailbox breakdown
+  parsed from `SuccessResults`. Headline item/size come from real object props, not string parsing.
+- `exo_content_search_preview` (write — it can START a preview action): idempotent lifecycle. If a
+  `<name>_Preview` action exists and is Completed → parse + return a SAMPLE of matching items (Purview caps
+  preview); if it exists but isn't done → "still preparing"; if the search estimate isn't Completed yet →
+  "wait"; otherwise `New-ComplianceSearchAction -Preview` to start it. Owner can set `require_approval=false`
+  in the Capability Console for unattended re-fetches (non-destructive).
+
+**Parsing is fragile — raw is always included.** The compliance endpoint returns `SuccessResults` (location
+stats) and preview `Results` (item rows) as semicolon/comma-delimited strings whose values (subjects) can
+themselves contain the delimiters. `_content_search` parses best-effort by anchoring records at `Location:`
+and stopping each field at the next KNOWN key, and ALWAYS returns the truncated raw string alongside the
+parsed rows so nothing is silently lost. If a future tenant's format drifts, fix the parser here and note it.
+
+**Prerequisite role (ties to the D-autopilot RBAC lesson).** Content Search needs the signed-in admin to be
+an **eDiscovery Manager** (or hold the *Compliance Search* / *Preview* roles) in the Purview portal — a
+SEPARATE assignment from Exchange/Intune admin. A 401/403 surfaces that hint. DTM signs clients in with
+least-privilege accounts and grants roles as needed, so expect to grant this before first use.
+
+Tests: tests/test_exo_content_search_create.py, tests/test_exo_content_search_status.py,
+tests/test_exo_content_search_preview.py.
+
+## Amendment (2026-06-30, D-116) — Content Search phase 2: export + server-side download
+
+Phase 2 adds **export with download into the dashboard** (`exo_content_search_export`, write,
+RISK=high, default-off). The owner chose backend-pull (Option B) over Microsoft's ClickOnce
+eDiscovery Export Tool, because that tool is Windows/legacy-only AND surfacing its SAS export key to
+the browser would violate D-1/I-3 (browser never holds vendor secrets).
+
+**Allowlist change (revises D-115's "Export unreachable").** `New-ComplianceSearchAction` param
+allowlist widens from `{SearchName, Preview}` to `{SearchName, Preview, Export}`; `-Purge` (the
+destructive delete-matching-mail action) stays OFF the list → still structurally unreachable.
+`Get-ComplianceSearchAction` gains `IncludeCredential` (to read the export's staging-container SAS
+URL). No new endpoint/audience — same `invoke_compliance()`.
+
+**The download path.** A completed `<name>_Export` action stages results in an Azure blob container
+behind a short-lived SAS URL. There is no azcopy/az on the box, so `clients/azure_blob.py` reads the
+container directly over the Blob REST API using two NEW stdlib helpers in `_http.py`: `http_bytes`
+(raw bytes — `http_json` JSON-decodes, useless for the List-Blobs XML) and `download_to_file`
+(streams to disk in 1 MB chunks, enforcing a byte cap AS IT GOES so an oversized blob can't fill the
+disk; removes the partial file on cap-hit or error). `azure_blob.list_blobs` parses the EnumerationResults
+XML (follows NextMarker); `download_container` preserves folder structure, sums bytes, and pre-checks the
+declared total against the cap.
+
+**Security invariants for the new egress surface:**
+- The SAS is a live credential: it stays server-side, is passed only to the downloader, and is NEVER
+  in a tool result or log (test asserts the sig never appears in the result repr).
+- Egress is fail-closed to `*.blob.core.windows.net` only (`_check_host`) — not an arbitrary URL.
+- Blob names are sanitized (`_safe_rel` drops leading `/` and `..`) so a crafted name can't escape the
+  dest dir.
+- Total download capped by `MSPAI_CONTENT_EXPORT_MAX_GB` (default 2 GB); over-cap aborts with an honest
+  message (raise the cap or narrow the search) — never a silent truncation.
+
+**Delivery (I-8).** Results land under `<vault>/exports/<tenant>/<search>/` (a real deliverable dir, not
+`/.tmp/`) and the tool returns a `download_url` = `/api/fs/download?path=…` (the existing admin-gated raw
+download). Long downloads stream live progress via `ctx.progress` (D-112). The export is INLINE in the
+tool call — fine within the cap; a true background-job path is a later option if huge exports are needed.
+
+**Lifecycle** (idempotent, mirrors preview): no export action + search Completed → start `-Export`;
+action InProgress → "still preparing"; action Completed → read credentials → download → return link.
+Same eDiscovery-role prerequisite as D-115 (plus the Export role).
+
+**Not verified against a live tenant** — the Blob REST shapes (List XML, SAS concatenation, export
+credential labels) are coded defensively (credential parse falls back to scanning for a blob URL + `sv=`
+SAS) and unit-tested with stubbed transports, but a first live export should be watched. If labels/format
+drift, fix `_content_search.parse_export_credentials` / `azure_blob` and note it here.
+
+Tests: tests/test_azure_blob.py, tests/test_exo_content_search_export.py.

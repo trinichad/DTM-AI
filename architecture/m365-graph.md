@@ -596,3 +596,16 @@ sentence, to pass the list and "do NOT call this tool once per person." When a f
 read tool starts getting called in a loop, add a list param + that sentence rather than expecting the
 model to batch on its own. Tests: names-batch (one-tenant + '*'), mfa list, auth-methods list, groups
 list.
+
+## Amendment (2026-06-30, D-117) — m365_offboard_user streams live per-step progress
+
+`m365_offboard_user` is a long composite write (≈9 ordered steps incl. async settle-polls and EXO
+sweeps) that ran as ONE tool call and only returned `steps` at the end — so mid-run the dashboard showed
+only "Waiting" and the owner couldn't tell it was working. Fixed by instrumenting it with the D-112 live
+heartbeat: `total` = count of enabled step-flags, and a local `tick(label)` calls `ctx.progress(n, total,
+label)` at the head of each step ("3/9 — converting mailbox to shared"); the EXO mailbox preflight emits a
+non-incrementing "looking up mailbox" status line, and `ctx.progress(total, total, "")` closes the bar at
+the end. Skipped mailbox steps (no mailbox) simply don't tick — the close still settles the bar. No logic
+or step change, purely visibility. Pattern to reuse: ANY multi-step composite write should tick per step,
+not just batch tools. Tests: tests/test_offboard_progress.py (each step ticks + total reflects only
+enabled steps).

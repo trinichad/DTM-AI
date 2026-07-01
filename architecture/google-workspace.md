@@ -102,9 +102,12 @@ https://www.googleapis.com/auth/admin.directory.group.readonly`.
 - **Phase 1 (this commit):** SOP, `CredentialSpec("gws")`, `gws_auth` (auth-code OAuth + per-client
   token store + refresh), `GoogleClient` + `build_gws`, Directory read allowlist, ClientFactory +
   probe wiring, first read skill `gws_list_users`, unit tests. No live connect yet (see Phase 2).
-- **Phase 2:** web callback route (`/api/gws/oauth/*`) + dashboard card (start/consent/status/
-  disconnect), so a client can actually be signed in; more read skills (list groups, licenses,
-  shared drives).
+- **Phase 2 (done):** web endpoints `POST /api/integrations/gws/oauth/start`,
+  `GET /api/gws/oauth/callback` (HTML redirect target — validated by the unguessable `state`),
+  `GET /api/integrations/gws/clients`, `POST /api/integrations/gws/renew`,
+  `DELETE /api/integrations/gws/clients/{tenant}`; dashboard card `gwsSignin` (popup consent +
+  postMessage/poll for success). Read skills: gws_list_groups, gws_group_members,
+  gws_list_org_units, gws_user_details.
 - **Phase 3:** user/group/license **writes** behind approval (create/update/suspend/restore user,
   reset password, group create + membership, license assign/remove), scopes extended.
 - **Phase 4:** onboard/offboard composites (incl. Drive-ownership transfer via the Data Transfer

@@ -159,6 +159,16 @@ def _make_handler(api: Api, signer: SessionSigner, secure_cookie: bool):
                 self.end_headers()
                 self.wfile.write(data)
                 return
+            if parsed.path == "/api/gws/oauth/callback":   # Google OAuth redirect → HTML page
+                query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+                page = api.gws_oauth_callback(query, self._user()).encode("utf-8")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(page)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(page)
+                return
             if parsed.path.startswith("/api/"):
                 query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
                 self._send_json(api.handle("GET", parsed.path, query, {}, self._user()))

@@ -51,6 +51,8 @@ ALLOWED_CMDLETS: dict[str, str] = {
     "Add-UnifiedGroupLinks": "write",
     "Enable-Mailbox": "write",           # forced Archive:true — archive toggle ONLY
     "Disable-Mailbox": "write",          # forced Archive:true — can never mailbox-disable
+    "Start-ManagedFolderAssistant": "write",  # D-113 — force retention/archive processing now
+                                              # (triggers the scheduled assistant; no data created)
     "New-RetentionPolicyTag": "write",   # retention management (D-55) — param-allowlisted
     "New-RetentionPolicy": "write",
     "Set-RetentionPolicy": "write",
@@ -80,6 +82,14 @@ COMPLIANCE_CMDLETS: dict[str, str] = {
     "Get-ProtectionAlert": "read",
     "New-ProtectionAlert": "write",
     "Remove-ProtectionAlert": "write",   # D-65
+    # Content Search / Purview eDiscovery (D-115 preview; D-116 adds export).
+    # New-ComplianceSearchAction is param-allowlisted to {SearchName, Preview, Export} — so its
+    # -Purge (DESTRUCTIVE: deletes matching mail) stays unreachable here by design.
+    "New-ComplianceSearch": "write",
+    "Start-ComplianceSearch": "write",
+    "Get-ComplianceSearch": "read",
+    "New-ComplianceSearchAction": "write",
+    "Get-ComplianceSearchAction": "read",
 }
 COMPLIANCE_BASE = "https://ps.compliance.protection.outlook.com/adminapi/beta"
 
@@ -118,6 +128,7 @@ PARAM_ALLOWLIST: dict[str, frozenset] = {
     "Set-RetentionPolicy": frozenset({"Identity", "RetentionPolicyTagLinks", "Confirm"}),
     "Enable-Mailbox": frozenset({"Identity", "Confirm", "Archive", "AutoExpandingArchive"}),
     "Disable-Mailbox": frozenset({"Identity", "Confirm", "Archive"}),
+    "Start-ManagedFolderAssistant": frozenset({"Identity"}),  # D-113 — target one primary mailbox GUID
     "New-DistributionGroup": frozenset({
         "Name", "DisplayName", "Alias", "PrimarySmtpAddress", "Type", "Members", "Confirm",
     }),
@@ -143,6 +154,18 @@ PARAM_ALLOWLIST: dict[str, frozenset] = {
         "Name", "Category", "ThreatType", "Operation", "Severity", "NotifyUser",
         "AggregationType", "Description",
     }),
+    # Content Search (D-115 preview, D-116 export). Deliberately NARROW: New-ComplianceSearchAction
+    # allows only SearchName + Preview + Export — never -Purge, so the destructive delete-mail action
+    # stays unreachable (see COMPLIANCE_CMDLETS). Get- gains IncludeCredential to read the export's
+    # SAS URL (server-side only — never returned to a caller).
+    "New-ComplianceSearch": frozenset({
+        "Name", "ExchangeLocation", "ExchangeLocationExclusion", "ContentMatchQuery",
+        "Description", "AllowNotFoundExchangeLocationsEnabled",
+    }),
+    "Start-ComplianceSearch": frozenset({"Identity"}),
+    "Get-ComplianceSearch": frozenset({"Identity", "ResultSize"}),
+    "New-ComplianceSearchAction": frozenset({"SearchName", "Preview", "Export"}),
+    "Get-ComplianceSearchAction": frozenset({"Identity", "Details", "ResultSize", "IncludeCredential"}),
     "Remove-DistributionGroupMember": frozenset({
         "Identity", "Member", "Confirm", "BypassSecurityGroupManagerCheck"}),
     "Remove-UnifiedGroupLinks": frozenset({"Identity", "LinkType", "Links", "Confirm"}),
