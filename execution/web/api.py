@@ -279,6 +279,10 @@ class Api:
                 and len(path.split("/")) == 7 and path.split("/")[6] in ("exo", "spo"):
             return self._require_admin(role) or self._m365_disconnect(path.split("/")[5], user,
                                                                       service=path.split("/")[6])
+        if method == "POST" and path == "/api/integrations/gws/app":
+            return self._require_admin(role) or self._gws_set_app(body, user)
+        if method == "DELETE" and path.startswith("/api/integrations/gws/app/"):
+            return self._require_admin(role) or self._gws_clear_app(path.split("/")[5], user)
         if method == "POST" and path == "/api/integrations/gws/oauth/start":
             return self._require_admin(role) or self._gws_oauth_start(body)
         if method == "GET" and path == "/api/integrations/gws/clients":
@@ -2522,7 +2526,8 @@ class Api:
 
     # ── Google Workspace per-client OAuth (D-118) — authorization-code flow ──
     def _gws_clients(self) -> Resp:
-        """Per-client Google Workspace connection status for the card."""
+        """Per-client Google Workspace connection status for the card. Each client has its OWN
+        OAuth app (client_id/secret entered per client); `app_configured`/`client_id` are per row."""
         from ..core import gws_auth
         from ..core.config import get_config
         from ..core.memory import VaultStore
@@ -2531,13 +2536,48 @@ class Api:
         clients = []
         for c in VaultStore().list_clients():
             row = {"tenant": c, "connected": c in connected,
+                   "app_configured": gws_auth.app_configured(cfg, c),
+                   "client_id": gws_auth.app_client_id(cfg, c),
                    "fingerprint": gws_auth.fingerprint_for(cfg, c) if c in connected else None}
             if c in connected:
                 row.update(gws_auth.health(cfg, c))
             clients.append(row)
-        return Resp(200, {"app_configured": gws_auth.is_configured(cfg),
+        return Resp(200, {"redirect_configured": gws_auth.redirect_configured(cfg),
                           "redirect_uri": gws_auth._redirect_uri(cfg),
                           "renew_hours": cfg.int("MSPAI_GWS_RENEW_HOURS", 12), "clients": clients})
+
+    def _gws_set_app(self, body: dict, user: str) -> Resp:
+        """Store ONE client's own OAuth app credentials (client_id + client_secret)."""
+        from ..core import gws_auth
+        from ..core.config import get_config
+        from ..core.memory import VaultStore
+        from ..core.credvault import VaultLocked
+        tenant = str((body or {}).get("tenant") or "").strip()
+        client_id = str((body or {}).get("client_id") or "").strip()
+        client_secret = str((body or {}).get("client_secret") or "").strip()
+        if tenant not in VaultStore().list_clients():
+            return Resp(400, {"error": "pick a registered client"})
+        if not (client_id and client_secret):
+            return Resp(400, {"error": "client_id and client_secret are both required"})
+        try:
+            gws_auth.set_app_credentials(get_config(), tenant, client_id=client_id,
+                                         client_secret=client_secret, actor=user)
+        except VaultLocked:
+            return Resp(409, {"error": "the credential vault is locked — unlock it to store the "
+                                       "OAuth secret"})
+        except credentials.MissingCredential as e:
+            return Resp(400, {"error": str(e)})
+        self.agent.audit.record(actor=user, tenant_id=tenant, action="credential_set", tool="gws",
+                                detail=f"Google Workspace OAuth app set for client '{tenant}'")
+        return Resp(200, {"ok": True, "tenant": tenant})
+
+    def _gws_clear_app(self, tenant: str, user: str) -> Resp:
+        from ..core import gws_auth
+        from ..core.config import get_config
+        gws_auth.clear_app_credentials(get_config(), tenant)
+        self.agent.audit.record(actor=user, tenant_id=tenant, action="config_change", tool="gws",
+                                detail=f"Google Workspace OAuth app cleared for client '{tenant}'")
+        return Resp(200, {"ok": True, "tenant": tenant})
 
     def _gws_oauth_start(self, body: dict) -> Resp:
         """Begin a per-client Google sign-in: returns the consent URL the client's super-admin opens.

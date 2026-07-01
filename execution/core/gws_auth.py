@@ -48,10 +48,14 @@ _SAFE = re.compile(r"[^A-Za-z0-9_.-]")
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 
-CLIENT_ID_KEY = "GWS_CLIENT_ID"
-CLIENT_SECRET_KEY = "GWS_CLIENT_SECRET"
-REDIRECT_KEY = "GWS_REDIRECT_URI"
-SCOPES_KEY = "GWS_SCOPES"
+# The OAuth app is PER CLIENT (D-118): each client registers their OWN OAuth app inside their own
+# Google Cloud and we store its id/secret UNDER THAT CLIENT (CredVault entry 'gws_app'). Nothing is
+# shared across clients — there is no MSP-owned "master" app. Only the redirect URI is global: it is
+# OUR dashboard callback, which every client's app lists as an authorized redirect.
+REDIRECT_KEY = "GWS_REDIRECT_URI"    # global — the dashboard callback (same for every client's app)
+SCOPES_KEY = "GWS_SCOPES"            # global default scopes (owner may override)
+APP_LABEL = "gws_app"                # per-client CredVault entry: {client_id, client_secret}
+_APP_KEYS = ("client_id", "client_secret")
 
 # Default OAuth scopes. These are the *reachable* API surface the client's admin consents to — NOT
 # the autonomy grant: every write tool is still ENABLED_BY_DEFAULT=False + REQUIRES_APPROVAL=True and
@@ -83,14 +87,6 @@ _flows_lock = threading.Lock()
 
 
 # ── config accessors ──
-def _client_id(cfg: Config) -> str:
-    return (cfg.get(CLIENT_ID_KEY) or "").strip()
-
-
-def _client_secret(cfg: Config) -> str:
-    return (cfg.get(CLIENT_SECRET_KEY) or "").strip()
-
-
 def _redirect_uri(cfg: Config) -> str:
     return (cfg.get(REDIRECT_KEY) or "").strip()
 
@@ -99,9 +95,10 @@ def _scopes(cfg: Config) -> str:
     return (cfg.get(SCOPES_KEY) or DEFAULT_SCOPES).strip() or DEFAULT_SCOPES
 
 
-def is_configured(cfg: Config) -> bool:
-    """The owner's OAuth app is set up enough to start a per-client sign-in."""
-    return bool(_client_id(cfg) and _client_secret(cfg) and _redirect_uri(cfg))
+def redirect_configured(cfg: Config) -> bool:
+    """The one global prerequisite: the dashboard callback URL is set (each client's app registers
+    it). Per-client app id/secret are checked separately with app_configured()."""
+    return bool(_redirect_uri(cfg))
 
 
 # ── paths / sidecar ──
@@ -148,6 +145,101 @@ def _write_side(cfg: Config, tenant: str, side: dict) -> None:
         os.chmod(p, 0o600)
     except OSError:
         pass
+
+
+# ── per-client OAuth APP credentials (the client's OWN Google app: client_id + client_secret) ──
+# Stored separately from the tokens so disconnecting a client keeps its app on file. The secret
+# lives in the client's CredVault entry 'gws_app'; the non-secret client_id + a configured flag stay
+# in the plain sidecar gws_app.json (0600), with the same locked-vault inline fallback as the tokens.
+def _app_path(cfg: Config, tenant: str) -> Path:
+    return _clients_root(cfg) / _safe_tenant(tenant) / "gws_app.json"
+
+
+def _read_app(cfg: Config, tenant: str) -> dict:
+    try:
+        return json.loads(_app_path(cfg, tenant).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_app(cfg: Config, tenant: str, d: dict) -> None:
+    p = _app_path(cfg, tenant)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, json.dumps(d).encode("utf-8"))
+    finally:
+        os.close(fd)
+    os.replace(tmp, p)
+    try:
+        os.chmod(p, 0o600)
+    except OSError:
+        pass
+
+
+def set_app_credentials(cfg: Config, tenant: str, *, client_id: str, client_secret: str,
+                        actor: str = "") -> None:
+    """Store ONE client's own OAuth app id + secret. Secret → CredVault (or inline sidecar fallback
+    while the vault is locked); client_id + a configured flag → the plain sidecar for display."""
+    if (tenant or "").strip() in ("", "*"):
+        raise MissingCredential("pick a specific client to set its Google OAuth app")
+    cid, sec = (client_id or "").strip(), (client_secret or "").strip()
+    if not (cid and sec):
+        raise MissingCredential("both client_id and client_secret are required")
+    side = _read_app(cfg, tenant)
+    side["client_id"] = cid
+    side["app_configured"] = True
+    side["client_secret_fp"] = _fp(sec)
+    try:
+        get_credvault(cfg).upsert(tenant, APP_LABEL, {"client_id": cid, "client_secret": sec},
+                                  notes="This client's OWN Google OAuth app (client id + secret).",
+                                  actor=actor or "owner")
+        side.pop("client_secret", None)          # secret now vault-held
+    except VaultLocked:
+        side["client_secret"] = sec              # inline fallback until the vault is unlocked
+    _write_app(cfg, tenant, side)
+
+
+def app_configured(cfg: Config, tenant: str) -> bool:
+    """Whether this client's OAuth app id/secret have been entered (no vault decrypt needed)."""
+    return bool(_read_app(cfg, tenant).get("app_configured"))
+
+
+def app_client_id(cfg: Config, tenant: str) -> str:
+    return str(_read_app(cfg, tenant).get("client_id") or "")
+
+
+def get_app_credentials(cfg: Config, tenant: str) -> tuple[str, str]:
+    """(client_id, client_secret) for one client. Raises VaultLocked if the secret is vault-held and
+    the vault is locked (fail-closed — the sign-in/refresh can't proceed without it)."""
+    side = _read_app(cfg, tenant)
+    cid = str(side.get("client_id") or "")
+    sec = str(side.get("client_secret") or "")            # inline fallback (locked-vault write)
+    if not sec:
+        try:
+            fields = get_credvault(cfg).resolve(tenant, APP_LABEL)["fields"]
+            cid = cid or str(fields.get("client_id") or "")
+            sec = str(fields.get("client_secret") or "")
+        except ValueError:                                # no entry yet
+            pass
+    return cid, sec
+
+
+def clear_app_credentials(cfg: Config, tenant: str) -> bool:
+    """Forget one client's OAuth app (id + secret). Independent of connect/disconnect."""
+    removed = False
+    try:
+        get_credvault(cfg).delete(tenant, APP_LABEL)
+        removed = True
+    except (ValueError, VaultLocked):
+        pass
+    try:
+        _app_path(cfg, tenant).unlink()
+        removed = True
+    except OSError:
+        pass
+    return removed
 
 
 def _claims(jwt: str) -> dict:
@@ -313,11 +405,11 @@ def ensure_fresh(cfg: Config, tenant: str, *, force: bool = False,
             raise MissingCredential(
                 f"Google Workspace: client '{tenant}' is not signed in — connect it on the "
                 f"Google Workspace card")
-        cid, secret = _client_id(cfg), _client_secret(cfg)
+        cid, secret = get_app_credentials(cfg, tenant)   # this client's OWN app (D-118)
         if not (cid and secret):
             raise MissingCredential(
-                "Google Workspace OAuth app is not configured — set GWS_CLIENT_ID / "
-                "GWS_CLIENT_SECRET on the Google Workspace card")
+                f"Google Workspace: client '{tenant}' has no OAuth app credentials on file — "
+                f"re-enter this client's client id + secret on its card")
         status, data = transport(TOKEN_URL, {
             "grant_type": "refresh_token", "client_id": cid, "client_secret": secret,
             "refresh_token": refresh})
@@ -365,14 +457,18 @@ def start_auth(cfg: Config, mspai_tenant: str, *, login_hint: str = "",
     which the web callback hands to complete_auth()."""
     if (mspai_tenant or "").strip() in ("", "*"):
         raise MissingCredential("pick a specific client to sign in to Google Workspace")
-    if not is_configured(cfg):
+    if not _redirect_uri(cfg):
         raise MissingCredential(
-            "Google Workspace OAuth app is not configured — set GWS_CLIENT_ID, GWS_CLIENT_SECRET "
-            "and GWS_REDIRECT_URI on the Google Workspace card first")
+            "set GWS_REDIRECT_URI (your dashboard callback URL) on the Google Workspace card first")
+    cid, _sec = get_app_credentials(cfg, mspai_tenant)
+    if not cid:
+        raise MissingCredential(
+            f"client '{mspai_tenant}' has no Google OAuth app yet — enter THIS client's own OAuth "
+            f"client id + secret on its card (they register their app in their own Google Cloud)")
     _gc_flows()
     state = _secrets.token_urlsafe(24)
     params = {
-        "client_id": _client_id(cfg),
+        "client_id": cid,
         "redirect_uri": _redirect_uri(cfg),
         "response_type": "code",
         "scope": _scopes(cfg),
@@ -406,9 +502,13 @@ def complete_auth(cfg: Config, state: str, code: str,
         return "error", "the sign-in expired — start again"
     if not (code or "").strip():
         return "error", "Google did not return an authorization code (consent may have been denied)"
+    tenant = flow["tenant"]
+    cid, sec = get_app_credentials(cfg, tenant)          # this client's OWN app (D-118)
+    if not (cid and sec):
+        return "error", f"client '{tenant}' OAuth app credentials are missing — re-enter them"
     status, data = transport(TOKEN_URL, {
         "grant_type": "authorization_code", "code": code.strip(),
-        "client_id": _client_id(cfg), "client_secret": _client_secret(cfg),
+        "client_id": cid, "client_secret": sec,
         "redirect_uri": _redirect_uri(cfg)})
     data = data or {}
     access = data.get("access_token") or ""
@@ -425,7 +525,6 @@ def complete_auth(cfg: Config, state: str, code: str,
     except (TypeError, ValueError):
         expires_in = 3600
     now = int(time.time())
-    tenant = flow["tenant"]
     save_tokens(cfg, tenant, {
         "refresh_token": refresh, "access_token": access,
         "access_expires": now + expires_in,
