@@ -7,10 +7,13 @@ NAME = "exo_mailbox_details"
 DESCRIPTION = ("Show a mailbox's full admin details: type, aliases, hidden-from-address-book, "
                "forwarding, max send/receive sizes, retention policy, online-archive state, "
                "whether the user is AD-synced and whether Exchange CLOUD MANAGEMENT is enabled, "
-               "and the CURRENT SIZE of the mailbox and its archive. Pass `identity` for one "
+               "WHEN THE MAILBOX WAS CREATED (its age), and the CURRENT SIZE of the mailbox and "
+               "its archive. Pass `identity` for one "
                "mailbox or `identities` (a list) to inspect MANY in ONE call — do NOT call this "
                "tool once per mailbox. Use this to check configuration (including whether cloud "
-               "management is already set) or to verify a change.")
+               "management is already set) or to verify a change. The result also includes `raw` — "
+               "the COMPLETE mailbox object with every attribute — so any other detail can be "
+               "read without adding a new tool.")
 SOURCE = "m365"
 CATEGORY = "read"
 RISK_LEVEL = "low"
@@ -71,6 +74,7 @@ def _one(exo, identity: str) -> dict:
         "mailbox": primary,
         "display_name": mb.get("DisplayName"),
         "type": mb.get("RecipientTypeDetails"),
+        "created": mb.get("WhenMailboxCreated") or mb.get("WhenCreated"),  # mailbox age (D-55)
         "sign_in_id": mb.get("MicrosoftOnlineServicesID") or mb.get("UserPrincipalName"),
         "dir_synced": bool(mb.get("IsDirSynced")),              # identity mastered on-prem AD?
         "cloud_managed": bool(mb.get("IsExchangeCloudManaged")),  # EXO masters mailbox settings? (D-91)
@@ -87,4 +91,9 @@ def _one(exo, identity: str) -> dict:
     }
     if has_archive:
         out["archive_usage"] = _stats(exo, primary, archive=True)
+    # Curated fields above stay for the friendly summary; `raw` carries the COMPLETE Get-Mailbox
+    # object so a follow-up question about any other attribute can be answered without a code change
+    # (owner directive: a details tool must not filter data). This is a single-mailbox view, so the
+    # context-budget slimming that list tools need (D-94) doesn't apply here.
+    out["raw"] = mb
     return out
