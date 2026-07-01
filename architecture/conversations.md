@@ -303,3 +303,41 @@ Tests: pending write records ok=None+pending (not False); resolve_pending flips 
 Also (D-108, m365-graph): the offboard's `prefix_display_name` is AD-mastered on a hybrid user (the
 live dtmtester run 400'd "on-premises mastered Directory Sync objects"), so it now SKIPS on hybrid
 with guidance — same as the password reset / sign-in block.
+
+## Amendment (2026-07-01, D-113) — chat performance: prompt caching, local context window, render smoothness
+
+Owner: "test the chat and make it work as good as the best AI chats." Profiling the hot path
+(`Agent.chat_stream` → `ModelRouter` provider → `dashboard/index.html` paintStream) surfaced three
+issues. **All 124 enabled tools stay** (owner uses them all), so the fix is to make the fixed cost cheap,
+not to shrink it.
+
+**The stable prefix is large.** Every model round re-sends system prompt (~2k tok) + the enabled tool
+schemas (**~28k tok for 124 tools**) — identical round-to-round, turn-to-turn.
+
+1. **Prompt caching (the tool/system prefix).**
+   - `ClaudeProvider._build_body` now marks a `cache_control: ephemeral` breakpoint on the **system
+     block** and the **last tool** — Anthropic caches the whole tools→system prefix, served at ~10%
+     input cost + lower latency after the first (cache-writing) call. Was previously uncached, so an
+     Opus/Sonnet/Haiku brain re-paid ~30k tok/round. GA feature; no beta header; safe on a miss.
+   - `openai-codex` (gpt-5.5, the current default brain) and the `openai` API path get OpenAI's
+     **automatic** prompt caching (on for prompts ≥1024 tok) with no code change — the random
+     per-request `session_id` header does not affect the cached prefix. So no explicit key was added
+     (avoids a 400 risk on the strict codex backend); the prefix is already cached across rounds.
+2. **Local context window.** `MSPAI_OLLAMA_NUM_CTX` default was 16384 — **smaller than the ~28k-token
+   tool payload alone**, so a local (Ollama) brain silently truncated context and could not see all
+   tools. Set `MSPAI_OLLAMA_NUM_CTX=40960` in `.env` (fits prefix + history + output; box has 96GB
+   VRAM). Latent today only because the default brain is cloud; a hard floor for local-first tool use.
+3. **Streaming render smoothness.** `paintStream` re-parsed the ENTIRE answer through `md()`, replaced
+   `innerHTML`, and re-ran `icons()` on EVERY delta token — O(n²) as the answer grows, the classic
+   streaming-jank cause. Now coalesced to **one paint per `requestAnimationFrame`** (`_paintRAF` guard,
+   reset at each stream start), and auto-scroll only fires when the user is **pinned near the bottom**
+   (so scrolling up to re-read isn't yanked down each token). Same function serves both stream loops
+   (main chat + approval-continuation).
+4. **`OpenAIProvider.chat_stream` is now real token streaming.** It previously called `chat()` and
+   emitted the whole answer at once (no live tokens). It now streams `/chat/completions` with
+   `stream=true`: content deltas emit live, fragmented tool-call deltas (id/name + partial-JSON
+   `arguments`) are stitched by `index` and parsed at end, and `delta.reasoning_content` (some
+   OpenAI-compatible reasoning endpoints) rides the 'thinking' channel — matching Ollama/Claude/Codex.
+   An injectable `stream_transport` keeps it unit-tested with no network. Inactive today (no
+   `OPENAI_API_KEY`; brain is Codex/local) but correct the moment an OpenAI key or compatible endpoint
+   is configured.
