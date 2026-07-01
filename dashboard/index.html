@@ -2669,8 +2669,20 @@ async function gwsSignin(box){
       if(rowEl.dataset.open){ rowEl.dataset.open=''; rowEl.innerHTML=''; return; }
       rowEl.dataset.open='1';
       const cur=clientOf(t);
+      const step=(n,h)=>`<li class="flex gap-1.5"><span class="text-slate-600 tabular-nums">${n}.</span><span>${h}</span></li>`;
+      const guide=`<details class="mt-0.5 mb-1" ${cur.client_id?'':'open'}>
+        <summary class="cursor-pointer select-none text-[10px] text-accent hover:underline">Google Cloud setup — exactly what to click (in ${esc(t)}'s Google)</summary>
+        <ol class="text-[10px] text-slate-400 leading-relaxed space-y-1 mt-1.5 pl-0.5">
+          ${step(1,'Sign in to <b class="text-slate-300">console.cloud.google.com</b> as the client admin → create or pick a project (top bar).')}
+          ${step(2,'<b class="text-slate-300">APIs &amp; Services → Library</b> → search and <b>Enable</b> each: <span class="text-slate-300">Admin SDK API</span>, <span class="text-slate-300">Google Drive API</span>, <span class="text-slate-300">Enterprise License Manager API</span>, <span class="text-slate-300">Admin Reports API</span>.')}
+          ${step(3,'<b class="text-slate-300">APIs &amp; Services → OAuth consent screen</b> → User type <b>Internal</b> → add an app name + your email → Save.')}
+          ${step(4,'<b class="text-slate-300">APIs &amp; Services → Credentials → Create credentials → OAuth client ID</b> → Application type <b>Web application</b>.')}
+          ${step(5,`Under <b class="text-slate-300">Authorized redirect URIs</b> add this exact URL → Create:<br><span class="font-mono text-slate-300 break-all select-all bg-ink/80 rounded px-1 py-0.5 inline-block mt-0.5">${esc(redir||'(set GWS_REDIRECT_URI above first)')}</span>`)}
+          ${step(6,'Copy the <b class="text-slate-300">Client ID</b> and <b class="text-slate-300">Client secret</b> it shows → paste them below → <b>Save app</b>, then <b>Sign in</b>.')}
+        </ol></details>`;
       rowEl.innerHTML=`<div class="border border-edge rounded-lg p-2.5 mt-1.5 bg-ink/40 space-y-1.5">
         <div class="text-[10px] text-slate-500">${cur.client_id?`Current client id: <span class="font-mono">${esc(cur.client_id)}</span> — re-enter to change.`:`Paste <b class="text-slate-400">${esc(t)}</b>'s OWN OAuth app credentials (from their Google Cloud).`}</div>
+        ${guide}
         <input class="gw-cid w-full bg-ink/70 border border-edge rounded px-2 py-1.5 text-xs font-mono focus:border-accent focus:outline-none" placeholder="client_id (…apps.googleusercontent.com)" autocomplete="off">
         <input class="gw-csec w-full bg-ink/70 border border-edge rounded px-2 py-1.5 text-xs font-mono focus:border-accent focus:outline-none" placeholder="client_secret" type="password" autocomplete="off">
         <div class="flex items-center gap-2"><button class="gw-savapp grad text-white rounded px-3 py-1.5 text-[11px] font-semibold" data-t="${esc(t)}">Save app</button>

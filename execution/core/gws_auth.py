@@ -73,7 +73,10 @@ DEFAULT_SCOPES = (
     "https://www.googleapis.com/auth/admin.directory.orgunit "
     "https://www.googleapis.com/auth/apps.licensing "
     "https://www.googleapis.com/auth/drive "
-    "https://www.googleapis.com/auth/admin.datatransfer"
+    "https://www.googleapis.com/auth/admin.datatransfer "
+    "https://www.googleapis.com/auth/admin.directory.device.mobile "
+    "https://www.googleapis.com/auth/admin.directory.device.chromeos.readonly "
+    "https://www.googleapis.com/auth/admin.reports.audit.readonly"
 )
 
 CRED_LABEL = "gws_oauth"
