@@ -159,6 +159,11 @@ WRITE_SCOPES: dict[str, tuple[str, ...]] = {
         "/groups",              # Entra groups: create, add members (D-56)
         "/deviceManagement",    # Autopilot: import hashes, update tag/user (D-56)
     ),
+    "gws": (                    # Google Workspace (POST create + PATCH update — D-118)
+        "/admin/directory/v1/users",       # create user; PATCH suspend/restore/reset/move-OU/update
+        "/admin/directory/v1/groups",      # create group; POST add member (groups/{k}/members)
+        "/apps/licensing/v1/product",      # assign a license SKU to a user
+    ),
 }
 _WRITE_METHODS = ("POST", "PATCH")
 
@@ -204,6 +209,12 @@ DELETE_SCOPES: dict[str, tuple[str, ...]] = {
         "/groups",                       # delete a group, or a member $ref under it
         "/users",                        # a user's auth methods (phoneMethods/{id})
         "/deviceManagement",             # an autopilot device identity
+    ),
+    "gws": (                             # Google Workspace (D-118)
+        "/admin/directory/v1/groups",    # delete a group, or remove a member (groups/{k}/members/{m})
+        "/apps/licensing/v1/product",    # remove a license SKU from a user
+        # NB: deleting a USER is intentionally NOT here — offboarding SUSPENDS (reversible); a
+        # permanent user delete stays a manual console action.
     ),
 }
 

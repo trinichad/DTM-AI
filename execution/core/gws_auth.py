@@ -53,14 +53,21 @@ CLIENT_SECRET_KEY = "GWS_CLIENT_SECRET"
 REDIRECT_KEY = "GWS_REDIRECT_URI"
 SCOPES_KEY = "GWS_SCOPES"
 
-# Read-first default scopes (Phase 1). Write/other scopes are added as their tool phases land; a
-# scope change requires the client to re-consent (same rule as M365's re-sign-in).
+# Default OAuth scopes. These are the *reachable* API surface the client's admin consents to — NOT
+# the autonomy grant: every write tool is still ENABLED_BY_DEFAULT=False + REQUIRES_APPROVAL=True and
+# gated by the Capability Console (a scope is necessary but not sufficient to write). The read+write
+# directory scopes include read, so one consent covers reads and (owner-enabled) writes. Changing
+# this set requires the client to re-consent (Google re-prompts on new scopes). Drive + Data Transfer
+# (Phase 4) are added when those tools land. Owners who want a strictly read-only grant can override
+# GWS_SCOPES with the *.readonly variants.
 DEFAULT_SCOPES = (
     "openid email "
-    "https://www.googleapis.com/auth/admin.directory.user.readonly "
-    "https://www.googleapis.com/auth/admin.directory.group.readonly "
-    "https://www.googleapis.com/auth/admin.directory.group.member.readonly "
-    "https://www.googleapis.com/auth/admin.directory.orgunit.readonly"
+    "https://www.googleapis.com/auth/admin.directory.user "
+    "https://www.googleapis.com/auth/admin.directory.user.security "
+    "https://www.googleapis.com/auth/admin.directory.group "
+    "https://www.googleapis.com/auth/admin.directory.group.member "
+    "https://www.googleapis.com/auth/admin.directory.orgunit "
+    "https://www.googleapis.com/auth/apps.licensing"
 )
 
 CRED_LABEL = "gws_oauth"

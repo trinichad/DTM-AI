@@ -108,8 +108,16 @@ https://www.googleapis.com/auth/admin.directory.group.readonly`.
   `DELETE /api/integrations/gws/clients/{tenant}`; dashboard card `gwsSignin` (popup consent +
   postMessage/poll for success). Read skills: gws_list_groups, gws_group_members,
   gws_list_org_units, gws_user_details.
-- **Phase 3:** user/group/license **writes** behind approval (create/update/suspend/restore user,
-  reset password, group create + membership, license assign/remove), scopes extended.
+- **Phase 3 (done):** writes (CATEGORY=write, ENABLED_BY_DEFAULT=False, REQUIRES_APPROVAL=True) —
+  gws_create_user, gws_suspend_user, gws_restore_user, gws_reset_password, gws_move_org_unit,
+  gws_create_group, gws_delete_group, gws_add_group_member, gws_remove_group_member,
+  gws_assign_license, gws_remove_license. WRITE_SCOPES/DELETE_SCOPES["gws"] added (POST/PATCH +
+  bounded DELETE; a permanent USER delete is intentionally NOT reachable — offboarding suspends).
+  DEFAULT_SCOPES widened to the read+write directory/licensing set: the scope is the *reachable*
+  surface the admin consents to, NOT the autonomy grant — every write is still Capability-Console +
+  approval gated (scope is necessary, not sufficient). A client connected under Phase-1/2 scopes must
+  reconnect to grant the write scopes. Owners wanting a strictly read-only grant override GWS_SCOPES
+  with the *.readonly variants. Batch (many users) is via the universal `bulk` tool, not per-skill.
 - **Phase 4:** onboard/offboard composites (incl. Drive-ownership transfer via the Data Transfer
   API), Gmail per-user settings (forwarding/delegation/send-as — via the admin's consent),
   Shared Drive create + membership, devices, Reports/Vault.

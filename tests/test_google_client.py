@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from execution.clients.google import GoogleClient, build_gws
-from execution.clients.scopes import is_allowed_read, is_allowed_write, is_allowed_delete
+from execution.clients.scopes import is_allowed_read
 from execution.core.config import Config
 from execution.core.credentials import MissingCredential
 from execution.core.secrets_store import SecretStore
@@ -66,11 +66,7 @@ class Scopes(unittest.TestCase):
         self.assertFalse(is_allowed_read("gws", "/drive/v3/drives")[0])
         # host-escape attempts fail closed
         self.assertFalse(is_allowed_read("gws", "/admin/directory/v1/../../x")[0])
-
-    def test_no_writes_or_deletes_in_phase_1(self):
-        # read-only first (constitution): gws has no write/delete surface yet
-        self.assertFalse(is_allowed_write("gws", "/admin/directory/v1/users")[0])
-        self.assertFalse(is_allowed_delete("gws", "/admin/directory/v1/users")[0])
+        # write/delete allowlists are covered in tests/test_gws_writes.py
 
 
 class BuildGws(unittest.TestCase):
