@@ -494,6 +494,7 @@ async function decideInline(btn,kind,batch){
     if(done||p.textContent.trim()!==_tool||!p.className.includes('amber'))return; done=true;
     p.className='pill '+(reject?'bg-rose-500/15 text-rose-300':'bg-emerald-500/15 text-emerald-300')+' inline-flex items-center gap-1';
     const i=p.querySelector('i'); if(i)i.setAttribute('data-lucide',reject?'x':'check'); }); icons(); }
+  if(_paintRAF){cancelAnimationFrame(_paintRAF);_paintRAF=0;}
   STREAM={conv:CONV, acc:'', think:'', tools:[], done:false, turn:null, stopping:false};
   const liveOn=()=>{ if(!document.getElementById('ai-streaming')){ bubble('ai',CHAT_DOTS,'ai-streaming');
     streamUI(true); const sb=$('#stopBtn'); if(sb)sb.onclick=stopStream; } };
@@ -576,10 +577,21 @@ function chatToolChips(ts){ return !ts||!ts.length?'':`<div class="mt-2 flex fle
     const lbl=p.label?` · ${esc(p.label)}`:''; prog=`${c}${lbl}`; }
   return `<span class="pill ${cls} inline-flex items-center gap-1"><i data-lucide="${ic}" class="text-[11px] ${spin?'animate-spin':''}"></i>${esc(x.name)}${secs}${prog}</span>`;
 }).join('')+`</div>`; }
-function paintStream(){ const e=document.getElementById('ai-streaming'); if(!e||!STREAM)return;
+// Smoothness (D-113): a fast cloud stream emits many small deltas/sec. Re-parsing the WHOLE
+// accumulated answer through md(), replacing innerHTML, and re-scanning icons() on EVERY token is
+// O(n²) as the answer grows — the classic cause of streaming jank. Coalesce to ONE paint per
+// animation frame (bursts of tokens collapse into a single render), like best-in-class chats.
+let _paintRAF=0;
+function paintStream(){ if(_paintRAF)return; _paintRAF=requestAnimationFrame(_doPaintStream); }
+function _doPaintStream(){ _paintRAF=0;
+  const e=document.getElementById('ai-streaming'); if(!e||!STREAM)return;
+  const mb=$('#msgs');
+  // Read scroll geometry BEFORE mutating: only auto-follow if the user is pinned near the bottom,
+  // so scrolling up to re-read earlier text doesn't get yanked back down each token.
+  const pinned=mb?(mb.scrollHeight-mb.scrollTop-mb.clientHeight<80):true;
   e.innerHTML=chatThinkBlock()+(STREAM.acc?md(STREAM.acc):(STREAM.think?'':CHAT_DOTS))+chatToolChips(STREAM.tools);
   const tb=e.querySelector('.think-body'); if(tb&&!STREAM.acc)tb.scrollTop=1e9;  // follow the thought
-  icons(); const mb=$('#msgs'); if(mb)mb.scrollTop=1e9; }
+  icons(); if(mb&&pinned)mb.scrollTop=1e9; }
 // When (re)entering chat with an in-flight turn, recreate the live bubble so the still-running
 // reader keeps painting into the current DOM.
 function reattachStream(){ if(!STREAM||STREAM.done||STREAM.conv!==CONV||!$('#msgs'))return;
@@ -1365,6 +1377,7 @@ const VIEWS={
       bubble('you',esc(m),null,sentAt);
       // State at module scope (STREAM) so a tab switch can't kill the turn; the reader keeps
       // painting into the stable #ai-streaming bubble wherever it currently lives.
+      if(_paintRAF){cancelAnimationFrame(_paintRAF);_paintRAF=0;}
       STREAM={conv:CONV, acc:'', think:'', tools:[], done:false, turn:null, stopping:false};
       bubble('ai',CHAT_DOTS,'ai-streaming');
       streamUI(true);

@@ -50,6 +50,37 @@ class OpenAI(unittest.TestCase):
         self.assertEqual(toolmsg["tool_call_id"], "c1")
         self.assertEqual(res.tool_calls[0]["name"], "kaseya_list_assets")
 
+    def test_stream_parses_content_and_fragmented_tool_calls(self):
+        """Real SSE stream: content deltas emit live; tool-call id/name/arguments arrive across
+        multiple chunks (arguments as partial-JSON) and are stitched by index, then parsed."""
+        captured = {}
+
+        def st(method, url, headers=None, params=None, json_body=None, timeout=120):
+            captured["url"] = url
+            captured["body"] = json_body
+            captured["auth"] = (headers or {}).get("Authorization")
+            yield 'data: {"choices":[{"delta":{"reasoning_content":"hmm"}}]}'
+            yield 'data: {"choices":[{"delta":{"content":"2 "}}]}'
+            yield 'data: {"choices":[{"delta":{"content":"assets"}}]}'
+            yield ('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1",'
+                   '"function":{"name":"kaseya_list_assets","arguments":"{\\"a\\":"}}]}}]}')
+            yield ('data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
+                   '"function":{"arguments":"1}"}}]}}]}')
+            yield 'data: [DONE]'
+
+        ch = {"content": [], "thinking": []}
+        p = OpenAIProvider("sk-test", stream_transport=st)
+        res = p.chat_stream(NEUTRAL, TOOLS, "gpt-4o", lambda t, k="content": ch[k].append(t))
+        self.assertTrue(captured["url"].endswith("/chat/completions"))
+        self.assertEqual(captured["auth"], "Bearer sk-test")
+        self.assertTrue(captured["body"]["stream"])
+        self.assertEqual("".join(ch["content"]), "2 assets")   # streamed live, in order
+        self.assertEqual(res.content, "2 assets")
+        self.assertEqual(ch["thinking"], ["hmm"])              # reasoning kept off content channel
+        self.assertEqual(res.tool_calls[0]["id"], "call_1")
+        self.assertEqual(res.tool_calls[0]["name"], "kaseya_list_assets")
+        self.assertEqual(res.tool_calls[0]["arguments"], {"a": 1})   # partial-JSON stitched + parsed
+
 
 class Codex(unittest.TestCase):
     """ChatGPT-plan provider (D-26) — Responses API wire shape + SSE parse, no network."""
@@ -115,10 +146,14 @@ class Claude(unittest.TestCase):
         self.assertTrue(captured["url"].endswith("/messages"))
         self.assertEqual(captured["headers"]["x-api-key"], "sk-ant")
         self.assertEqual(captured["headers"]["anthropic-version"], "2023-06-01")
-        # system hoisted out of messages
-        self.assertEqual(captured["body"]["system"], "be helpful")
-        # tools converted to input_schema
+        # system hoisted out of messages, as a cache-breakpointed block (D-113 prompt caching)
+        self.assertEqual(captured["body"]["system"],
+                         [{"type": "text", "text": "be helpful",
+                           "cache_control": {"type": "ephemeral"}}])
+        # tools converted to input_schema; the LAST tool carries the cache breakpoint for the
+        # (large, stable) tool prefix (D-113 prompt caching)
         self.assertIn("input_schema", captured["body"]["tools"][0])
+        self.assertEqual(captured["body"]["tools"][-1]["cache_control"], {"type": "ephemeral"})
         # assistant tool_use + tool_result blocks present
         roles = [m["role"] for m in captured["body"]["messages"]]
         self.assertEqual(roles, ["user", "assistant", "user"])  # tool result folded into a user turn

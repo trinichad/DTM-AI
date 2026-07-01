@@ -144,14 +144,16 @@ class OpenAIProvider:
     is_local = False
 
     def __init__(self, api_key: str, base_url: str = "https://api.openai.com/v1",
-                 transport: Callable = http_json, name: str = "openai", is_local: bool = False) -> None:
+                 transport: Callable = http_json, name: str = "openai", is_local: bool = False,
+                 stream_transport: Callable = http_stream) -> None:
         self._key = api_key
         self.base_url = base_url.rstrip("/")
         self._t = transport
+        self._st = stream_transport
         self.name = name
         self.is_local = is_local
 
-    def chat(self, messages, tools, model) -> ChatResult:
+    def _wire(self, messages: list[dict]) -> list[dict]:
         wire = []
         for m in messages:
             r = m.get("role")
@@ -168,11 +170,24 @@ class OpenAIProvider:
             elif r == "tool":
                 wire.append({"role": "tool", "tool_call_id": m.get("tool_call_id"),
                              "content": m.get("content", "")})
-        payload: dict[str, Any] = {"model": model, "messages": wire}
+        return wire
+
+    def _payload(self, messages, tools, model, *, stream: bool) -> dict:
+        payload: dict[str, Any] = {"model": model, "messages": self._wire(messages)}
+        if stream:
+            payload["stream"] = True
         if tools:
             payload["tools"] = tools
+        return payload
+
+    @property
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self._key}"}
+
+    def chat(self, messages, tools, model) -> ChatResult:
+        payload = self._payload(messages, tools, model, stream=False)
         _s, data = self._t("POST", f"{self.base_url}/chat/completions", json_body=payload,
-                           headers={"Authorization": f"Bearer {self._key}"}, timeout=120)
+                           headers=self._headers, timeout=120)
         choice = ((data or {}).get("choices") or [{}])[0].get("message", {}) or {}
         calls = []
         for tc in choice.get("tool_calls") or []:
@@ -185,11 +200,52 @@ class OpenAIProvider:
         return ChatResult(choice.get("content") or "", calls, self.name, model, self.is_local)
 
     def chat_stream(self, messages, tools, model, emit) -> ChatResult:
-        # OpenAI streaming (incl. tool-call deltas) is a later refinement; deliver whole answer for now.
-        res = self.chat(messages, tools, model)
-        if res.content and not res.tool_calls:
-            emit(res.content)
-        return res
+        """Real SSE streaming over /chat/completions (stream=true). Content deltas emit live;
+        tool-call deltas arrive fragmented (id/name in the first chunk, arguments as a stream of
+        partial-JSON strings) and are accumulated per `index`, then parsed at the end. Some
+        OpenAI-compatible reasoning endpoints also stream `delta.reasoning_content` — surfaced on the
+        'thinking' channel like the other providers, kept out of the returned content."""
+        payload = self._payload(messages, tools, model, stream=True)
+        content = ""
+        tc_acc: dict[int, dict[str, Any]] = {}   # index -> {id, name, args (partial-JSON buffer)}
+        for line in self._st("POST", f"{self.base_url}/chat/completions", json_body=payload,
+                             timeout=120, headers=self._headers):
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                break
+            try:
+                obj = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            delta = ((obj.get("choices") or [{}])[0] or {}).get("delta") or {}
+            piece = delta.get("content")
+            if piece:
+                content += piece
+                emit(piece)
+            think = delta.get("reasoning_content")
+            if think:
+                emit(think, "thinking")
+            for tc in delta.get("tool_calls") or []:
+                idx = tc.get("index", 0)
+                slot = tc_acc.setdefault(idx, {"id": None, "name": None, "args": ""})
+                if tc.get("id"):
+                    slot["id"] = tc["id"]
+                fn = tc.get("function") or {}
+                if fn.get("name"):
+                    slot["name"] = fn["name"]
+                if fn.get("arguments"):
+                    slot["args"] += fn["arguments"]
+        calls = []
+        for _idx in sorted(tc_acc):
+            slot = tc_acc[_idx]
+            try:
+                args = json.loads(slot["args"]) if slot["args"].strip() else {}
+            except json.JSONDecodeError:
+                args = {}
+            calls.append({"id": slot["id"], "name": slot["name"], "arguments": args})
+        return ChatResult(content, calls, self.name, model, self.is_local)
 
 
 # ── OpenAI on the ChatGPT plan (Codex OAuth, D-26) ──────────────────────────
@@ -340,11 +396,22 @@ class ClaudeProvider:
         body: dict[str, Any] = {"model": model, "max_tokens": 1500, "messages": wire}
         if stream:
             body["stream"] = True
+        # Prompt caching (D-113): the system prompt (~2k tok) and — far bigger — the tool list
+        # (~28k tok for the 124 enabled tools) are an IDENTICAL prefix on every round of every turn.
+        # Anthropic bills that at full input price each call unless we mark a cache breakpoint, so
+        # without this a multi-round turn re-pays ~30k tokens per round. A breakpoint on the system
+        # block and on the LAST tool caches the whole stable prefix (tools → system are processed
+        # before the messages), served at ~10% cost + lower latency on subsequent calls. GA feature,
+        # no beta header. Safe on a miss (first call just writes the cache).
         if sys_text:
-            body["system"] = sys_text
+            body["system"] = [{"type": "text", "text": sys_text,
+                               "cache_control": {"type": "ephemeral"}}]
         if tools:
-            body["tools"] = [{"name": t["function"]["name"], "description": t["function"]["description"],
-                              "input_schema": t["function"]["parameters"]} for t in tools]
+            tool_defs = [{"name": t["function"]["name"], "description": t["function"]["description"],
+                          "input_schema": t["function"]["parameters"]} for t in tools]
+            if tool_defs:
+                tool_defs[-1]["cache_control"] = {"type": "ephemeral"}
+            body["tools"] = tool_defs
         return body
 
     @property
