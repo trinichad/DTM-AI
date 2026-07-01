@@ -38,6 +38,12 @@ READ_SCOPES: dict[str, tuple[str, ...]] = {
         "/globallists/v2",      # global safe/quarantine list contents (D-82)
         "/instaquery/v2",       # Optics InstaQuery results (D-82)
     ),
+    "gws": (                    # Google Workspace Admin SDK Directory API (read-only — D-118)
+        "/admin/directory/v1/users",
+        "/admin/directory/v1/groups",
+        "/admin/directory/v1/customers",       # customer/domain record (probe + org info)
+        "/admin/directory/v1/orgunits",
+    ),
     "m365": (                   # Microsoft Graph v1.0 (delegated, read-only — D-32)
         "/users",
         "/groups",

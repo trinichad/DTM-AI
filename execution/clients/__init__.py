@@ -97,6 +97,10 @@ class ClientFactory:
                 from .spo import build_spo
                 self._cache[key] = build_spo(self.cfg, tenant_id)
                 return self._cache[key]
+            if integration == "gws":               # per-client Google Workspace client (D-118)
+                from .google import build_gws
+                self._cache[key] = build_gws(self.cfg, tenant_id)
+                return self._cache[key]
             builder = _BUILDERS.get(integration)
             env = credentials.require(integration, self.cfg)  # fail-closed if unconfigured
             if builder is not None:
@@ -115,6 +119,21 @@ def probe(integration: str, cfg: Optional[Config] = None) -> dict[str, Any]:
     """Smallest auth-proving call per integration. Never raises; returns {ok, detail, latency_ms}."""
     cfg = cfg or get_config()
     started = time.monotonic()
+    # gws is per-client too (D-118), but on its own OAuth module.
+    if integration == "gws":
+        from ..core import gws_auth
+        connected = gws_auth.list_connected(cfg)
+        if not connected:
+            return {"ok": False, "detail": "no client signed in yet — sign one in below",
+                    "latency_ms": 0}
+        try:
+            detail = ClientFactory(cfg)(integration, tenant_id=connected[0]).probe()
+            detail["detail"] = f"client '{connected[0]}': {detail.get('detail', '')}"
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "detail": f"{type(e).__name__}: {e}",
+                    "latency_ms": int((time.monotonic() - started) * 1000)}
+        return {"ok": bool(detail.get("ok")), "detail": detail.get("detail", ""),
+                "latency_ms": int((time.monotonic() - started) * 1000)}
     # m365/exo/spo are per-client (D-33/D-41/D-89): probe the first signed-in client, else not.
     if integration in ("m365", "exo", "spo"):
         from ..core import m365_auth
