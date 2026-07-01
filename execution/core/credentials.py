@@ -92,14 +92,15 @@ SPECS: dict[str, CredentialSpec] = {
         optional=("M365_CLIENT_ID", "M365_TENANT", "M365_SCOPES"),
         label="Microsoft 365 (Graph + Exchange)", group="vendor",
     ),
-    # Google Workspace admin (D-118) — per-client OAuth (authorization-code flow). The OAuth
-    # client id/secret/redirect are the owner's Google Cloud app (shared config); each client's
-    # super-admin consent yields a per-client refresh token. The tokens themselves live per-client
-    # in the CredVault (gws_oauth), NOT in these env keys — so required is empty like m365.
+    # Google Workspace admin (D-118) — per-client OAuth (authorization-code flow). Each client
+    # registers their OWN OAuth app; its client_id/secret live PER CLIENT in the CredVault
+    # (gws_app), entered on that client's card — NOT here. The only global setting is the redirect
+    # URI (our dashboard callback, which every client's app registers). GWS_SCOPES optionally
+    # overrides the requested scopes. required is empty (like m365).
     "gws": CredentialSpec(
         "gws",
         required=(),
-        optional=("GWS_CLIENT_ID", "GWS_CLIENT_SECRET", "GWS_REDIRECT_URI", "GWS_SCOPES"),
+        optional=("GWS_REDIRECT_URI", "GWS_SCOPES"),
         label="Google Workspace (Admin)", group="vendor",
     ),
     "msteams": CredentialSpec(

@@ -2587,35 +2587,47 @@ async function m365Signin(box){
     },iv);
   });
 }
-// "Sign in with Google" — PER CLIENT (D-118). One OAuth app (the owner's Google Cloud project) is
-// reused; each client's super-admin consents once in a popup and we store that client's refresh
-// token. Authorization-code flow (Google's device flow can't do Admin SDK scopes): we open the
-// consent URL, Google redirects to our callback, and we refresh the list on success.
+// "Sign in with Google" — PER CLIENT (D-118). Each client registers their OWN OAuth app (inside
+// their own Google Cloud) and its client_id/secret are entered per client here; nothing is shared.
+// Then the client's super-admin consents once in a popup (authorization-code flow — Google's device
+// flow can't do Admin SDK scopes) and we store that client's refresh token. Only the redirect URI
+// (our callback) is global — every client's app registers it.
 async function gwsSignin(box){
-  const data=await api('GET','/api/integrations/gws/clients').catch(()=>({clients:[],app_configured:false,redirect_uri:''}));
+  const data=await api('GET','/api/integrations/gws/clients').catch(()=>({clients:[],redirect_configured:false,redirect_uri:''}));
   const sec=document.createElement('div');
   sec.className='border-t border-edge mt-3 pt-3 space-y-2';
+  const redir=data.redirect_uri||'';
   const ago=ts=>{ if(!ts) return ''; const s=Math.max(0,Math.floor(Date.now()/1000)-ts);
     if(s<3600) return Math.floor(s/60)+'m ago'; if(s<86400) return Math.floor(s/3600)+'h ago';
     return Math.floor(s/86400)+'d ago'; };
   const status=c=>{
-    if(!c.connected) return '<span class="text-[10px] text-slate-500">not connected</span>';
+    if(!c.app_configured) return '<span class="text-[10px] text-slate-500">no OAuth app set</span>';
+    if(!c.connected) return '<span class="text-[10px] text-slate-500">app set · not signed in</span>';
     if(c.last_error) return `<span class="text-[10px] text-rose-400 flex items-center gap-1" title="${esc(c.last_error)}"><i data-lucide="alert-triangle" class="text-[10px]"></i> re-consent needed</span>`;
     const who=c.admin_email?esc(c.admin_email):(c.domain?esc(c.domain):'connected');
     return `<span class="text-[10px] text-slate-500">${who}${c.last_refresh?' · renewed '+ago(c.last_refresh):''}</span>`;
   };
-  const actBtn=(t,conn,err)=>`<button class="gw-act ml-auto text-[11px] ${conn?'text-slate-500 hover:text-rose-300':'text-accent hover:underline'}" data-t="${esc(t)}" data-conn="${conn?1:''}">${conn?(err?'Re-consent →':'Disconnect'):'Sign in →'}</button>`;
-  const row=c=>`<div class="border-b border-edge/40 py-1.5 flex items-center gap-2 text-xs" data-t="${esc(c.tenant)}">
-      <i data-lucide="${!c.connected?'building':c.last_error?'alert-triangle':'badge-check'}" class="${!c.connected?'text-slate-600':c.last_error?'text-rose-400':'text-emerald-300'} text-[13px]"></i>
-      <div class="min-w-0"><div class="font-medium truncate">${esc(c.tenant)}</div>${status(c)}</div>
-      ${actBtn(c.tenant,c.connected,c.last_error)}</div>`;
+  // right-side actions depend on state: no app -> "Set up app"; app but not connected -> Sign in (+edit);
+  // connected -> Disconnect (+edit app).
+  const acts=c=>{
+    if(!c.app_configured) return `<button class="gw-setapp ml-auto text-[11px] text-accent hover:underline" data-t="${esc(c.tenant)}">Set up app →</button>`;
+    const edit=`<button class="gw-setapp text-[10px] text-slate-500 hover:text-slate-300" data-t="${esc(c.tenant)}" title="Change this client's OAuth app">edit app</button>`;
+    if(c.connected) return `<div class="ml-auto flex items-center gap-2">${edit}<button class="gw-disc text-[11px] text-slate-500 hover:text-rose-300" data-t="${esc(c.tenant)}">Disconnect</button></div>`;
+    return `<div class="ml-auto flex items-center gap-2">${edit}<button class="gw-signin text-[11px] text-accent hover:underline" data-t="${esc(c.tenant)}">${c.last_error?'Re-consent →':'Sign in →'}</button></div>`;
+  };
+  const row=c=>`<div class="border-b border-edge/40 py-1.5" data-t="${esc(c.tenant)}">
+      <div class="flex items-center gap-2 text-xs">
+        <i data-lucide="${!c.app_configured?'building':!c.connected?'key-round':c.last_error?'alert-triangle':'badge-check'}" class="${!c.connected?'text-slate-600':c.last_error?'text-rose-400':'text-emerald-300'} text-[13px]"></i>
+        <div class="min-w-0"><div class="font-medium truncate">${esc(c.tenant)}</div>${status(c)}</div>
+        ${acts(c)}</div>
+      <div class="gw-appform"></div></div>`;
   const anyConn=data.clients.some(c=>c.connected);
-  const cfgNote=data.app_configured
-    ? `<div class="text-[11px] text-slate-500">Each client's <b class="text-slate-400">super-admin</b> consents once in a popup (Google sign-in). Tokens auto-renew; the agent reads a client's Google data only when that client is selected.</div>`
-    : `<div class="text-[11px] text-amber-300 leading-relaxed">Set <b>GWS_CLIENT_ID</b>, <b>GWS_CLIENT_SECRET</b> and <b>GWS_REDIRECT_URI</b> above first (your Google Cloud OAuth <i>Web application</i> client). Add this exact redirect URI in that client: <span class="font-mono text-slate-400 break-all">${esc(data.redirect_uri||'(set GWS_REDIRECT_URI)')}</span></div>`;
+  const redirNote=redir
+    ? `<div class="text-[11px] text-slate-500 leading-relaxed">Each client registers <b class="text-slate-400">their own</b> Google OAuth app (Cloud Console → APIs &amp; Services → Credentials → <i>OAuth client · Web application</i>), enables the Admin SDK / Drive / Licensing APIs, and adds this redirect URI: <span class="font-mono text-slate-400 break-all select-all">${esc(redir)}</span> — then paste that app's client id + secret below and sign in. Nothing is shared between clients.</div>`
+    : `<div class="text-[11px] text-amber-300 leading-relaxed">Set <b>GWS_REDIRECT_URI</b> above first — your dashboard callback, e.g. <span class="font-mono">https://your-host/api/gws/oauth/callback</span>. Every client's OAuth app registers this one URL.</div>`;
   sec.innerHTML=`<div class="text-xs font-medium flex items-center gap-1.5"><i data-lucide="building-2" class="text-accent text-[12px]"></i> Per-client Google Workspace sign-in
       ${anyConn?`<button class="gw-renew ml-auto text-[10px] text-slate-500 hover:text-accent inline-flex items-center gap-1" title="Refresh every connected client's token now"><i data-lucide="refresh-cw" class="text-[10px]"></i> Renew all</button>`:''}</div>
-    ${cfgNote}
+    ${redirNote}
     ${data.clients.length>8?`<input class="gw-search w-full bg-ink/70 border border-edge rounded-lg px-2.5 py-1.5 text-xs mt-1 focus:border-accent focus:outline-none" placeholder="Search ${data.clients.length} clients…" autocomplete="off">`:''}
     <div class="gw-list"></div>
     <div class="gw-flow"></div>`;
@@ -2636,15 +2648,46 @@ async function gwsSignin(box){
     const r=await api('POST','/api/integrations/gws/renew',{});
     if(r&&r.ok){ const lk=(r.locked||[]).length; toast(`renewed ${r.ok.length} client(s)${r.failed.length?', '+r.failed.length+' need re-consent':''}${lk?', '+lk+' skipped (unlock the credential vault)':''}`,!r.failed.length&&!lk); }
     refresh(); };
+  // toggle the inline per-client OAuth-app form (client_id + client_secret)
+  const clientOf=t=>data.clients.find(c=>c.tenant===t)||{};
   sec.addEventListener('click',async e=>{
-    const b=e.target.closest('.gw-act'); if(!b||!sec.contains(b))return;
-    const tenant=b.dataset.t;
-    if(b.dataset.conn){
+    const sa=e.target.closest('.gw-setapp'); if(sa&&sec.contains(sa)){
+      const t=sa.dataset.t, rowEl=sec.querySelector(`.gw-list [data-t="${CSS.escape(t)}"] .gw-appform`); if(!rowEl)return;
+      if(rowEl.dataset.open){ rowEl.dataset.open=''; rowEl.innerHTML=''; return; }
+      rowEl.dataset.open='1';
+      const cur=clientOf(t);
+      rowEl.innerHTML=`<div class="border border-edge rounded-lg p-2.5 mt-1.5 bg-ink/40 space-y-1.5">
+        <div class="text-[10px] text-slate-500">${cur.client_id?`Current client id: <span class="font-mono">${esc(cur.client_id)}</span> — re-enter to change.`:`Paste <b class="text-slate-400">${esc(t)}</b>'s OWN OAuth app credentials (from their Google Cloud).`}</div>
+        <input class="gw-cid w-full bg-ink/70 border border-edge rounded px-2 py-1.5 text-xs font-mono focus:border-accent focus:outline-none" placeholder="client_id (…apps.googleusercontent.com)" autocomplete="off">
+        <input class="gw-csec w-full bg-ink/70 border border-edge rounded px-2 py-1.5 text-xs font-mono focus:border-accent focus:outline-none" placeholder="client_secret" type="password" autocomplete="off">
+        <div class="flex items-center gap-2"><button class="gw-savapp grad text-white rounded px-3 py-1.5 text-[11px] font-semibold" data-t="${esc(t)}">Save app</button>
+        ${cur.app_configured?`<button class="gw-clrapp text-[11px] text-slate-500 hover:text-rose-300" data-t="${esc(t)}">Remove app</button>`:''}</div></div>`;
+      icons(); return;
+    }
+    const sv=e.target.closest('.gw-savapp'); if(sv&&sec.contains(sv)){
+      const t=sv.dataset.t, wrap=sv.closest('.gw-appform');
+      const cid=(wrap.querySelector('.gw-cid').value||'').trim(), csec=(wrap.querySelector('.gw-csec').value||'').trim();
+      if(!cid||!csec){ toast('client_id and client_secret are both required',false); return; }
+      sv.classList.add('opacity-50');
+      const r=await api('POST','/api/integrations/gws/app',{tenant:t,client_id:cid,client_secret:csec});
+      r&&r.ok?(toast(`OAuth app saved for ${t}`),refresh()):toast((r&&r.error)||'failed',false);
+      return;
+    }
+    const cl=e.target.closest('.gw-clrapp'); if(cl&&sec.contains(cl)){
+      const t=cl.dataset.t; if(!confirm(`Remove ${t}'s OAuth app credentials? It will also need re-signing-in.`))return;
+      const r=await api('DELETE','/api/integrations/gws/app/'+encodeURIComponent(t));
+      r&&r.ok?(toast(`OAuth app removed for ${t}`),refresh()):toast((r&&r.error)||'failed',false);
+      return;
+    }
+    const dc=e.target.closest('.gw-disc'); if(dc&&sec.contains(dc)){
+      const tenant=dc.dataset.t;
       if(!confirm(`Disconnect Google Workspace for ${tenant}? The agent loses Google admin access for this client until it signs in again.`))return;
       const r=await api('DELETE','/api/integrations/gws/clients/'+encodeURIComponent(tenant));
       r&&r.ok?(toast(`${tenant} Google Workspace disconnected`),refresh()):toast((r&&r.error)||'failed',false);
       return;
     }
+    const b=e.target.closest('.gw-signin'); if(!b||!sec.contains(b))return;
+    const tenant=b.dataset.t;
     const fl=sec.querySelector('.gw-flow');
     fl.innerHTML='<div class="text-[11px] text-slate-500">starting sign-in…</div>';
     const r=await api('POST','/api/integrations/gws/oauth/start',{tenant});

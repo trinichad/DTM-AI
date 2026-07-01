@@ -19,39 +19,50 @@ ctx.client("gws", tenant) ─ ClientFactory ─ build_gws(cfg, tenant)  [fail-cl
 scopes.READ_SCOPES["gws"] / WRITE_SCOPES / DELETE_SCOPES  bound the reachable API surface.
 ```
 
-## Auth model — per-client OAuth, authorization-code flow (the owner's choice)
+## Auth model — per-client OAuth APP, authorization-code flow (the owner's choice, revised)
 
-Like M365, ONE OAuth app (the owner's Google Cloud project) is shared config; **each managed
-client's super-admin signs in separately and consents**, and that client's refresh token is stored
-**under that client** — one client's Google access never bleeds into another's.
+**There is no shared/master OAuth app.** Unlike M365 — where Microsoft provides a built-in
+multi-tenant public client so no app registration is needed — Google requires an OAuth app to exist
+in *some* Google Cloud project, and there is no built-in one. Rather than the MSP owning one shared
+app that every client consents to (which, for external clients with admin scopes, drags in Google's
+app-verification / security-assessment), **each managed client registers their OWN OAuth app inside
+their own Google Cloud** and its `client_id`/`client_secret` are stored **per client**. Every client
+is fully independent — separate app, separate consent, separate token — and because each app is
+"Internal" to that client's org, it skips Google verification entirely.
 
-**Why authorization-code, not device-code:** M365 uses Microsoft's device-code flow, but Google's
-device-code ("limited-input device") flow does **not** permit Admin SDK / Directory scopes — those
-are restricted to the standard redirect-based flows. So per-client OAuth here is the
-**authorization-code flow**: the admin is sent to a Google consent URL, and Google redirects back
-to our callback with a `code` we exchange for tokens. Still per-client, still one consent, still a
-stored per-client refresh token — just redirect-based instead of a typed user-code.
+**Why authorization-code, not device-code:** Google's device-code ("limited-input device") flow does
+**not** permit Admin SDK / Directory scopes. So the sign-in is the **authorization-code flow**: the
+admin is sent to a Google consent URL and Google redirects back to our callback with a `code` we
+exchange for tokens — still per-client, one consent, a stored per-client refresh token.
 
-**One-time owner setup (documented for the Integrations card):**
-1. In Google Cloud Console, create/choose a project → enable the APIs you'll use (Admin SDK, and
-   later Drive, Gmail, Enterprise License Manager, Cloud Identity, Reports, Vault, Data Transfer).
-2. Configure the OAuth consent screen (Internal or, for MSP multi-tenant, External) and create an
-   **OAuth client ID of type "Web application"**.
-3. Add the dashboard callback as an **Authorized redirect URI**, e.g.
-   `https://<your-dashboard-host>/api/gws/oauth/callback`.
-4. Enter `GWS_CLIENT_ID`, `GWS_CLIENT_SECRET`, and `GWS_REDIRECT_URI` on the Google Workspace card.
+**What is global vs per-client:**
+- **Global (one setting):** `GWS_REDIRECT_URI` — OUR dashboard callback
+  (`https://<dashboard-host>/api/gws/oauth/callback`). Every client's app lists this one URL as an
+  authorized redirect. `GWS_SCOPES` optionally overrides the requested scopes.
+- **Per client (on that client's card, stored in CredVault entry `gws_app`):** that client's own
+  `client_id` + `client_secret`, entered once, then Sign in.
 
-**Per-client connect:** pick a client → "Connect Google Workspace" → the client's super-admin opens
-the returned Google URL, consents → Google redirects to the callback → tokens saved under that
-client. (`hd`/`login_hint` can pre-scope the consent to the client's domain.)
+**Per-client setup (what each client's admin does once):** in *their* Google Cloud — create a project,
+enable the APIs (Admin SDK / Drive / Licensing / Data Transfer), configure the OAuth consent screen
+(**Internal** — no verification needed), create an **OAuth client ID of type "Web application"**, add
+our `GWS_REDIRECT_URI` as an authorized redirect, and hand the MSP the client id + secret. The MSP
+pastes them into that client's card and clicks **Sign in**; the super-admin consents; the token is
+saved under that client. (`hd`/`login_hint` can pre-scope the consent to the client's domain.)
 
-**Config keys** (`CredentialSpec("gws")`):
+**Storage** (`core/gws_auth.py`): the per-client app secret lives in the client's CredVault entry
+`gws_app` (`set_app_credentials`/`get_app_credentials`), with the non-secret client_id + a
+configured flag in the plain sidecar `gws_app.json` (0600) — same locked-vault inline fallback as the
+tokens. App creds are stored *separately* from the tokens (`gws.json`) so disconnecting a client
+keeps its app on file. Web: `POST /api/integrations/gws/app` sets them; `DELETE
+/api/integrations/gws/app/{tenant}` clears them.
+
+**Config keys** (`CredentialSpec("gws")` — global only):
 | Key | Role |
 |---|---|
-| `GWS_CLIENT_ID` | the owner's Google OAuth client id (required to connect) |
-| `GWS_CLIENT_SECRET` | the OAuth client secret (required — Web-app clients are confidential) |
-| `GWS_REDIRECT_URI` | the callback URL, must exactly match the Cloud Console entry |
+| `GWS_REDIRECT_URI` | the dashboard callback URL; every client's app registers it (required to connect) |
 | `GWS_SCOPES` | optional override of the requested OAuth scopes (defaults below) |
+
+(The `client_id`/`client_secret` are **not** global config — they are per-client in the CredVault.)
 
 ## Token store (mirrors M365, D-37 split)
 

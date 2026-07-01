@@ -21,22 +21,50 @@ def _idtoken(email: str, hd: str) -> str:
     return f"h.{body}.s"
 
 
-def _cfg(tmp: str, *, configured: bool = True) -> Config:
+def _cfg(tmp: str, *, redirect: bool = True) -> Config:
     d = Path(tmp)
     lines = [f"MSPAI_VAULT_PATH={d / 'vault'}"]
-    if configured:
-        lines += ["GWS_CLIENT_ID=cid", "GWS_CLIENT_SECRET=secret",
-                  "GWS_REDIRECT_URI=https://dash.example/api/gws/oauth/callback"]
+    if redirect:
+        lines.append("GWS_REDIRECT_URI=https://dash.example/api/gws/oauth/callback")
     env = d / ".env"
     env.write_text("\n".join(lines) + "\n", encoding="utf-8")
     env.chmod(0o600)
     return Config(env_path=env, secret_store=SecretStore(path=d / "secrets.local"))
 
 
+def _with_app(cfg, tenant: str = "acme", cid: str = "cid", sec: str = "secret") -> Config:
+    """Give a client its own OAuth app credentials (per-client, D-118) so a sign-in can start."""
+    gws_auth.set_app_credentials(cfg, tenant, client_id=cid, client_secret=sec)
+    return cfg
+
+
+class AppCredentials(unittest.TestCase):
+    def test_per_client_storage_and_isolation(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg = _cfg(td)
+            self.assertFalse(gws_auth.app_configured(cfg, "acme"))
+            gws_auth.set_app_credentials(cfg, "acme", client_id="acme-id", client_secret="acme-sec")
+            gws_auth.set_app_credentials(cfg, "globex", client_id="glo-id", client_secret="glo-sec")
+            self.assertTrue(gws_auth.app_configured(cfg, "acme"))
+            self.assertEqual(gws_auth.get_app_credentials(cfg, "acme"), ("acme-id", "acme-sec"))
+            self.assertEqual(gws_auth.get_app_credentials(cfg, "globex"), ("glo-id", "glo-sec"))
+            # one client's app never bleeds into another's
+            self.assertNotEqual(gws_auth.get_app_credentials(cfg, "acme"),
+                                gws_auth.get_app_credentials(cfg, "globex"))
+            self.assertEqual(gws_auth.app_client_id(cfg, "acme"), "acme-id")
+
+    def test_clear_app(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg = _cfg(td)
+            gws_auth.set_app_credentials(cfg, "acme", client_id="x", client_secret="y")
+            self.assertTrue(gws_auth.clear_app_credentials(cfg, "acme"))
+            self.assertFalse(gws_auth.app_configured(cfg, "acme"))
+
+
 class AuthUrl(unittest.TestCase):
     def test_start_auth_builds_offline_consent_url_with_state(self):
         with tempfile.TemporaryDirectory() as td:
-            cfg = _cfg(td)
+            cfg = _with_app(_cfg(td))
             r = gws_auth.start_auth(cfg, "acme", login_hint="admin@acme.com", hosted_domain="acme.com")
             url = r["auth_url"]
             self.assertTrue(url.startswith("https://accounts.google.com/o/oauth2/v2/auth?"))
@@ -44,17 +72,24 @@ class AuthUrl(unittest.TestCase):
                          f"state={r['state']}", "login_hint=admin", "hd=acme.com"):
                 self.assertIn(frag, url)
 
-    def test_start_auth_rejects_all_clients_and_unconfigured(self):
+    def test_start_auth_rejects_all_clients(self):
         with tempfile.TemporaryDirectory() as td:
-            self.assertRaises(MissingCredential, gws_auth.start_auth, _cfg(td), "*")
+            self.assertRaises(MissingCredential, gws_auth.start_auth, _with_app(_cfg(td)), "*")
+
+    def test_start_auth_rejects_client_with_no_oauth_app(self):
+        with tempfile.TemporaryDirectory() as td:   # redirect set, but the client has no app
+            self.assertRaises(MissingCredential, gws_auth.start_auth, _cfg(td), "acme")
+
+    def test_start_auth_rejects_when_redirect_uri_unset(self):
+        with tempfile.TemporaryDirectory() as td:   # client has an app but the global redirect isn't set
             self.assertRaises(MissingCredential, gws_auth.start_auth,
-                              _cfg(td, configured=False), "acme")
+                              _with_app(_cfg(td, redirect=False)), "acme")
 
 
 class CompleteAuth(unittest.TestCase):
     def test_exchange_saves_tokens_and_connects(self):
         with tempfile.TemporaryDirectory() as td:
-            cfg = _cfg(td)
+            cfg = _with_app(_cfg(td))
             r = gws_auth.start_auth(cfg, "acme")
             seen = {}
 
@@ -77,7 +112,7 @@ class CompleteAuth(unittest.TestCase):
 
     def test_missing_refresh_token_is_an_error(self):
         with tempfile.TemporaryDirectory() as td:
-            cfg = _cfg(td)
+            cfg = _with_app(_cfg(td))
             r = gws_auth.start_auth(cfg, "acme")
             status, msg = gws_auth.complete_auth(
                 cfg, r["state"], "c", transport=lambda *a, **k: (200, {"access_token": "at"}))
@@ -101,14 +136,14 @@ class EnsureFresh(unittest.TestCase):
 
     def test_valid_token_returned_without_refresh(self):
         with tempfile.TemporaryDirectory() as td:
-            cfg = _cfg(td)
+            cfg = _with_app(_cfg(td))
             self._connect(cfg)
             tok = gws_auth.ensure_fresh(cfg, "acme", transport=lambda *a, **k: self.fail("no refresh"))
             self.assertEqual(tok, "at1")
 
     def test_expired_token_refreshes_and_persists(self):
         with tempfile.TemporaryDirectory() as td:
-            cfg = _cfg(td)
+            cfg = _with_app(_cfg(td))
             self._connect(cfg)
             # force expiry into the past, then refresh
             gws_auth.save_tokens(cfg, "acme", {"refresh_token": "rt1", "access_token": "old",
@@ -135,7 +170,7 @@ class EnsureFresh(unittest.TestCase):
 class Disconnect(unittest.TestCase):
     def test_clear_tokens_disconnects(self):
         with tempfile.TemporaryDirectory() as td:
-            cfg = _cfg(td)
+            cfg = _with_app(_cfg(td))
             r = gws_auth.start_auth(cfg, "acme")
             gws_auth.complete_auth(cfg, r["state"], "c", transport=lambda *a, **k: (
                 200, {"access_token": "at", "refresh_token": "rt", "expires_in": 3600,
