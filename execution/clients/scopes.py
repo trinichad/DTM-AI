@@ -42,9 +42,10 @@ READ_SCOPES: dict[str, tuple[str, ...]] = {
         "/admin/directory/v1/users",           # users + a user's aliases (users/{key}/aliases)
         "/admin/directory/v1/groups",          # groups + members (groups/{key}/members)
         "/admin/directory/v1/customers",       # customer/domain record (probe) — note: plural
-        "/admin/directory/v1/customer",        # org units live under customer/{id}/orgunits (singular)
+        "/admin/directory/v1/customer",        # org units + devices under customer/{id}/... (singular)
         "/drive/v3/drives",                    # shared drives (useDomainAdminAccess) — D-118 Phase 4
         "/drive/v3/files",                     # a shared drive's permissions (files/{id}/permissions)
+        "/admin/reports/v1",                   # audit + usage reports (Reports API) — D-118 Phase 5
     ),
     "m365": (                   # Microsoft Graph v1.0 (delegated, read-only — D-32)
         "/users",
@@ -168,6 +169,7 @@ WRITE_SCOPES: dict[str, tuple[str, ...]] = {
         "/drive/v3/drives",                # create a shared drive (Phase 4)
         "/drive/v3/files",                 # add a shared-drive member (files/{id}/permissions)
         "/admin/datatransfer/v1/transfers",  # transfer Drive/Docs ownership on offboard
+        "/admin/directory/v1/customer/my_customer/devices",  # mobile device actions (wipe) — Phase 5
     ),
 }
 _WRITE_METHODS = ("POST", "PATCH")

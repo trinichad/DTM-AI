@@ -145,9 +145,18 @@ delegation (the auth model the owner declined). So `gws_offboard_user` transfers
 suspends (which stops mail access) but does NOT set an auto-forward/vacation reply on the departing
 mailbox. If that becomes a requirement, add a DWD service-account path alongside the OAuth one.
 
-## Not yet built (future phases)
-Devices (mobile/Chrome list + wipe — Directory), Reports/audit (Reports API), Vault
-(holds/exports). All are Directory/Reports/Vault reads or admin-level writes that per-client OAuth
-supports; add the scope + allowlist prefix + skill when needed.
+- **Phase 5 (done):** Devices + audit. gws_list_mobile_devices, gws_list_chromeos_devices (read),
+  gws_wipe_mobile_device (write — account_wipe default / full_wipe / block); gws_audit_log (read —
+  login/admin/drive/token/… activity via the Reports API). Scopes added:
+  `admin.directory.device.mobile`, `admin.directory.device.chromeos.readonly`,
+  `admin.reports.audit.readonly`. Allowlists: `/admin/reports/v1` (read), and device actions bounded
+  to `/admin/directory/v1/customer/my_customer/devices` (write) so a device action can't open
+  arbitrary customer-scoped writes.
+
+## Not yet built (future phase)
+Google **Vault** — eDiscovery matters, holds, exports/downloads (vault.googleapis.com, ediscovery
+scopes). It's a multi-step sub-system on its own host (needs a `/v1/matters` host-routing entry that
+doesn't collide with Cloud Identity's `/v1/`); deferred rather than half-built. Add the host route +
+scope + allowlist + skills when it's needed.
 
 New tools land `CATEGORY=read`, `ENABLED_BY_DEFAULT=False` (I-5); writes default `REQUIRES_APPROVAL`.
