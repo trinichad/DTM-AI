@@ -118,8 +118,25 @@ https://www.googleapis.com/auth/admin.directory.group.readonly`.
   approval gated (scope is necessary, not sufficient). A client connected under Phase-1/2 scopes must
   reconnect to grant the write scopes. Owners wanting a strictly read-only grant override GWS_SCOPES
   with the *.readonly variants. Batch (many users) is via the universal `bulk` tool, not per-skill.
-- **Phase 4:** onboard/offboard composites (incl. Drive-ownership transfer via the Data Transfer
-  API), Gmail per-user settings (forwarding/delegation/send-as — via the admin's consent),
-  Shared Drive create + membership, devices, Reports/Vault.
+- **Phase 4 (done):** Shared Drives — gws_list_shared_drives (read), gws_create_shared_drive,
+  gws_add_shared_drive_member (Drive API, useDomainAdminAccess). Composites — gws_onboard_user
+  (create-if-missing → license → org unit → groups → shared drives) and gws_offboard_user (suspend →
+  reset password → remove from all groups → remove license → optional Drive/Docs ownership transfer
+  to a manager via the Admin Data Transfer API, app id 55656082996). DEFAULT_SCOPES widened with
+  `drive` + `admin.datatransfer`; scopes.py allowlists extended.
+
+## Limitation: Gmail per-user settings need domain-wide delegation, not per-client OAuth
+
+Setting **another** user's Gmail (forwarding, vacation responder, delegation, send-as) requires
+impersonating that user, which 3-legged per-client OAuth cannot do — the admin's delegated token
+only reaches the admin's OWN mailbox. Those actions need a service account with domain-wide
+delegation (the auth model the owner declined). So `gws_offboard_user` transfers Drive/Docs and
+suspends (which stops mail access) but does NOT set an auto-forward/vacation reply on the departing
+mailbox. If that becomes a requirement, add a DWD service-account path alongside the OAuth one.
+
+## Not yet built (future phases)
+Devices (mobile/Chrome list + wipe — Directory), Reports/audit (Reports API), Vault
+(holds/exports). All are Directory/Reports/Vault reads or admin-level writes that per-client OAuth
+supports; add the scope + allowlist prefix + skill when needed.
 
 New tools land `CATEGORY=read`, `ENABLED_BY_DEFAULT=False` (I-5); writes default `REQUIRES_APPROVAL`.

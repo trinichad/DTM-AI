@@ -61,9 +61,9 @@ class Scopes(unittest.TestCase):
                         "/admin/directory/v1/customers/my_customer",
                         "/admin/directory/v1/customer/my_customer/orgunits"):
             self.assertTrue(is_allowed_read("gws", ok_path)[0], ok_path)
-        # not (yet) allowlisted → fail closed
+        # not allowlisted → fail closed (Gmail per-user isn't reachable via per-client OAuth)
         self.assertFalse(is_allowed_read("gws", "/admin/directory/v1/domains")[0])
-        self.assertFalse(is_allowed_read("gws", "/drive/v3/drives")[0])
+        self.assertFalse(is_allowed_read("gws", "/gmail/v1/users/me/messages")[0])
         # host-escape attempts fail closed
         self.assertFalse(is_allowed_read("gws", "/admin/directory/v1/../../x")[0])
         # write/delete allowlists are covered in tests/test_gws_writes.py

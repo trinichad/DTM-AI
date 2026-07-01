@@ -67,7 +67,9 @@ DEFAULT_SCOPES = (
     "https://www.googleapis.com/auth/admin.directory.group "
     "https://www.googleapis.com/auth/admin.directory.group.member "
     "https://www.googleapis.com/auth/admin.directory.orgunit "
-    "https://www.googleapis.com/auth/apps.licensing"
+    "https://www.googleapis.com/auth/apps.licensing "
+    "https://www.googleapis.com/auth/drive "
+    "https://www.googleapis.com/auth/admin.datatransfer"
 )
 
 CRED_LABEL = "gws_oauth"

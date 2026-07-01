@@ -43,6 +43,8 @@ READ_SCOPES: dict[str, tuple[str, ...]] = {
         "/admin/directory/v1/groups",          # groups + members (groups/{key}/members)
         "/admin/directory/v1/customers",       # customer/domain record (probe) — note: plural
         "/admin/directory/v1/customer",        # org units live under customer/{id}/orgunits (singular)
+        "/drive/v3/drives",                    # shared drives (useDomainAdminAccess) — D-118 Phase 4
+        "/drive/v3/files",                     # a shared drive's permissions (files/{id}/permissions)
     ),
     "m365": (                   # Microsoft Graph v1.0 (delegated, read-only — D-32)
         "/users",
@@ -163,6 +165,9 @@ WRITE_SCOPES: dict[str, tuple[str, ...]] = {
         "/admin/directory/v1/users",       # create user; PATCH suspend/restore/reset/move-OU/update
         "/admin/directory/v1/groups",      # create group; POST add member (groups/{k}/members)
         "/apps/licensing/v1/product",      # assign a license SKU to a user
+        "/drive/v3/drives",                # create a shared drive (Phase 4)
+        "/drive/v3/files",                 # add a shared-drive member (files/{id}/permissions)
+        "/admin/datatransfer/v1/transfers",  # transfer Drive/Docs ownership on offboard
     ),
 }
 _WRITE_METHODS = ("POST", "PATCH")

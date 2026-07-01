@@ -41,7 +41,7 @@ class Allowlist(unittest.TestCase):
             self.assertTrue(is_allowed_write("gws", path, m)[0], (path, m))
         # not writable → fail closed
         self.assertFalse(is_allowed_write("gws", "/admin/directory/v1/domains", "POST")[0])
-        self.assertFalse(is_allowed_write("gws", "/drive/v3/drives", "POST")[0])
+        self.assertFalse(is_allowed_write("gws", "/gmail/v1/users/me/settings", "POST")[0])
         self.assertFalse(is_allowed_write("gws", "/admin/directory/v1/users", "DELETE")[0])
 
     def test_deletes_bounded_and_user_delete_forbidden(self):
